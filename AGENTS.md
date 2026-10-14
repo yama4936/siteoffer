@@ -30,7 +30,9 @@
 3. 対象ファイルを名前で`git add`する。`git add -A`・`git add .`は使わない。自分が作っていない未追跡ファイルは触らない。
 4. `scripts/git-check.sh`を実行し、成功を確認する。
 5. 下の形式でコミットする。
-6. `git pull --rebase origin main`のあと`git push origin main`。
+6. `git fetch origin`のあと、`git merge-base --is-ancestor origin/main HEAD`が成功すれば`git push origin main`。
+   リモートが先に進んでいれば`git pull --rebase origin main`してからpushする。
+   他の作業の未コミット変更が残っていてrebaseできない場合は、stashやcheckoutで他人の変更を動かさず停止する。
 7. `git ls-remote origin refs/heads/main`とローカルHEADが一致することを確認し、コミットIDを報告する。
 
 ### コミットの単位
