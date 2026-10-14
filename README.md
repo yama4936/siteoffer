@@ -3,12 +3,15 @@
 企業サイトの改善機会を自動で見つけ、AIで改善案とサイトを作成し、営業パートナーが提案・契約を進めるサービス。
 契約後は運営が制作、クラウド環境の整備、公開まで担当する。
 
-ローカルMVPを開発中です。営業・運営画面、認証と業務処理、ワーカーとプレビュー配信を実装しています。現在のChatGPTログインでCodex SDKの実応答を確認済みです。企業収集の実API実行・AWS構築・本番公開は未実施です。
+ローカルMVPを開発中です。営業・運営・顧客確認の画面、認証と業務処理、ワーカーとプレビュー配信、改善後サイトのスキル、画像素材の権利管理を実装しています。
+ローカルのデモでは、収集から納品・顧客確認まで最後までブラウザで操作できます（生成はモック）。現在のChatGPTログインでCodex SDKの実応答（認証確認のみ）を確認済みです。
+アプリからの実生成、企業収集の実API実行、AWS構築、本番公開、実契約は未実施です。現時点の到達点と限界は [docs/REPORT.md](docs/REPORT.md) にまとめています。
 
 ## ローカルで起動する
 
 **Dockerがない環境でデモを見る場合**は `pnpm demo` を使います（モックの生成器と架空企業のフィクスチャだけで動き、実在企業・実API・AWSは使いません）。
 手順・デモ用アカウント・画面の流れは [demo/README.md](demo/README.md) を参照してください。
+実在企業の評価結果（reports/sites、Git対象外）は、`pnpm reports:import` でDBに取り込み、`pnpm demo:promote-imported` でデモのDBに限り営業可能まで進められます（提案文・デモサイトはモックのまま。デモで表示するのは85点以下）。接続先の指定などは [docs/DECISIONS.md](docs/DECISIONS.md) の作業AD・AEを参照してください。
 
 Docker Desktop（Compose v2）、Node.js 24以上、pnpm（指定版は12.11.2）が必要です。
 リポジトリのルートで実行します。
@@ -96,10 +99,11 @@ pnpm codex:worker     # Composeのモックワーカーを停止し、Mac上の�
 ## 読む順番
 
 1. [REQUIREMENTS.md](REQUIREMENTS.md)：確定方針、機能要件、推奨仕様、未決事項、受け入れ条件。
-2. [docs/DECISIONS.md](docs/DECISIONS.md)：判断記録。開発の流れ、Claude Codeでの開発（セッション・subagent）、判断の一覧、作業記録。付録にCodexとClaude Codeの会話記録、ターン別モデル情報。
-3. [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)：ローカルMVPの実装計画と、subagentへのタスク分割。
-4. [AGENTS.md](AGENTS.md)：今後このリポジトリで作業するエージェントへの指示。
-5. [.agents/skills/](.agents/skills/)：サイト評価（site-evaluation）と改善提案書（site-proposal）のスキル。設定は [config/site-evaluation.json](config/site-evaluation.json)。
+2. [docs/REPORT.md](docs/REPORT.md)：作業報告書。目的、要件決定の過程、AIの利用、成果物、検証、未達と今後の作業。全画面のスクリーンショット付きPDF版は `reports/report/`（実在企業が写るためGit対象外）。
+3. [docs/DECISIONS.md](docs/DECISIONS.md)：判断記録。開発の流れ、Claude Codeでの開発（セッション・subagent）、判断の一覧、作業記録。付録にCodexとClaude Codeの会話記録、ターン別モデル情報。
+4. [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)：ローカルMVPの実装計画と、subagentへのタスク分割。
+5. [AGENTS.md](AGENTS.md)：今後このリポジトリで作業するエージェントへの指示。
+6. [.agents/skills/](.agents/skills/)：サイト評価（site-evaluation）、改善提案書（site-proposal）、改善後サイトの作成（site-rebuild）のスキル。設定は [config/site-evaluation.json](config/site-evaluation.json)。
 
 ## 最新の方針
 
@@ -112,9 +116,12 @@ pnpm codex:worker     # Composeのモックワーカーを停止し、Mac上の�
 - クラウド管理にはAWSを使う。現時点で構築・デプロイは進めない。
 - ドメインについて営業ユーザーが希望の聞き取り・提案を行う。実際の設定・移管は運営が担当する。
 - 報酬は契約完了で発生する。支払日・金額・キャンセル時の扱いは未決。
+- 改善提案書を作る評価の閾値は未決（`config/site-evaluation.json` は `null`）。実在サイトの評価データを見てユーザーが決める。デモの85点以下は仮の表示条件。
+- ブログ・お知らせなど顧客が更新できる機能は、全社共通のオプションとして自社アプリの共通更新画面で作る。生成サイトの更新・公開・運用では、AWSと認証以外の外部サービスに依存しない。
+- 画像は1点ごとに出所・権利状態・利用範囲を管理し、許諾を確認していない画像はデモ・本番に使わない。
 
 過去のSitePitch、Supabase中心の構成、企業の手動登録を主経路にする案は、最新方針に置き換わっている。
-1ページの商品、72時間の担当期限、同時3社などはアシスタントの推奨値であり、ユーザーの確定指示ではない。
+担当の初期値（同時3社・未着手72時間で解除）、共有リンクの有効期間14日、生成の上限（試行3回・15分・同時2）は、アシスタントの推奨をユーザーが承認した値。1ページの商品は推奨のままで、ユーザーの確定指示ではない。
 
 ## 開発を引き継ぐ際の指示文
 
