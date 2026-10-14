@@ -72,4 +72,4 @@ python3 <skill>/scripts/score.py $OUT/evaluation.json
 
 - `evaluator.model` には実行記録で確認できたモデルIDを書く。確認できなければ「不明」。
 - reports/ は実在企業の情報を含むため Git に入れない（.gitignore 済み）。ユーザーの許可なく公開リポジトリへ上げない。
-- 評価指標や配点を変更したら、rubric.md・score.py の ITEMS・config/site-evaluation.json の rubric_version をそろえ、docs/DEVLOG.md に変更理由を記録する。
+- 評価指標や配点を変更したら、rubric.md・score.py の ITEMS・config/site-evaluation.json の rubric_version をそろえ、docs/DECISIONS.md に変更理由を記録する。
