@@ -6,8 +6,9 @@
  * 2. 提案の生成キュー（pipeline.proposal）へ送る。生成はデモのワーカー（モック）が行い、提案版は運営確認待ちになる
  * 3. 運営確認待ちになった版を運営アカウントで承認し、デモ用の販売・報酬条件の版で営業可能にする（運営画面と同じ関数）
  *
- * --max-score <点>：総合点がこの値以下の企業だけを営業可能にする。超える企業は営業可能を取り下げる（運営画面の withdrawSellable）。
- *   デモで表示を絞るための値で、正の設定の閾値（null）は変えない。
+ * 既定は総合点80点以下。以前の70点以下から、地域・業種と候補の質の幅を広げるためのデモ専用値。
+ * --max-score <点>：既定値を一時的に上書きする。超える企業は営業可能を取り下げる（運営画面の withdrawSellable）。
+ *   正の設定の閾値（null）は変えない。
  *
  * 再実行してよい：営業可能の企業は飛ばし、送信は singletonKey で重複しない。
  * 実行：pnpm demo を起動したまま、別の端末で pnpm demo:promote-imported（apps/web/scripts に置くのは、運営画面と同じ関数を web の設定で読むため）
@@ -35,6 +36,7 @@ const PROPOSAL_QUEUE = "pipeline.proposal";
 const TERMS_VERSION = "demo-2026-10";
 const OPS_EMAIL = "ops@example.test";
 const WAIT_MS = 30 * 60 * 1000;
+const DEFAULT_MAX_SCORE = 80;
 const REASON = "デモ用に手動で create に変更（閾値による判定ではない。scripts/import-reports.ts で取り込んだ評価）";
 
 const { PgBoss } = createRequire(new URL("../../worker/package.json", import.meta.url))("pg-boss") as BossModule;
@@ -44,8 +46,8 @@ boss.on("error", (e) => console.error("[pg-boss]", e));
 const deps = { db, clock: systemClock };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const maxScoreArg = process.argv.indexOf("--max-score");
-const maxScore = maxScoreArg >= 0 ? Number(process.argv[maxScoreArg + 1]) : null;
-if (maxScore !== null && !Number.isFinite(maxScore)) throw new Error("--max-score には数値を指定する");
+const maxScore = maxScoreArg >= 0 ? Number(process.argv[maxScoreArg + 1]) : DEFAULT_MAX_SCORE;
+if (!Number.isFinite(maxScore)) throw new Error("--max-score には数値を指定する");
 
 try {
   const opsUser = await db.query.users.findFirst({ where: (t, { eq }) => eq(t.email, OPS_EMAIL) });
@@ -61,7 +63,7 @@ try {
   const allCompanies = new Map((await db.select().from(companies)).map((c) => [c.id, c]));
 
   // 0. 点数で絞る：上限を超える企業は営業可能を取り下げ、以降の処理から外す
-  const within = (a: (typeof imported)[number]) => maxScore === null || Number(a.totalScore) <= maxScore;
+  const within = (a: (typeof imported)[number]) => Number(a.totalScore) <= maxScore;
   let withdrawn = 0;
   for (const a of imported.filter((a) => !within(a))) {
     const company = allCompanies.get(a.companyId);
@@ -73,7 +75,7 @@ try {
     if (r.ok) withdrawn++;
     else console.log(`取り下げできない：${company.name}（${r.message ?? r.error}）`);
   }
-  if (maxScore !== null) console.log(`${maxScore}点を超える企業の営業可能を取り下げた：${withdrawn}社`);
+  console.log(`${maxScore}点を超える企業の営業可能を取り下げた：${withdrawn}社`);
   imported = imported.filter(within);
 
   // 1・2. 判定を create にして生成キューへ送る

@@ -27,6 +27,7 @@ import { recordEvent } from "../packages/core/src/common/events.ts";
 import { createDb } from "../packages/db/src/client.ts";
 import { companies, findings, siteAudits, websites } from "../packages/db/src/index.ts";
 import { normalizeUrl } from "../packages/discovery/src/url.ts";
+import { splitAddress } from "./report-address.ts";
 
 type Json = Record<string, unknown>;
 
@@ -53,15 +54,6 @@ async function findReportDirs(): Promise<{ dir: string; skipped: string[] }[]> {
     out.push({ dir: found, skipped });
   }
   return out;
-}
-
-/** 住所の先頭から都道府県と市区町村を取る。取れなければnull（推測で埋めない） */
-function splitAddress(address: string | null): { prefecture: string | null; city: string | null } {
-  if (!address) return { prefecture: null, city: null };
-  const m = address
-    .replace(/^〒?\s*\d{3}-?\d{4}\s*/, "")
-    .match(/^(東京都|北海道|京都府|大阪府|.{2,3}?県)(.+?郡.+?[町村]|.+?市|.+?区|.+?[町村])?/);
-  return { prefecture: m?.[1] ?? null, city: m?.[2] ?? null };
 }
 
 /** 実行記録の model 欄（「claude-opus-5-5（…注記…）」）からモデルIDだけを取る */
