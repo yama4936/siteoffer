@@ -156,7 +156,11 @@ async function main() {
   await waitPort(DEMO_PORTS.db, "デモ用DB", 120_000);
   await runOnce("seed", node, ["--import", "tsx", "demo/seed.ts"], env);
 
-  const previewOrigin = `http://localhost:${DEMO_PORTS.preview}`;
+  // トンネル等で外から見せるときは、公開URLを DEMO_PUBLIC_PREVIEW_URL で渡す（web側は WEB_BASE_URL、
+  // プレビューの埋め込み許可は PREVIEW_FRAME_ANCESTORS をそのまま引き継ぐ）
+  const previewOrigin = process.env.DEMO_PUBLIC_PREVIEW_URL || `http://localhost:${DEMO_PORTS.preview}`;
+  // DEMO_WEB_PROD=1 なら事前に作った本番ビルド（pnpm --filter @siteoffer/web build）を next start で動かす
+  const webMode = process.env.DEMO_WEB_PROD === "1" ? "start" : "dev";
   start("preview", "pnpm", ["--filter", "@siteoffer/preview", "start"], {
     ...env,
     PREVIEW_PORT: String(DEMO_PORTS.preview),
@@ -180,7 +184,17 @@ async function main() {
   start(
     "web",
     "pnpm",
-    ["--filter", "@siteoffer/web", "exec", "next", "dev", "--port", String(DEMO_PORTS.web), "--hostname", "127.0.0.1"],
+    [
+      "--filter",
+      "@siteoffer/web",
+      "exec",
+      "next",
+      webMode,
+      "--port",
+      String(DEMO_PORTS.web),
+      "--hostname",
+      "127.0.0.1",
+    ],
     {
       ...env,
       // 提案デモ・顧客確認のリンク先（プレビューは別オリジン）
