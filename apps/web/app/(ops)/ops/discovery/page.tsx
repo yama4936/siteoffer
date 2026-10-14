@@ -96,6 +96,14 @@ export default async function DiscoveryPage({
 
       <section>
         <h2>収集ジョブ</h2>
+        <p className="muted">
+          登録したジョブ（待機）はワーカーが拾って実行します（数秒〜）。実行後は状態が「成功」などに変わり、
+          収集した企業が下の候補一覧に増えます。診断・提案の生成もワーカーが続けて行い、企業の状態が進みます。
+          {jobs.value.some((j) => j.status === "queued" || j.status === "running") ? (
+            <strong className="warn"> 処理中のジョブがあります。</strong>
+          ) : null}{" "}
+          <a href={here}>再読み込みして最新の状態を表示</a>
+        </p>
         <table>
           <thead>
             <tr>

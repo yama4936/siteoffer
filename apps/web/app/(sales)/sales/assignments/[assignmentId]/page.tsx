@@ -2,6 +2,7 @@ import { EXISTING_DOMAIN_REVIEW_NOTICE, NEW_DOMAIN_AVAILABILITY_NOTICE } from "@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActivityForm, ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
+import { ProposalSharePanel } from "@/components/sales/share-panel";
 import { ExternalLink } from "@/components/sales/views";
 import { getDb } from "@/lib/db";
 import {
@@ -19,7 +20,14 @@ import {
 } from "@/lib/sales/labels";
 import { getMyAssignmentDetail } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
-import { recordActivityAction, releaseAction, reportDealAction, saveDomainWishAction } from "../../../actions";
+import {
+  issueShareAction,
+  recordActivityAction,
+  releaseAction,
+  reportDealAction,
+  revokeShareAction,
+  saveDomainWishAction,
+} from "../../../actions";
 
 export const metadata = { title: "担当案件 | SiteOffer" };
 
@@ -72,6 +80,26 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
       <p>
         <Link href={`/sales/companies/${d.company.id}`}>企業詳細（診断根拠・改善デモ・電話台本）</Link>
       </p>
+
+      {a.active && (
+        <section>
+          <h2>提案を共有</h2>
+          {!d.proposalVersionId ? (
+            <p className="sub">運営のレビューを終えた改善提案はまだありません。</p>
+          ) : !d.proposalHasDemo ? (
+            <p className="sub">改善デモはまだありません。</p>
+          ) : d.company.suppression !== "none" ? (
+            <p className="sub">営業が止まっている企業のため、提案は共有できません。</p>
+          ) : (
+            <ProposalSharePanel
+              actor={user.actor}
+              proposalVersionId={d.proposalVersionId}
+              issueAction={issueShareAction}
+              revokeAction={revokeShareAction}
+            />
+          )}
+        </section>
+      )}
 
       <section>
         <h2>契約確認の状況</h2>

@@ -31,7 +31,6 @@ import {
   reportDeal,
   saveDomainWish,
 } from "./operations.ts";
-import { demoPreviewUrl } from "./preview.ts";
 import {
   getCompanyDetail,
   getCompanyFilterOptions,
@@ -238,8 +237,9 @@ describe("企業詳細", () => {
     // 承認済み（approved）の最新版だけ
     expect(d.proposal?.version).toBe(1);
     expect(d.proposal?.callScript?.opening).toBe(callScript.opening);
-    expect(d.proposal?.demoUrl).toBe(demoPreviewUrl(d.proposal!.versionId));
-    expect(new URL(d.proposal!.demoUrl!).port).toBe("3200");
+    // 版IDから組み立てた固定のURLは返さない（企業に見せるURLは共有リンクで発行する）
+    expect(d.proposal?.hasDemo).toBe(true);
+    expect(JSON.stringify(d.proposal)).not.toContain("/demo/");
     expect(d.terms.map((t) => t.ready).sort()).toEqual([false, true]);
   });
 

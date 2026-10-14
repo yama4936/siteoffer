@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { homePathFor } from "@/lib/home";
 import { getAuthProvider, setSessionCookie, takeSessionCookie } from "@/lib/session";
 
 export type AuthFormState = { error?: string; email?: string; displayName?: string } | undefined;
@@ -13,7 +14,7 @@ export async function loginAction(_prev: AuthFormState, formData: FormData): Pro
   const r = await getAuthProvider().login({ email, password });
   if (!r.ok) return { error: r.message ?? "ログインできませんでした", email };
   await setSessionCookie(r.value.token, r.value.expiresAt);
-  redirect("/");
+  redirect(homePathFor(r.value.user.role));
 }
 
 /** 営業ユーザーの自己登録（F-30）。運営アカウントはこの経路では作れない */
@@ -34,7 +35,7 @@ export async function registerAction(_prev: AuthFormState, formData: FormData): 
   const login = await provider.login({ email, password });
   if (!login.ok) redirect("/login");
   await setSessionCookie(login.value.token, login.value.expiresAt);
-  redirect("/");
+  redirect(homePathFor(login.value.user.role));
 }
 
 export async function logoutAction(): Promise<void> {

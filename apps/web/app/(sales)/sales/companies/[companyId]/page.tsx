@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ClaimButton } from "@/components/sales/forms";
+import { ProposalSharePanel } from "@/components/sales/share-panel";
 import {
   CallScriptView,
   ExternalLink,
@@ -13,7 +14,7 @@ import { getDb } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/sales/labels";
 import { getCompanyDetail } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
-import { claimAction } from "../../../actions";
+import { claimAction, issueShareAction, revokeShareAction } from "../../../actions";
 
 export const metadata = { title: "企業詳細 | SiteOffer" };
 
@@ -109,16 +110,22 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         ) : (
           <div className="stack">
             <p className="sub">提案 第{d.proposal.version}版（運営レビュー済み）</p>
-            {d.proposal.demoUrl ? (
-              <p>
-                <ExternalLink href={d.proposal.demoUrl}>改善デモを開く（別ウィンドウ）</ExternalLink>
-                <span className="sub">
-                  {" "}
-                  非公式の改善提案です。企業の正式なサイトではありません。企業へ共有するリンクは期限付きのものを使います。
-                </span>
-              </p>
-            ) : (
+            {!d.proposal.hasDemo ? (
               <p className="sub">改善デモはまだありません。</p>
+            ) : d.assignment === "mine" && c.suppression === "none" ? (
+              <>
+                <h3>提案を共有</h3>
+                <ProposalSharePanel
+                  actor={user.actor}
+                  proposalVersionId={d.proposal.versionId}
+                  issueAction={issueShareAction}
+                  revokeAction={revokeShareAction}
+                />
+              </>
+            ) : (
+              <p className="sub">
+                改善デモがあります。企業への共有（期限付きリンクの発行）は、この企業の担当を確保してから行えます。
+              </p>
             )}
             {d.proposal.proposalText && <ProposalSummary text={d.proposal.proposalText} />}
           </div>

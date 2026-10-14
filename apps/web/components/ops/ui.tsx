@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { logoutAction } from "@/app/(auth)/actions";
 
 /** 運営画面の共通部品（素朴な見た目。外部CSSは使わない） */
 
@@ -50,7 +51,10 @@ export function OpsShell({ userName, children }: { userName: string; children: R
           ))}
         </nav>
         <span className="muted">
-          {userName}（運営） <Link href="/logout">ログアウト</Link>
+          {userName}（運営）
+          <form action={logoutAction} className="inline" style={{ marginLeft: 8 }}>
+            <button type="submit">ログアウト</button>
+          </form>
         </span>
       </header>
       {children}

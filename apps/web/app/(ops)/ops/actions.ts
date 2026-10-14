@@ -5,7 +5,7 @@
  * ここでは FormData を読み、処理を呼び、結果の文言を付けて元の画面へ戻すだけにする。
  */
 import { type Actor, type PaymentTargetStatus, type Result, systemClock } from "@siteoffer/core";
-import { revalidatePath } from "next/cache";
+import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
 import {
@@ -37,6 +37,13 @@ import {
   updateSetting,
   withdrawSellable,
 } from "@/lib/ops/commands";
+import {
+  createDeliveryByOps,
+  recordPublicationByOps,
+  sendToCustomerReviewByOps,
+  transitionDeliveryByOps,
+} from "@/lib/ops/delivery";
+import type { CustomerReviewLinkState } from "@/lib/ops/delivery-state";
 import { jstDate, optInt, optStr, safeReturnTo, str, withFlash } from "@/lib/ops/form";
 import { getCurrentActor } from "@/lib/session";
 
@@ -77,7 +84,7 @@ export async function createDiscoveryJobAction(fd: FormData) {
   await run(
     fd,
     (d, a) => createDiscoveryJobByOps(d, a, { provider: str(fd, "provider"), criteria }),
-    "収集ジョブを登録しました（実行はワーカーが行います）",
+    "収集ジョブを登録しました。ワーカーが処理します（数秒〜）。この画面を再読み込みすると、ジョブの状態と候補の企業が最新になります",
   );
 }
 
@@ -334,6 +341,78 @@ export async function cancelRewardAction(fd: FormData) {
 
 export async function confirmDomainPreferenceAction(fd: FormData) {
   await run(fd, (d, a) => confirmDomainPreferenceByOps(d, a, str(fd, "id")), "ドメイン希望を確認済みにしました");
+}
+
+// 5. 納品（制作・運営確認・顧客確認・公開の記録・納品）
+
+export async function createDeliveryAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => createDeliveryByOps(d, a, str(fd, "contractId")),
+    "納品を作成しました（情報確認）。準備ができたら「制作に進める」を押してください",
+  );
+}
+
+const STEP_MESSAGES: Record<string, string> = {
+  building:
+    "制作に進めました。ワーカーが制作版を作ります（数秒〜。再読み込みで最新の状態を表示します）。版ができたら運営確認に回してください",
+  ops_review: "運営確認に回しました。版を確認し、顧客確認に回してください",
+  delivered: "納品済みにしました",
+};
+
+export async function transitionDeliveryAction(fd: FormData) {
+  const to = str(fd, "to");
+  await run(
+    fd,
+    (d, a) => transitionDeliveryByOps(d, a, { deliveryId: str(fd, "deliveryId"), to, note: str(fd, "note") }),
+    STEP_MESSAGES[to] ?? "納品の状態を変更しました",
+  );
+}
+
+export async function recordPublicationAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      recordPublicationByOps(d, a, {
+        deliveryId: str(fd, "deliveryId"),
+        environment: str(fd, "environment"),
+        url: optStr(fd, "url"),
+      }),
+    "公開を記録しました（記録だけで、AWSへの公開・DNS変更は行っていません）",
+  );
+}
+
+/**
+ * 顧客確認に回す。顧客に渡すURL（トークンを含む）は戻り値でだけ返す。
+ * 他の操作と違い、リダイレクトのクエリにURLを載せない（履歴・ログに残さないため）。
+ */
+export async function sendToCustomerReviewAction(
+  _prev: CustomerReviewLinkState,
+  fd: FormData,
+): Promise<CustomerReviewLinkState> {
+  const actor = await getCurrentActor();
+  const ttl = optInt(fd, "ttlHours");
+  if (ttl !== null && !Number.isFinite(ttl)) return { status: "error", message: "有効期間を確認してください" };
+  let r: Result<{ reviewUrl: string; expiresAt: Date }, string>;
+  try {
+    r = await sendToCustomerReviewByOps({ db: getDb(), clock: systemClock }, actor, {
+      deliveryId: str(fd, "deliveryId"),
+      versionId: str(fd, "versionId"),
+      ...(ttl !== null ? { ttlHours: ttl } : {}),
+    });
+  } catch (e) {
+    console.error("ops action failed", e);
+    return { status: "error", message: "処理に失敗しました。入力内容を確認してください" };
+  }
+  if (!r.ok) return { status: "error", message: r.message ? `${r.message}（${r.error}）` : r.error };
+  refresh();
+  return {
+    status: "ok",
+    message:
+      "顧客確認に回しました。このURLを顧客に渡してください。URLはこの画面でだけ表示し、再表示はできません（必要なら同じ版で再発行できます）",
+    reviewUrl: r.value.reviewUrl,
+    expiresAt: r.value.expiresAt.toISOString(),
+  };
 }
 
 // 6. 設定・利用停止

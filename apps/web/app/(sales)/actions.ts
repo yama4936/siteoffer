@@ -15,6 +15,7 @@ import {
   type SalesDeps,
   saveDomainWish,
 } from "@/lib/sales/operations";
+import { issueProposalShare, revokeProposalShare } from "@/lib/sales/share";
 import { getCurrentActor } from "@/lib/session";
 
 async function deps(): Promise<SalesDeps> {
@@ -47,6 +48,19 @@ export async function saveDomainWishAction(_prev: SalesActionState, formData: Fo
 
 export async function reportDealAction(_prev: SalesActionState, formData: FormData): Promise<SalesActionState> {
   const r = await reportDeal(await deps(), formData);
+  if (r?.status === "ok") refresh();
+  return r;
+}
+
+/** 提案の共有リンクの発行。URL（トークン）は戻り値でだけ返し、リダイレクトのクエリには載せない */
+export async function issueShareAction(_prev: SalesActionState, formData: FormData): Promise<SalesActionState> {
+  const r = await issueProposalShare(await deps(), formData);
+  if (r?.status === "ok") refresh();
+  return r;
+}
+
+export async function revokeShareAction(_prev: SalesActionState, formData: FormData): Promise<SalesActionState> {
+  const r = await revokeProposalShare(await deps(), formData);
   if (r?.status === "ok") refresh();
   return r;
 }

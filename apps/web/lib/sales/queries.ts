@@ -38,7 +38,6 @@ import {
 } from "@siteoffer/db";
 import { type CallScript, callScriptSchema, type ProposalText, proposalTextSchema } from "@siteoffer/schemas";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import { demoPreviewUrl } from "./preview.ts";
 
 type QueryError = "forbidden" | "not_found";
 
@@ -278,7 +277,8 @@ export interface CompanyDetail {
   proposal: {
     versionId: string;
     version: number;
-    demoUrl: string | null;
+    /** 改善デモの成果物があるか。企業に見せるURLは共有リンク（lib/sales/share.ts）で発行する */
+    hasDemo: boolean;
     proposalText: ProposalText | null;
     callScript: CallScript | null;
   } | null;
@@ -421,7 +421,7 @@ export async function getCompanyDetail(
       ? {
           versionId: pv.id,
           version: pv.version,
-          demoUrl: pv.demoArtifactDir ? demoPreviewUrl(pv.id) : null,
+          hasDemo: pv.demoArtifactDir !== null,
           proposalText: pickContent(pv.content, ["proposalText"], proposalTextSchema),
           callScript: pickContent(pv.content, ["callScript"], callScriptSchema),
         }
@@ -555,6 +555,8 @@ export interface AssignmentDetail {
   showReport: boolean;
   terms: TermsView[];
   proposalVersionId: string | null;
+  /** 承認済みの最新の提案版に改善デモがあるか（共有リンクを発行できるか） */
+  proposalHasDemo: boolean;
 }
 
 const REPORT_FORM_STATUSES = ["claimed", "working", "negotiating", "awaiting_ops"];
@@ -599,7 +601,7 @@ export async function getMyAssignmentDetail(
     : [];
 
   const [pv] = await db
-    .select({ id: proposalVersions.id })
+    .select({ id: proposalVersions.id, demoArtifactDir: proposalVersions.demoArtifactDir })
     .from(proposalVersions)
     .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
     .where(and(eq(proposals.companyId, company.id), eq(proposalVersions.status, "approved")))
@@ -666,6 +668,7 @@ export async function getMyAssignmentDetail(
       !contractRows.some((c) => OPEN_CONTRACT.includes(c.status)),
     terms: terms.ok ? terms.value.filter((t) => t.ready) : [],
     proposalVersionId: pv?.id ?? null,
+    proposalHasDemo: pv ? pv.demoArtifactDir !== null : false,
   });
 }
 

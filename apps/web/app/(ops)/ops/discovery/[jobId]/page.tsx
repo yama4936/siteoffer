@@ -23,6 +23,12 @@ export default async function DiscoveryJobPage({ params }: { params: Promise<{ j
         <Link href="/ops/discovery">← 収集・候補へ戻る</Link>
       </p>
       <h1>収集ジョブ {job.id}</h1>
+      {job.status === "queued" || job.status === "running" ? (
+        <p className="warn">
+          ワーカーが処理します（数秒〜）。<a href={`/ops/discovery/${job.id}`}>再読み込み</a>
+          すると状態と件数が最新になります。
+        </p>
+      ) : null}
       <table>
         <tbody>
           <tr>
