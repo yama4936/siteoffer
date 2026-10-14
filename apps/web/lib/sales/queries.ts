@@ -321,12 +321,12 @@ function pickContent<T>(
   return null;
 }
 
-/** 企業詳細。営業可能な企業か自分の担当企業だけ（can の company.read） */
-export async function getCompanyDetail(
-  db: DbOrTx,
-  actor: Actor | null,
-  companyId: string,
-): Promise<Result<CompanyDetail, QueryError>> {
+/**
+ * 企業詳細と同じ条件（can の company.read：営業可能な企業か自分の担当企業）で企業を読む。
+ * 見られない企業・形式違いのIDは not_found（存在も明かさない）、未ログインは forbidden。
+ * 改良資料・改善後サイト（lib/sales/improvement.ts）も同じ判定を使う。
+ */
+export async function findReadableCompany(db: DbOrTx, actor: Actor | null, companyId: string) {
   const user = requireUser(actor);
   if (!user.ok) return user;
   if (!UUID_RE.test(companyId)) return err("not_found");
@@ -341,7 +341,19 @@ export async function getCompanyDetail(
   };
   // 見られない企業は存在も明かさない
   if (!can(user.value, "read", resource)) return err("not_found");
-  const shared = sharedState(user.value.userId, active);
+  return ok({ user: user.value, company, active, resource });
+}
+
+/** 企業詳細。営業可能な企業か自分の担当企業だけ（can の company.read） */
+export async function getCompanyDetail(
+  db: DbOrTx,
+  actor: Actor | null,
+  companyId: string,
+): Promise<Result<CompanyDetail, QueryError>> {
+  const found = await findReadableCompany(db, actor, companyId);
+  if (!found.ok) return found;
+  const { user: viewer, company, active, resource } = found.value;
+  const shared = sharedState(viewer.userId, active);
 
   const sites = await db
     .select({ url: websites.url, domain: websites.domain, isPrimary: websites.isPrimary })
@@ -373,7 +385,7 @@ export async function getCompanyDetail(
     .orderBy(desc(proposalVersions.version))
     .limit(1);
 
-  const terms = await listActiveTerms(db, user.value);
+  const terms = await listActiveTerms(db, viewer);
 
   return ok({
     company: {
@@ -390,10 +402,10 @@ export async function getCompanyDetail(
     sites,
     ...shared,
     showClaim:
-      user.value.kind === "sales" &&
+      viewer.kind === "sales" &&
       shared.assignment === "none" &&
       company.suppression === "none" &&
-      can(user.value, "claim", resource),
+      can(viewer, "claim", resource),
     audit: audit
       ? {
           id: audit.id,

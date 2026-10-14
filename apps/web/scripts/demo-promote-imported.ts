@@ -6,6 +6,9 @@
  * 2. 提案の生成キュー（pipeline.proposal）へ送る。生成はデモのワーカー（モック）が行い、提案版は運営確認待ちになる
  * 3. 運営確認待ちになった版を運営アカウントで承認し、デモ用の販売・報酬条件の版で営業可能にする（運営画面と同じ関数）
  *
+ * --max-score <点>：総合点がこの値以下の企業だけを営業可能にする。超える企業は営業可能を取り下げる（運営画面の withdrawSellable）。
+ *   デモで表示を絞るための値で、正の設定の閾値（null）は変えない。
+ *
  * 再実行してよい：営業可能の企業は飛ばし、送信は singletonKey で重複しない。
  * 実行：pnpm demo を起動したまま、別の端末で pnpm demo:promote-imported（apps/web/scripts に置くのは、運営画面と同じ関数を web の設定で読むため）
  */
@@ -14,7 +17,7 @@ import { recordEvent, systemClock } from "@siteoffer/core";
 import { companies, createDb, siteAudits } from "@siteoffer/db";
 import { eq } from "drizzle-orm";
 import { DEMO_DATABASE_URL, REPO_ROOT } from "../../../demo/paths.ts";
-import { latestProposalVersion, makeSellable, reviewProposalVersion } from "../lib/ops/commands";
+import { latestProposalVersion, makeSellable, reviewProposalVersion, withdrawSellable } from "../lib/ops/commands";
 
 interface BossModule {
   PgBoss: new (opts: {
@@ -40,6 +43,9 @@ const boss = new PgBoss({ connectionString: DEMO_DATABASE_URL, schema: "pgboss" 
 boss.on("error", (e) => console.error("[pg-boss]", e));
 const deps = { db, clock: systemClock };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const maxScoreArg = process.argv.indexOf("--max-score");
+const maxScore = maxScoreArg >= 0 ? Number(process.argv[maxScoreArg + 1]) : null;
+if (maxScore !== null && !Number.isFinite(maxScore)) throw new Error("--max-score には数値を指定する");
 
 try {
   const opsUser = await db.query.users.findFirst({ where: (t, { eq }) => eq(t.email, OPS_EMAIL) });
@@ -48,11 +54,27 @@ try {
   const terms = await db.query.productTerms.findFirst({ where: (t, { eq }) => eq(t.version, TERMS_VERSION) });
   if (!terms) throw new Error(`販売・報酬条件の版 ${TERMS_VERSION} がない`);
 
-  const imported = (await db.select().from(siteAudits)).filter(
+  let imported = (await db.select().from(siteAudits)).filter(
     (a) => a.status === "evaluated" && a.artifactDir?.startsWith(`${REPO_ROOT}reports/sites/`),
   );
   if (!imported.length) throw new Error("取り込んだ評価がない。先に pnpm reports:import を実行する");
   const allCompanies = new Map((await db.select().from(companies)).map((c) => [c.id, c]));
+
+  // 0. 点数で絞る：上限を超える企業は営業可能を取り下げ、以降の処理から外す
+  const within = (a: (typeof imported)[number]) => maxScore === null || Number(a.totalScore) <= maxScore;
+  let withdrawn = 0;
+  for (const a of imported.filter((a) => !within(a))) {
+    const company = allCompanies.get(a.companyId);
+    if (company?.pipelineStatus !== "sellable") continue;
+    const r = await withdrawSellable(deps, ops, {
+      companyId: company.id,
+      reason: `デモで総合点${maxScore}点以下に絞るため（${a.totalScore}点）`,
+    });
+    if (r.ok) withdrawn++;
+    else console.log(`取り下げできない：${company.name}（${r.message ?? r.error}）`);
+  }
+  if (maxScore !== null) console.log(`${maxScore}点を超える企業の営業可能を取り下げた：${withdrawn}社`);
+  imported = imported.filter(within);
 
   // 1・2. 判定を create にして生成キューへ送る
   await boss.start();

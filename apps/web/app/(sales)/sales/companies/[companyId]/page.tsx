@@ -1,4 +1,4 @@
-import { ChevronRight, Info, TriangleAlert } from "lucide-react";
+import { ChevronRight, ExternalLink as ExternalLinkIcon, FileText, Globe, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ClaimButton } from "@/components/sales/forms";
@@ -18,6 +18,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DescriptionList, Muted, PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
+import { getImprovementAvailability, getImprovementSource } from "@/lib/sales/improvement";
 import { formatDate, formatDateTime } from "@/lib/sales/labels";
 import { getCompanyDetail } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
@@ -33,6 +34,9 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   if (!r.ok) notFound();
   const d = r.value;
   const c = d.company;
+  // 改良資料・改善後サイト（最新の評価済み診断の成果物ディレクトリ）。権限は企業詳細と同じ判定
+  const imp = await getImprovementSource(getDb(), user.actor, companyId);
+  const available = await getImprovementAvailability(imp.ok ? imp.value.artifactDir : null);
 
   return (
     <>
@@ -153,6 +157,44 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
             {d.proposal.proposalText && <ProposalSummary text={d.proposal.proposalText} />}
           </div>
         )}
+      </SectionCard>
+
+      <SectionCard
+        title="改良資料と改善後サイト"
+        description="営業の確認用の表示です。企業に渡すURLではありません（ログインが必要です）。"
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          {available.hasProposal ? (
+            <Link
+              href={`/sales/companies/${c.id}/proposal`}
+              className={buttonVariants({ variant: "outline", className: "justify-between" })}
+            >
+              <span className="inline-flex items-center gap-2">
+                <FileText />
+                改良資料を見る
+              </span>
+              <ChevronRight />
+            </Link>
+          ) : (
+            <Muted className="flex h-9 items-center rounded-md border border-dashed px-3">改良資料：準備中</Muted>
+          )}
+          {available.hasSite ? (
+            <a
+              href={`/sales/companies/${c.id}/site/index.html`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: "outline", className: "justify-between" })}
+            >
+              <span className="inline-flex items-center gap-2">
+                <Globe />
+                改善後サイトを開く（新しいタブ）
+              </span>
+              <ExternalLinkIcon />
+            </a>
+          ) : (
+            <Muted className="flex h-9 items-center rounded-md border border-dashed px-3">改善後サイト：準備中</Muted>
+          )}
+        </div>
       </SectionCard>
 
       <SectionCard title="販売条件・報酬条件">
