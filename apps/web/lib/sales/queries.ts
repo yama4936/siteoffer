@@ -37,7 +37,7 @@ import {
   websites,
 } from "@siteoffer/db";
 import { type CallScript, callScriptSchema, type ProposalText, proposalTextSchema } from "@siteoffer/schemas";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 type QueryError = "forbidden" | "not_found";
 
@@ -48,10 +48,18 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 // ---------- 企業一覧 ----------
 
+/** 企業一覧の並び順。region：地域・企業名順（既定）、score_asc／score_desc：最新の評価の総合点順 */
+export const COMPANY_SORTS = ["region", "score_asc", "score_desc"] as const;
+export type CompanySort = (typeof COMPANY_SORTS)[number];
+
+export const parseCompanySort = (v: string | undefined): CompanySort =>
+  (COMPANY_SORTS as readonly string[]).includes(v ?? "") ? (v as CompanySort) : "region";
+
 export interface CompanyListFilter {
   prefecture?: string | undefined;
   city?: string | undefined;
   industry?: string | undefined;
+  sort?: CompanySort | undefined;
 }
 
 /** 担当の共通状態。他人の担当は誰が持っているかを返さない */
@@ -68,6 +76,9 @@ export interface CompanyListItem {
   /** 自分の担当のときだけ */
   myAssignmentId: string | null;
   siteUrl: string | null;
+  /** 最新の評価（evaluated／unevaluable）の総合点。未評価・評価不能・カバー率不足はnull */
+  totalScore: string | null;
+  scoreConfirmed: boolean | null;
 }
 
 /** 空白だけの値は「指定なし」にする */
@@ -118,6 +129,25 @@ export async function listSellableCompanies(
   const prefecture = clean(filter.prefecture);
   const city = clean(filter.city);
   const industry = clean(filter.industry);
+  // 企業ごとの最新の評価（企業詳細と同じ条件）。点数順でも上限件数の前に並べるためSQLで結合する
+  const latestAudit = db
+    .selectDistinctOn([siteAudits.companyId], {
+      companyId: siteAudits.companyId,
+      totalScore: siteAudits.totalScore,
+      scoreConfirmed: siteAudits.scoreConfirmed,
+    })
+    .from(siteAudits)
+    .where(inArray(siteAudits.status, ["evaluated", "unevaluable"]))
+    .orderBy(siteAudits.companyId, desc(siteAudits.createdAt))
+    .as("latest_audit");
+  const regionOrder = [asc(companies.prefecture), asc(companies.city), asc(companies.name)];
+  // 点数のない企業（未評価・評価不能）は低評価に置き換えず、どちらの並びでも末尾に置く
+  const order =
+    filter.sort === "score_asc"
+      ? [sql`${latestAudit.totalScore} asc nulls last`, ...regionOrder]
+      : filter.sort === "score_desc"
+        ? [sql`${latestAudit.totalScore} desc nulls last`, ...regionOrder]
+        : regionOrder;
   const rows = await db
     .select({
       id: companies.id,
@@ -126,8 +156,11 @@ export async function listSellableCompanies(
       city: companies.city,
       industry: companies.industry,
       suppression: companies.suppression,
+      totalScore: latestAudit.totalScore,
+      scoreConfirmed: latestAudit.scoreConfirmed,
     })
     .from(companies)
+    .leftJoin(latestAudit, eq(latestAudit.companyId, companies.id))
     .where(
       and(
         eq(companies.pipelineStatus, "sellable"),
@@ -136,7 +169,7 @@ export async function listSellableCompanies(
         industry ? eq(companies.industry, industry) : undefined,
       ),
     )
-    .orderBy(asc(companies.prefecture), asc(companies.city), asc(companies.name))
+    .orderBy(...order)
     .limit(MAX_LIST);
 
   const ids = rows.map((r) => r.id);

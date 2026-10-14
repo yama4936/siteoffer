@@ -8,7 +8,7 @@ import { Field } from "@/components/ui/label";
 import { EmptyState, Muted, PageHeader } from "@/components/ui/page";
 import { NativeSelect } from "@/components/ui/select";
 import { getDb } from "@/lib/db";
-import { getCompanyFilterOptions, listSellableCompanies } from "@/lib/sales/queries";
+import { getCompanyFilterOptions, listSellableCompanies, parseCompanySort } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
 
 export const metadata = { title: "企業一覧 | SiteOffer" };
@@ -17,6 +17,10 @@ type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
 
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
+/** 一覧での総合点の表示。点数のない企業は低評価に見せない */
+const scoreLabel = (c: { totalScore: string | null; scoreConfirmed: boolean | null }) =>
+  c.totalScore === null ? "総合点なし" : `総合点 ${c.totalScore}${c.scoreConfirmed === false ? "（未確定）" : ""}`;
+
 /**
  * 企業一覧（16章）。営業可能な企業だけを表示する。
  * 企業候補は運営側の自動収集で用意するため、営業ユーザーがURLを登録する入口は作らない（F-05）。
@@ -24,7 +28,12 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) 
 export default async function CompaniesPage({ searchParams }: { searchParams: SearchParams }) {
   const user = await requireUser("sales");
   const sp = await searchParams;
-  const filter = { prefecture: one(sp.prefecture), city: one(sp.city), industry: one(sp.industry) };
+  const filter = {
+    prefecture: one(sp.prefecture),
+    city: one(sp.city),
+    industry: one(sp.industry),
+    sort: parseCompanySort(one(sp.sort)),
+  };
   const db = getDb();
   const [list, options] = await Promise.all([
     listSellableCompanies(db, user.actor, filter),
@@ -46,7 +55,7 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Se
         <CardContent className="px-4">
           <form
             method="get"
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end"
+            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr_auto] lg:items-end"
             aria-label="絞り込み"
           >
             <Field label="都道府県" htmlFor="filter-prefecture">
@@ -77,6 +86,13 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Se
                     {i}
                   </option>
                 ))}
+              </NativeSelect>
+            </Field>
+            <Field label="並び順" htmlFor="filter-sort">
+              <NativeSelect id="filter-sort" name="sort" defaultValue={filter.sort}>
+                <option value="region">地域順</option>
+                <option value="score_asc">評価点の低い順</option>
+                <option value="score_desc">評価点の高い順</option>
               </NativeSelect>
             </Field>
             <div className="flex flex-wrap items-center gap-2">
@@ -113,6 +129,7 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Se
                 <div className="text-muted-foreground text-sm">
                   {[c.prefecture, c.city].filter(Boolean).join(" ") || "地域不明"} ／ {c.industry ?? "業種不明"}
                 </div>
+                <div className="text-sm tabular-nums">{scoreLabel(c)}</div>
                 {c.myAssignmentId && (
                   <Link
                     href={`/sales/assignments/${c.myAssignmentId}`}

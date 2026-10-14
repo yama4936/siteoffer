@@ -139,6 +139,55 @@ describe("企業一覧", () => {
     expect(JSON.stringify(r.value)).not.toContain(other.id);
   });
 
+  it("最新の評価の総合点で並べ替え、点数のない企業は末尾に置く", async () => {
+    const me = await user("sales");
+    const audit = async (companyId: string, totalScore: string | null, createdAt: string, status = "evaluated") => {
+      const [site] = await db
+        .insert(websites)
+        .values({
+          companyId,
+          url: `https://${createdAt.slice(0, 10)}.${companyId}.example.test/`,
+          normalizedUrl: `https://${createdAt.slice(0, 10)}.${companyId}.example.test/`,
+          domain: "example.test",
+          isPrimary: true,
+        })
+        .returning();
+      await db.insert(siteAudits).values({
+        companyId,
+        websiteId: site!.id,
+        status: status as "evaluated",
+        targetUrl: "https://example.test/",
+        totalScore,
+        createdAt: new Date(createdAt),
+      });
+    };
+    const high = await company({ name: "あ" });
+    const low = await company({ name: "い" });
+    const rescored = await company({ name: "う" });
+    const unevaluable = await company({ name: "え" });
+    const none = await company({ name: "お" });
+    await audit(high.id, "80", "2026-10-01T00:00:00Z");
+    await audit(low.id, "30.5", "2026-10-01T00:00:00Z");
+    // 古い評価は低いが、最新は55点
+    await audit(rescored.id, "10", "2026-09-01T00:00:00Z");
+    await audit(rescored.id, "55", "2026-10-01T00:00:00Z");
+    await audit(unevaluable.id, null, "2026-10-01T00:00:00Z", "unevaluable");
+    // 評価中（queued）は数えない
+    await audit(none.id, "5", "2026-10-02T00:00:00Z", "queued");
+
+    const ids = async (sort: "region" | "score_asc" | "score_desc") => {
+      const r = await listSellableCompanies(db, me.actor, { sort });
+      if (!r.ok) throw new Error(r.error);
+      return r.value.map((x) => x.id);
+    };
+    expect(await ids("score_asc")).toEqual([low.id, rescored.id, high.id, unevaluable.id, none.id]);
+    expect(await ids("score_desc")).toEqual([high.id, rescored.id, low.id, unevaluable.id, none.id]);
+    expect(await ids("region")).toEqual([high.id, low.id, rescored.id, unevaluable.id, none.id]);
+    const r = await listSellableCompanies(db, me.actor, { sort: "score_asc" });
+    expect(r.ok && r.value[1]).toMatchObject({ totalScore: "55" });
+    expect(r.ok && r.value[4]).toMatchObject({ totalScore: null });
+  });
+
   it("未ログインは拒否する", async () => {
     await company();
     const r = await listSellableCompanies(db, null);
