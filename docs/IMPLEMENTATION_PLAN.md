@@ -63,7 +63,7 @@
 - Zodスキーマはタスクごとのディレクトリ（`packages/schemas/src/<domain>/`）に置き、`packages/schemas/src/index.ts` への追記は統合担当が行う。
 - `packages/core/src/index.ts` への export の追記も統合担当が行う。各タスクは自分のディレクトリに `index.ts` を置く。
 - 他タスクの担当ファイルを直す必要があるときは、直さずに報告へ書く。
-- agent.md・REQUIREMENTS.md は subagent が編集しない。統合担当が記録する（AGENTS.md の記録義務は統合担当が果たす）。
+- docs/DEVLOG.md・REQUIREMENTS.md は subagent が編集しない。統合担当が記録する（AGENTS.md の記録義務は統合担当が果たす）。
 
 ### 波0で用意したもの（各タスクが使う共通部品）
 
@@ -293,7 +293,7 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 
     あなたはSiteOfferの実装タスク <ID> を担当する。
     最初に AGENTS.md、REQUIREMENTS.md の関連章、docs/IMPLEMENTATION_PLAN.md の「2. 共有ファイルの扱い」と <ID> のカードを読む。
-    - 変更してよいのはカードの「担当」に書いたパスだけ。共有ファイル・他タスクの担当・agent.md・REQUIREMENTS.md は変更しない。
+    - 変更してよいのはカードの「担当」に書いたパスだけ。共有ファイル・他タスクの担当・docs/DEVLOG.md・REQUIREMENTS.md は変更しない。
     - Docker は使えない。DBを使うテストは packages/db の createTestDb()（PGlite）を使う。
     - 実API（国税庁・検索・Codex）は呼ばない。モック・フィクスチャで実装し、実呼び出しの経路はインターフェースとして用意する。
     - 秘密値・実在企業のデータをコードやフィクスチャに書かない。フィクスチャの企業は架空にする。
@@ -311,7 +311,7 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 2. worktree のブランチを main に取り込む（衝突は統合担当が解消する。他人の変更を強制で上書きしない）。
 3. 新しいスキーマ変更があれば `drizzle-kit generate` でマイグレーションを作り、`pnpm install` で lockfile を整える。
 4. `scripts/check.sh` と `scripts/git-check.sh` を実行する。
-5. agent.md に、波ごとの記録（使用モデルは実行情報で確認できたものだけ、各タスクの検証結果、モック／実物の区別、未完了）を追記する。
+5. docs/DEVLOG.md に、波ごとの記録（使用モデルは実行情報で確認できたものだけ、各タスクの検証結果、モック／実物の区別、未完了）を追記する。
 6. 波ごとに1コミットで main へ push する（AGENTS.md の手順。pushできなければ停止して報告）。
 
 ## 7. ユーザーの作業・判断が必要なもの

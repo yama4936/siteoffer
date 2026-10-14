@@ -2,7 +2,7 @@
 
 作成日：2026-10-14 / Asia/Tokyo
 目的：本チャットの経緯と今後の開発過程を残し、最終報告書を作成できるようにする。
-このファイルは小文字のagent.md。エージェントへの入口はAGENTS.md。
+このファイルはdocs/DEVLOG.md（2026-10-14にルートのagent.mdから改名）。エージェントへの入口はAGENTS.md。
 
 ## 1. 記録の対象と根拠
 
@@ -12,8 +12,8 @@
 - 成果物、検証、Git反映などの作業結果。
 - 未決・未実装・未検証の事項。
 
-会話の本文は[docs/CONVERSATION.md](docs/CONVERSATION.md)に保存する。
-モデル情報は[docs/MODEL_USAGE.json](docs/MODEL_USAGE.json)に保存する。
+会話の本文は[docs/CONVERSATION.md](CONVERSATION.md)に保存する。
+モデル情報は[docs/MODEL_USAGE.json](MODEL_USAGE.json)に保存する。
 いずれも現在のチャットのCodexセッション記録から抽出したスナップショット。
 公開発言・公開回答のみを対象にし、システム指示、開発者指示、内部推論、秘密情報、ツールの生ログは収録しない。
 後から届いた回答や、抽出後の作業結果はこのファイルに追記する。
@@ -442,3 +442,22 @@ SDK名とモデル名は別。生成にはCodex SDKを使うとユーザーが�
     アプリ側のAI利用：なし
     未決・未実装・未検証：PGliteでは並行トランザクションが直列になるため、本当の同時実行は実PostgreSQLで要確認
     次に行う作業：波1（T1〜T7）のsubagentをworktreeで起動
+
+### 作業I：開発記録ファイルの改名
+
+    日付・時刻・タイムゾーン：2026-10-14 / Asia/Tokyo
+    作業ID・チャット参照：作業I（新しいClaude Codeセッション）
+    開発アシスタントのモデルID：claude-opus-5-5
+    根拠となる実行メタデータ：Claude Code のシステム情報に記載された値。APIの返却モデルIDは未確認
+    ユーザーの依頼・注釈・選択：agent.mdとAGENTS.mdの違いを質問し、agent.mdは不要なので消したいと依頼。
+      完全削除・改名して残す・現状維持の選択肢から「名前を変えて残す（推奨）」を選択
+    アシスタントの回答の要約：AGENTS.mdは作業ルール、agent.mdは経緯・決定・作業記録で、
+      8ファイルとAGENTS.mdの記録手順が参照していると説明した
+    採用した方針と、旧案からの変更：ルートのagent.mdをdocs/DEVLOG.mdへ改名（git mv）。名前の紛らわしさを解消し、記録は残す。
+      過去の作業記録・会話記録の中の「agent.md」は当時の記述として書き換えない
+    作成・変更したファイル：docs/DEVLOG.md（旧agent.md。5行目の説明、相対リンク、本記録）、AGENTS.md、README.md、REQUIREMENTS.md、
+      docs/CONVERSATION.md（9行目の案内のみ）、docs/IMPLEMENTATION_PLAN.md、config/site-evaluation.json、.agents/skills/site-evaluation/SKILL.md
+    実施した検証と実際の結果：現行の指示・参照箇所にagent.mdが残っていないことをgrepで確認。config/site-evaluation.jsonのJSON構文を確認
+    ローカル／モック／実API／AWS／実契約のどこまで確認したか：文書のみ。該当なし
+    アプリ側のAI利用：なし
+    未決・未実装・未検証：なし

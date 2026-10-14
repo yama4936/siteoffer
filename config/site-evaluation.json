@@ -1,5 +1,5 @@
 {
-  "_comment": "サイト評価・改善提案書スキルの設定。null は未決（ユーザー判断待ち）。値を決めたら agent.md に変更理由を記録する。",
+  "_comment": "サイト評価・改善提案書スキルの設定。null は未決（ユーザー判断待ち）。値を決めたら docs/DEVLOG.md に変更理由を記録する。",
   "rubric_version": "0.1",
   "proposal": {
     "threshold": null,

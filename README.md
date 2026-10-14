@@ -8,7 +8,7 @@
 ## 読む順番
 
 1. [REQUIREMENTS.md](REQUIREMENTS.md)：確定方針、機能要件、推奨仕様、未決事項、受け入れ条件。
-2. [agent.md](agent.md)：使用モデル、会話と回答の要約、判断の経緯、作業記録、報告書作成ルール。
+2. [docs/DEVLOG.md](docs/DEVLOG.md)：使用モデル、会話と回答の要約、判断の経緯、作業記録、報告書作成ルール。
 3. [docs/CONVERSATION.md](docs/CONVERSATION.md)：このチャットのユーザー発言・注釈・質問への回答と、アシスタントの公開回答の記録。
 4. [docs/MODEL_USAGE.json](docs/MODEL_USAGE.json)：セッション記録から抽出したターン別モデル情報。
 5. [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)：ローカルMVPの実装計画と、subagentへのタスク分割。
@@ -32,16 +32,16 @@
 
 ## 開発を引き継ぐ際の指示文
 
-    REQUIREMENTS.md、agent.md、AGENTS.mdを読み、SiteOfferの開発を進めてください。
+    REQUIREMENTS.md、docs/DEVLOG.md、AGENTS.mdを読み、SiteOfferの開発を進めてください。
     確定事項と推奨・未決事項を区別し、最新のユーザー指示を優先してください。
     AWSの実環境構築・本番公開は、まだ開始しないでください。
     Codex SDKによる生成と、企業候補の自動収集を独立したインターフェースで扱ってください。
     モックの成功を実サービスの成功として報告しないでください。
-    作業したモデル、ユーザーの指示、回答の要約、変更、検証結果をagent.mdに追記し、
+    作業したモデル、ユーザーの指示、回答の要約、変更、検証結果をdocs/DEVLOG.mdに追記し、
     最終的にこの記録から報告書を作成できるようにしてください。
 
 ## 記録の扱い
 
-agent.mdは小文字の報告用記録。自動で読む指示ファイルのAGENTS.mdとは別の役割。
+docs/DEVLOG.mdは報告用の開発記録。自動で読む指示ファイルのAGENTS.mdとは別の役割。
 会話履歴には方針が変わる前の回答も残る。現行要件はREQUIREMENTS.mdを参照する。
 会話の新しい記録を追加するときは、認証情報や内部の推論を含めず、公開された発言・回答を記録する。
