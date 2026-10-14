@@ -168,6 +168,23 @@ describe("未着手の期限解除（AC-11）", () => {
     expect(await releaseExpiredAssignments(db, clock)).toEqual({ released: [], escalated: [] });
   });
 
+  it("営業中（working）の期限超過は解除し、別の人が確保できる（4章 No.52）", async () => {
+    const company = await createCompany(db);
+    const [s1, s2] = [await createSalesUser(db), await createSalesUser(db)];
+    const r = await claimAssignment(db, clock, s1.actor, company.id);
+    if (!r.ok) throw new Error(r.error);
+    const act = await recordActivity(db, clock, s1.actor, { assignmentId: r.value.id, kind: "no_answer" });
+    expect(act.ok && act.value.assignment.status).toBe("working");
+
+    clock.advance(200 * HOUR);
+    expect(await releaseExpiredAssignments(db, clock)).toEqual({ released: [r.value.id], escalated: [] });
+    const [row] = await db.select().from(assignments).where(eq(assignments.id, r.value.id));
+    expect(row!.status).toBe("released");
+    expect(row!.releaseReason).toBe("working_timeout");
+    const other = await claimAssignment(db, clock, s2.actor, company.id);
+    expect(other.ok).toBe(true);
+  });
+
   it("商談中の期限超過は解除せず運営確認待ちにし、別の人は確保できない", async () => {
     const company = await createCompany(db);
     const [s1, s2] = [await createSalesUser(db), await createSalesUser(db)];

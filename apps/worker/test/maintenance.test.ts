@@ -16,38 +16,51 @@ afterEach(async () => {
 });
 
 describe("担当の期限解除（定期ジョブ）", () => {
-  it("未着手で期限を過ぎた担当を解除し、活動済みは運営確認待ちにする。再実行しても変わらない", async () => {
+  it("未着手・営業中で期限を過ぎた担当は解除し、商談中は運営確認待ちにする。再実行しても変わらない", async () => {
     env = await setupEnv();
     const { db, clock } = env;
     const [u] = await db
       .insert(users)
       .values({ email: "sales@example.test", passwordHash: "x", displayName: "営業", role: "sales" })
       .returning();
-    const [c1, c2, c3] = await db
+    const [c1, c2, c3, c4] = await db
       .insert(companies)
       .values([
         { name: "架空A", pipelineStatus: "sellable" },
         { name: "架空B", pipelineStatus: "sellable" },
         { name: "架空C", pipelineStatus: "sellable" },
+        { name: "架空D", pipelineStatus: "sellable" },
       ])
       .returning();
     const now = clock.now();
     const past = new Date(now.getTime() - HOUR);
     const future = new Date(now.getTime() + HOUR);
-    const [unstarted, working, notYet] = await db
+    const [unstarted, working, notYet, negotiating] = await db
       .insert(assignments)
       .values([
         { companyId: c1!.id, userId: u!.id, status: "claimed", claimedAt: past, expiresAt: past },
         { companyId: c2!.id, userId: u!.id, status: "working", claimedAt: past, expiresAt: past, lastActivityAt: past },
         { companyId: c3!.id, userId: u!.id, status: "claimed", claimedAt: now, expiresAt: future },
+        {
+          companyId: c4!.id,
+          userId: u!.id,
+          status: "negotiating",
+          claimedAt: past,
+          expiresAt: past,
+          lastActivityAt: past,
+        },
       ])
       .returning();
 
     const r = await env.runtime.run(QUEUES.expireAssignments, {});
-    expect(r).toEqual({ status: "maintenance", result: { released: [unstarted!.id], escalated: [working!.id] } });
+    expect(r).toEqual({
+      status: "maintenance",
+      result: { released: [unstarted!.id, working!.id], escalated: [negotiating!.id] },
+    });
     const rows = new Map((await db.select().from(assignments)).map((a) => [a.id, a]));
     expect(rows.get(unstarted!.id)).toMatchObject({ status: "released", releaseReason: "unstarted_timeout" });
-    expect(rows.get(working!.id)!.status).toBe("awaiting_ops");
+    expect(rows.get(working!.id)).toMatchObject({ status: "released", releaseReason: "working_timeout" });
+    expect(rows.get(negotiating!.id)!.status).toBe("awaiting_ops");
     expect(rows.get(notYet!.id)!.status).toBe("claimed");
 
     expect(await env.runtime.run(QUEUES.expireAssignments, {})).toEqual({
