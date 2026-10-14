@@ -1,0 +1,28 @@
+{
+  "_comment": "サイト評価・改善提案書スキルの設定。null は未決（ユーザー判断待ち）。値を決めたら agent.md に変更理由を記録する。",
+  "rubric_version": "0.1",
+  "proposal": {
+    "threshold": null,
+    "_threshold_note": "総合点がこの値未満なら改善提案書を作成する。未決（ユーザーが後で判断）。null の間は判定保留とし、提案書を自動作成しない。",
+    "critical_flags_trigger": null,
+    "_critical_flags_trigger_note": "true なら致命項目が1つでもあれば点数に関わらず作成対象にする。未決。null/false の間は致命項目を記録するだけ。",
+    "min_coverage": 0.7,
+    "_min_coverage_note": "推奨案。評価できた配点の割合がこれ未満なら総合点を確定せず判定保留にする。"
+  },
+  "category_weights": {
+    "_note": "推奨案（アシスタント作成）。ユーザー承認済みの配点ではない。合計100。",
+    "A_conversion": 20,
+    "B_clarity": 20,
+    "C_trust": 15,
+    "D_mobile": 15,
+    "E_performance": 10,
+    "F_seo": 10,
+    "G_accessibility": 10
+  },
+  "collection": {
+    "max_pages": 6,
+    "timeout_seconds": 15,
+    "delay_seconds": 1.0,
+    "user_agent": "SiteOfferAudit/0.1 (+site evaluation; contact: operator)"
+  }
+}

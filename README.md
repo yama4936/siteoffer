@@ -12,6 +12,7 @@
 3. [docs/CONVERSATION.md](docs/CONVERSATION.md)：このチャットのユーザー発言・注釈・質問への回答と、アシスタントの公開回答の記録。
 4. [docs/MODEL_USAGE.json](docs/MODEL_USAGE.json)：セッション記録から抽出したターン別モデル情報。
 5. [AGENTS.md](AGENTS.md)：今後このリポジトリで作業するエージェントへの指示。
+6. [.agents/skills/](.agents/skills/)：サイト評価（site-evaluation）と改善提案書（site-proposal）のスキル。設定は [config/site-evaluation.json](config/site-evaluation.json)。
 
 ## 最新の方針
 
