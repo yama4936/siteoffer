@@ -30,7 +30,8 @@
     "dev:web:exec": "pnpm --filter @siteoffer/web dev --hostname 127.0.0.1",
     "demo": "node --import tsx demo/run.ts",
     "demo:reset": "node --import tsx demo/run.ts --reset",
-    "demo:users": "node --import tsx demo/seed.ts --show"
+    "demo:users": "node --import tsx demo/seed.ts --show",
+    "demo:promote-imported": "node --import tsx apps/web/scripts/demo-promote-imported.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
