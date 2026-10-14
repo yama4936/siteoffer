@@ -13,6 +13,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { authorizeUser, requireUser } from "../permissions/policy.ts";
 import { applySuppression, type DeclineKind } from "./suppression.ts";
 
 export type SalesActivity = typeof salesActivities.$inferSelect;
@@ -87,8 +88,9 @@ export async function recordActivity(
   actor: Actor,
   input: RecordActivityInput,
 ): Promise<Result<{ activity: SalesActivity; assignment: Assignment }, RecordActivityError>> {
-  if (actor.kind !== "sales" && actor.kind !== "ops") return err("forbidden");
-  const actorUserId = actor.userId;
+  const user = requireUser(actor);
+  if (!user.ok) return user;
+  const actorUserId = user.value.userId;
   const now = clock.now();
   const occurredAt = input.occurredAt ?? now;
 
@@ -107,7 +109,10 @@ export async function recordActivity(
   }
 
   return runTx<{ activity: SalesActivity; assignment: Assignment }, RecordActivityError>(db, async (tx, fail) => {
-    const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId);
+    const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
+      type: "salesActivity",
+      action: "create",
+    });
     if (!loaded.ok) return fail(loaded.error);
     const before = loaded.value;
     if (!isActiveStatus(before.status)) fail("not_active");
@@ -197,10 +202,12 @@ export async function listActivities(
   actor: Actor,
   assignmentId: string,
 ): Promise<Result<SalesActivity[], "forbidden" | "not_found">> {
-  if (actor.kind !== "sales" && actor.kind !== "ops") return err("forbidden");
+  const user = requireUser(actor);
+  if (!user.ok) return user;
   const [a] = await db.select().from(assignments).where(eq(assignments.id, assignmentId));
   if (!a) return err("not_found");
-  if (actor.kind === "sales" && a.userId !== actor.userId) return err("forbidden");
+  const auth = authorizeUser(actor, "read", { type: "salesActivity", ownerUserId: a.userId });
+  if (!auth.ok) return auth;
   const rows = await db
     .select()
     .from(salesActivities)
@@ -215,7 +222,9 @@ export async function listOpsConsultations(
   actor: Actor,
   filter: { since?: Date } = {},
 ): Promise<Result<SalesActivity[], "forbidden">> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 全担当の相談を読む（所有者を限定しない）。営業は拒否される
+  const auth = authorizeUser(actor, "read", { type: "salesActivity", ownerUserId: null });
+  if (!auth.ok) return auth;
   const rows = await db
     .select()
     .from(salesActivities)

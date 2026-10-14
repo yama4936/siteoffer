@@ -4,6 +4,7 @@ import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { authorizeUser, requireUser } from "../permissions/policy.ts";
 import { findSecretInFields, type SecretKind } from "./secrets.ts";
 
 export type DomainPreference = typeof domainPreferences.$inferSelect;
@@ -85,9 +86,19 @@ export async function saveDomainPreference(
   actor: Actor,
   input: DomainPreferenceInput,
 ): Promise<Result<SavedDomainPreference, DomainPreferenceError>> {
-  if (actor.kind !== "sales" && actor.kind !== "ops") return err("forbidden");
-  if (actor.kind === "sales" && !input.assignmentId)
-    return err("forbidden", "営業は担当中の企業についてだけ記録できます");
+  const user = requireUser(actor);
+  if (!user.ok) return user;
+  // 担当に紐づかない記録は所有者を限定しない（運営だけ）。営業は担当中の企業についてだけ記録できる
+  if (!input.assignmentId) {
+    const auth = authorizeUser(
+      actor,
+      "create",
+      { type: "domainPreference", ownerUserId: null },
+      "営業は担当中の企業についてだけ記録できます",
+    );
+    if (!auth.ok) return auth;
+  }
+  const actorUserId = user.value.userId;
 
   if (!INTENTS.includes(input.intent)) return err("invalid_input", "intent");
   if (input.currentManager !== undefined && !MANAGERS.includes(input.currentManager))
@@ -119,13 +130,22 @@ export async function saveDomainPreference(
   if (currentDomain && !DOMAIN_RE.test(currentDomain)) return err("invalid_input", "currentDomain");
 
   return db.transaction(async (tx) => {
+    const [existing] = input.assignmentId
+      ? await tx.select().from(domainPreferences).where(eq(domainPreferences.assignmentId, input.assignmentId))
+      : [];
+
     if (input.assignmentId) {
       const [a] = await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId));
       if (!a || a.companyId !== input.companyId) return err("assignment_not_found");
-      if (actor.kind === "sales") {
-        const active = (ACTIVE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status);
-        if (a.userId !== actor.userId || !active) return err("forbidden");
-      }
+      // 権限：ドメイン希望の所有者は担当の営業ユーザー（読んだ担当の行から渡す）
+      const auth = authorizeUser(actor, existing ? "update" : "create", {
+        type: "domainPreference",
+        ownerUserId: a.userId,
+      });
+      if (!auth.ok) return auth;
+      // 業務条件：営業は有効な担当についてだけ記録できる（運営は終了した担当にも記録できる）
+      const active = (ACTIVE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status);
+      if (actor.kind === "sales" && !active) return err("forbidden");
     }
 
     const needsOpsReview =
@@ -143,13 +163,9 @@ export async function saveDomainPreference(
       usesEmail: input.usesEmail ?? "unknown",
       customerWish: input.customerWish?.trim() || null,
       needsOpsReview,
-      recordedBy: actor.userId,
+      recordedBy: actorUserId,
       updatedAt: clock.now(),
     } satisfies Partial<typeof domainPreferences.$inferInsert>;
-
-    const [existing] = input.assignmentId
-      ? await tx.select().from(domainPreferences).where(eq(domainPreferences.assignmentId, input.assignmentId))
-      : [];
 
     let saved: DomainPreference;
     if (existing) {
@@ -193,13 +209,15 @@ export async function confirmDomainPreference(
   actor: Actor,
   input: { id: string },
 ): Promise<Result<DomainPreference, DomainPreferenceError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "confirm", { type: "domainPreference", ownerUserId: null });
+  if (!auth.ok) return auth;
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(domainPreferences).where(eq(domainPreferences.id, input.id));
     if (!before) return err("not_found");
     const [after] = await tx
       .update(domainPreferences)
-      .set({ confirmedAt: clock.now(), confirmedBy: actor.userId, updatedAt: clock.now() })
+      .set({ confirmedAt: clock.now(), confirmedBy: auth.value.userId, updatedAt: clock.now() })
       .where(eq(domainPreferences.id, input.id))
       .returning();
     await recordEvent(tx, clock, {

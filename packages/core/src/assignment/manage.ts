@@ -5,6 +5,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { authorizeUser, requireUser } from "../permissions/policy.ts";
 import {
   type Assignment,
   type AssignmentStatus,
@@ -30,7 +31,10 @@ export async function releaseAssignment(
   input: { assignmentId: string; reason: string },
 ): Promise<Result<Assignment, ReleaseError>> {
   return runTx<Assignment, ReleaseError>(db, async (tx, fail) => {
-    const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId);
+    const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
+      type: "assignment",
+      action: "release",
+    });
     if (!loaded.ok) return fail(loaded.error);
     const before = loaded.value;
     if (!isActiveStatus(before.status)) fail("not_active");
@@ -74,10 +78,20 @@ export async function reassignAssignment(
   actor: Actor,
   input: { assignmentId: string; toUserId: string; reason: string },
 ): Promise<Result<{ released: Assignment; created: Assignment }, ReassignError>> {
-  if (actor.kind !== "ops") return err("forbidden", "担当の変更は運営だけが行えます");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(
+    actor,
+    "reassign",
+    { type: "assignment", ownerUserId: null },
+    "担当の変更は運営だけが行えます",
+  );
+  if (!auth.ok) return auth;
   try {
     return await runTx<{ released: Assignment; created: Assignment }, ReassignError>(db, async (tx, fail) => {
-      const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId);
+      const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
+        type: "assignment",
+        action: "reassign",
+      });
       if (!loaded.ok) return fail(loaded.error);
       const before = loaded.value;
       if (!isActiveStatus(before.status)) fail("not_active");
@@ -150,9 +164,18 @@ export async function extendAssignment(
     reason?: string;
   },
 ): Promise<Result<Assignment, ExtendError>> {
-  if (actor.kind !== "ops") return err("forbidden", "期限の延長は運営だけが行えます");
+  const auth = authorizeUser(
+    actor,
+    "extend",
+    { type: "assignment", ownerUserId: null },
+    "期限の延長は運営だけが行えます",
+  );
+  if (!auth.ok) return auth;
   return runTx<Assignment, ExtendError>(db, async (tx, fail) => {
-    const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId);
+    const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
+      type: "assignment",
+      action: "extend",
+    });
     if (!loaded.ok) return fail(loaded.error);
     const before = loaded.value;
     if (!isActiveStatus(before.status)) fail("not_active");
@@ -182,9 +205,13 @@ export async function listAssignments(
   actor: Actor,
   filter: { statuses?: AssignmentStatus[]; userId?: string } = {},
 ): Promise<Result<Assignment[], "forbidden">> {
-  if (actor.kind !== "sales" && actor.kind !== "ops") return err("forbidden");
+  const user = requireUser(actor);
+  if (!user.ok) return user;
+  // 営業は自分の担当に絞る。運営は userId の指定がなければ全件（所有者を限定しない）
+  const userId = user.value.kind === "sales" ? user.value.userId : filter.userId;
+  const auth = authorizeUser(actor, "read", { type: "assignment", ownerUserId: userId ?? null });
+  if (!auth.ok) return auth;
   const statuses = filter.statuses ?? [...ACTIVE_ASSIGNMENT_STATUSES];
-  const userId = actor.kind === "sales" ? actor.userId : filter.userId;
   const rows = await db
     .select()
     .from(assignments)

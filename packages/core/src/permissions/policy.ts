@@ -6,20 +6,27 @@ import { err, ok, type Result } from "../common/result.ts";
  * 新しい種類を足すときは ResourceMap・ActionMap・policies の3か所に追加する（policies が欠けると型エラー）。
  *
  * 所有者（ownerUserId）は呼び出し側がDBから読んで渡す。画面から受け取った値をそのまま使わない。
+ * ownerUserId が null のときは「所有者を限定しない」（全件の一覧、運営だけの操作で対象を読む前の確認）。
+ * 営業は自分のものにしか触れないため、null では常に拒否される。
  */
+/** 所有者のある resource の属性。null は所有者を限定しない（上の説明を参照） */
+export interface Owned {
+  ownerUserId: string | null;
+}
+
 export interface ResourceMap {
   /** 企業。営業可能な候補か、誰が担当中かで詳細の可否が変わる */
   company: { companyId: string; sellable: boolean; assignedUserId: string | null };
   /** 担当案件（Assignment） */
-  assignment: { ownerUserId: string };
+  assignment: Owned;
   /** 活動記録・活動メモ・運営への相談 */
-  salesActivity: { ownerUserId: string };
-  /** ドメイン希望 */
-  domainPreference: { ownerUserId: string };
-  /** 契約（成約報告を含む） */
-  contract: { ownerUserId: string };
+  salesActivity: Owned;
+  /** ドメイン希望。所有者は紐づく担当の営業ユーザー */
+  domainPreference: Owned;
+  /** 契約（成約報告を含む）。所有者は担当の営業ユーザー */
+  contract: Owned;
   /** 営業報酬・報酬の調整 */
-  reward: { ownerUserId: string };
+  reward: Owned;
   /** 顧客からの入金 */
   payment: Record<never, never>;
   /** 販売条件・報酬条件 */
@@ -35,9 +42,11 @@ export interface ResourceMap {
 export interface ActionMap {
   /** read_shared：担当中か・営業拒否など、重複防止に必要な企業共通の状態だけ */
   company: "read_shared" | "read" | "claim" | "report_refusal" | "manage";
-  assignment: "read" | "update" | "release" | "reassign";
+  /** reassign：運営による担当の付け替え。extend：運営による期限の延長 */
+  assignment: "read" | "update" | "release" | "reassign" | "extend";
   salesActivity: "read" | "create" | "update";
-  domainPreference: "read" | "create" | "update";
+  /** confirm：運営がドメイン希望を確認した記録 */
+  domainPreference: "read" | "create" | "update" | "confirm";
   /** report：成約報告。confirm：運営の契約確認 */
   contract: "read" | "report" | "confirm" | "update";
   reward: "read" | "manage";
@@ -61,7 +70,7 @@ type SalesPolicy<K extends ResourceType> = (
   resource: ResourceOf<K>,
 ) => boolean;
 
-const own = (actor: SalesActor, r: { ownerUserId: string }) => r.ownerUserId === actor.userId;
+const own = (actor: SalesActor, r: Owned) => r.ownerUserId !== null && r.ownerUserId === actor.userId;
 
 /**
  * 営業ユーザーの規則。運営はすべて許可（ただし下の opsRule の例外を除く）。
@@ -83,9 +92,9 @@ const salesPolicies: { [K in ResourceType]: SalesPolicy<K> } = {
         return false;
     }
   },
-  assignment: (actor, action, r) => action !== "reassign" && own(actor, r),
+  assignment: (actor, action, r) => action !== "reassign" && action !== "extend" && own(actor, r),
   salesActivity: (actor, _action, r) => own(actor, r),
-  domainPreference: (actor, _action, r) => own(actor, r),
+  domainPreference: (actor, action, r) => action !== "confirm" && own(actor, r),
   contract: (actor, action, r) => (action === "read" || action === "report") && own(actor, r),
   reward: (actor, action, r) => action === "read" && own(actor, r),
   payment: () => false,
@@ -141,4 +150,35 @@ export function authorize<K extends ResourceType>(
   return can(actor, action, resource)
     ? ok(undefined)
     : err("forbidden", `${resource.type}.${action} は許可されていません`);
+}
+
+/** 人（営業・運営）の操作主体 */
+export type UserActor = Extract<Actor, { kind: "sales" | "ops" }>;
+
+/**
+ * 人（営業・運営）が画面から行う業務関数の入口で使う。system・customer・未ログインは forbidden。
+ * can() は system を許可するが、担当・活動・契約・報酬・ドメイン希望の業務関数は人の操作として
+ * 操作者（userId）を記録するため、system からの呼び出しを受け付けない（ワーカーの処理は専用の関数で行う）。
+ * 許可なら型を絞った actor を返す。
+ */
+export function requireUser(actor: Actor | null, message?: string): Result<UserActor, "forbidden"> {
+  if (actor && (actor.kind === "sales" || actor.kind === "ops")) return ok(actor);
+  return err("forbidden", message ?? "営業・運営ユーザーだけが行える操作です");
+}
+
+/**
+ * requireUser と authorize を合わせたもの。業務関数はこちらを使う。
+ * エラーは forbidden だけ（未ログインも forbidden に寄せる）。message を渡すとそれを使う。
+ */
+export function authorizeUser<K extends ResourceType>(
+  actor: Actor | null,
+  action: ActionOf<K>,
+  resource: ResourceOf<K>,
+  message?: string,
+): Result<UserActor, "forbidden"> {
+  const user = requireUser(actor, message);
+  if (!user.ok) return user;
+  const auth = authorize(user.value, action, resource);
+  if (!auth.ok) return err("forbidden", message ?? auth.message);
+  return user;
 }

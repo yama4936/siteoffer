@@ -4,6 +4,7 @@ import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { authorizeUser } from "../permissions/policy.ts";
 
 /**
  * 報酬の状態（18章）：契約完了で accrued → scheduled（支払予定）→ paid。取り消しは cancelled。
@@ -41,9 +42,9 @@ export async function getRewardForActor(
 ): Promise<Result<RewardSummary, RewardError>> {
   const summary = await getRewardSummary(db, rewardId);
   if (!summary) return err("not_found");
-  if (actor.kind === "ops") return ok(summary);
-  if (actor.kind === "sales" && summary.reward.userId === actor.userId) return ok(summary);
-  return err("forbidden");
+  const auth = authorizeUser(actor, "read", { type: "reward", ownerUserId: summary.reward.userId });
+  if (!auth.ok) return auth;
+  return ok(summary);
 }
 
 async function lockReward(db: DbOrTx, rewardId: string): Promise<Reward | undefined> {
@@ -58,7 +59,9 @@ export async function scheduleRewardPayment(
   actor: Actor,
   input: { rewardId: string; scheduledFor: Date },
 ): Promise<Result<Reward, RewardError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "manage", { type: "reward", ownerUserId: null });
+  if (!auth.ok) return auth;
   return db.transaction(async (tx) => {
     const before = await lockReward(tx, input.rewardId);
     if (!before) return err("not_found");
@@ -87,7 +90,9 @@ export async function markRewardPaid(
   actor: Actor,
   input: { rewardId: string },
 ): Promise<Result<Reward, RewardError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "manage", { type: "reward", ownerUserId: null });
+  if (!auth.ok) return auth;
   return db.transaction(async (tx) => {
     const before = await lockReward(tx, input.rewardId);
     if (!before) return err("not_found");
@@ -119,7 +124,9 @@ export async function adjustReward(
   actor: Actor,
   input: { rewardId: string; delta: number; reason: string },
 ): Promise<Result<RewardSummary, RewardError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "manage", { type: "reward", ownerUserId: null });
+  if (!auth.ok) return auth;
   if (!Number.isSafeInteger(input.delta) || input.delta === 0) return err("invalid_input", "delta");
   if (!input.reason.trim()) return err("invalid_input", "reason");
   return db.transaction(async (tx) => {
@@ -135,7 +142,7 @@ export async function adjustReward(
         kind: "amount_change",
         delta: input.delta,
         reason: input.reason.trim(),
-        createdBy: actor.userId,
+        createdBy: auth.value.userId,
         createdAt: clock.now(),
       })
       .returning();
@@ -161,7 +168,9 @@ export async function cancelReward(
   actor: Actor,
   input: { rewardId: string; reason: string },
 ): Promise<Result<RewardSummary, RewardError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "manage", { type: "reward", ownerUserId: null });
+  if (!auth.ok) return auth;
   if (!input.reason.trim()) return err("invalid_input", "reason");
   return db.transaction(async (tx) => {
     const reward = await lockReward(tx, input.rewardId);
@@ -173,7 +182,7 @@ export async function cancelReward(
       kind: "cancellation",
       delta: -before.currentAmount,
       reason: input.reason.trim(),
-      createdBy: actor.userId,
+      createdBy: auth.value.userId,
       createdAt: clock.now(),
     });
     const [after] = await tx

@@ -16,6 +16,10 @@ if (!auth.ok) return auth; // err("unauthenticated" | "forbidden")
 if (can(actor, "read_shared", { type: "company", companyId, sellable, assignedUserId })) { ... }
 ```
 
+- 業務関数（担当・活動・契約・報酬・ドメイン希望）では `authorizeUser(actor, action, resource, message?)` を使う。
+  `authorize` に加えて system・customer を拒否し（業務関数は人の操作として操作者を記録するため）、エラーを `forbidden` に寄せ、型を絞った actor（営業・運営）を返す。
+  入口で対象を読む前に人かどうかだけ確かめたいときは `requireUser(actor)`。
+- 所有者のある resource は `ownerUserId: null` を受け付ける。「所有者を限定しない」（全件の一覧、運営だけの操作で対象を読む前の確認）の意味で、営業には常に拒否される。
 - `actor` は apps/web では `getCurrentActor()`（apps/web/lib/session.ts）から得る。未ログインは `null` で、常に拒否される。
 - 利用停止中のユーザーは `AuthProvider.authenticate` が拒否するため、`actor` 自体が作られない。
 - `system`（ワーカーの定期ジョブ等）は許可、`customer`（提案リンク）はこの表では常に拒否。提案リンクの判定は share-link 側で行う。
@@ -26,14 +30,14 @@ if (can(actor, "read_shared", { type: "company", companyId, sellable, assignedUs
 | resource | 営業に許すこと |
 | --- | --- |
 | company | `read_shared`（担当中か・営業拒否）は常に可。`read`・`claim` は営業可能な候補か自分の担当だけ。`report_refusal` は自分の担当だけ。`manage` 不可 |
-| assignment / salesActivity / domainPreference | 自分のもの（ownerUserId が自分）だけ。`reassign` 不可 |
+| assignment / salesActivity / domainPreference | 自分のもの（ownerUserId が自分）だけ。assignment の `reassign`・`extend`、domainPreference の `confirm` は不可 |
 | contract | 自分のものの `read`・`report`（成約報告）だけ。`confirm`・`update` 不可 |
 | reward | 自分のものの `read` だけ |
 | productTerms | `read` だけ（価格・報酬条件は変更不可） |
 | payment / settings / auditLog | 不可 |
 | user | 自分の `read` だけ |
 
-業務上の条件（同時担当数の上限・営業拒否中の確保禁止など）はここでは判定しない。各業務関数で判定する。
+業務上の条件（同時担当数の上限・営業拒否中の確保禁止・状態遷移・営業が記録できる抑止の種類・担当確保や成約報告の主体が営業であることなど）はここでは判定しない。各業務関数で判定する。
 
 ## 拡張のしかた
 

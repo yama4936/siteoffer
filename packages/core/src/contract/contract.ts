@@ -15,6 +15,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { findDomainPreferenceForContract } from "../domain-preference/domain-preference.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
+import { authorizeUser } from "../permissions/policy.ts";
 import type { Reward } from "../reward/reward.ts";
 import { calculateRewardAmount, parseRewardRule, type RewardRule, termsReadinessIssues } from "../reward/rule.ts";
 
@@ -98,6 +99,7 @@ export async function reportContract(
     reportNote?: string | null;
   },
 ): Promise<Result<Contract, ContractError>> {
+  // 業務条件：成約報告は担当の営業本人が行う（運営は can() では report を許されるが、報告の主体にしない）
   if (actor.kind !== "sales") return err("forbidden");
   const secret = findSecretInFields({ reportNote: input.reportNote, documentRef: input.documentRef });
   if (secret) return err("secret_like_value", `${secret.field} に秘密らしき値が含まれているため保存しませんでした`);
@@ -106,7 +108,9 @@ export async function reportContract(
     return await db.transaction(async (tx) => {
       const [a] = await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId)).for("update");
       if (!a) return err("assignment_not_found");
-      if (a.userId !== actor.userId) return err("forbidden");
+      // 権限：契約の report。所有者は読んだ担当の営業ユーザー
+      const auth = authorizeUser(actor, "report", { type: "contract", ownerUserId: a.userId });
+      if (!auth.ok) return auth;
       if (a.status === "contract_pending") return err("already_reported");
       if (!(REPORTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status)) return err("invalid_state");
 
@@ -163,7 +167,9 @@ export async function startContractReview(
   actor: Actor,
   input: { contractId: string },
 ): Promise<Result<Contract, ContractError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "confirm", { type: "contract", ownerUserId: null });
+  if (!auth.ok) return auth;
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).for("update");
     if (!before) return err("not_found");
@@ -215,7 +221,9 @@ export async function confirmContract(
     documentRef?: string;
   },
 ): Promise<Result<ConfirmContractResult, ContractError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "confirm", { type: "contract", ownerUserId: null });
+  if (!auth.ok) return auth;
   if (input.documentRef) {
     const secret = findSecretInFields({ documentRef: input.documentRef });
     if (secret) return err("secret_like_value");
@@ -294,7 +302,7 @@ export async function confirmContract(
         : null,
       sales: { userId: salesUser!.id, displayName: salesUser!.displayName, assignmentId: contract.assignmentId },
       documentRef,
-      confirmedBy: actor.userId,
+      confirmedBy: auth.value.userId,
       completedAt: now.toISOString(),
     };
 
@@ -306,7 +314,7 @@ export async function confirmContract(
         proposalVersionId: proposalVersionId ?? null,
         documentRef,
         snapshot,
-        confirmedBy: actor.userId,
+        confirmedBy: auth.value.userId,
         completedAt: now,
       })
       .where(and(eq(contracts.id, contract.id), inArray(contracts.status, [...OPEN_CONTRACT_STATUSES])))
@@ -380,7 +388,9 @@ export async function rejectContract(
   actor: Actor,
   input: { contractId: string; reason: string },
 ): Promise<Result<Contract, ContractError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
+  const auth = authorizeUser(actor, "confirm", { type: "contract", ownerUserId: null });
+  if (!auth.ok) return auth;
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).for("update");
     if (!before) return err("not_found");
@@ -423,6 +433,7 @@ export async function getContractForActor(
 ): Promise<Result<Contract, ContractError>> {
   const [c] = await db.select().from(contracts).where(eq(contracts.id, contractId));
   if (!c) return err("not_found");
-  if (actor.kind === "ops" || (actor.kind === "sales" && c.salesUserId === actor.userId)) return ok(c);
-  return err("forbidden");
+  const auth = authorizeUser(actor, "read", { type: "contract", ownerUserId: c.salesUserId });
+  if (!auth.ok) return auth;
+  return ok(c);
 }

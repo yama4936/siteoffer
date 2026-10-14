@@ -5,6 +5,7 @@ import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
+import { authorizeUser } from "../permissions/policy.ts";
 
 /**
  * 顧客からの入金（payments）。営業報酬（rewards）とは別に記録し、互いの状態を変えない（14章・AC-16）。
@@ -20,7 +21,8 @@ export async function recordPayment(
   actor: Actor,
   input: { contractId: string; amount: number; received?: boolean; note?: string | null },
 ): Promise<Result<Payment, PaymentError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  const auth = authorizeUser(actor, "manage", { type: "payment" });
+  if (!auth.ok) return auth;
   if (!Number.isSafeInteger(input.amount) || input.amount <= 0) return err("invalid_input", "amount");
   if (findSecretInFields({ note: input.note })) return err("secret_like_value");
   return db.transaction(async (tx) => {
@@ -36,7 +38,7 @@ export async function recordPayment(
         status: input.received ? "received" : "pending",
         receivedAt: input.received ? now : null,
         note: input.note?.trim() || null,
-        recordedBy: actor.userId,
+        recordedBy: auth.value.userId,
         createdAt: now,
       })
       .returning();
@@ -66,7 +68,8 @@ export async function updatePaymentStatus(
   actor: Actor,
   input: { paymentId: string; status: PaymentTargetStatus },
 ): Promise<Result<Payment, PaymentError>> {
-  if (actor.kind !== "ops") return err("forbidden");
+  const auth = authorizeUser(actor, "manage", { type: "payment" });
+  if (!auth.ok) return auth;
   const allowedFrom = TRANSITIONS[input.status];
   if (!allowedFrom) return err("invalid_input", "status");
   return db.transaction(async (tx) => {

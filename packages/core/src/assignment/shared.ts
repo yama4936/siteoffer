@@ -2,6 +2,7 @@ import { ACTIVE_ASSIGNMENT_STATUSES, assignments, type DbOrTx, users } from "@si
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { type ActionOf, authorizeUser, requireUser } from "../permissions/policy.ts";
 
 export type Assignment = typeof assignments.$inferSelect;
 export type AssignmentStatus = Assignment["status"];
@@ -10,20 +11,30 @@ export function isActiveStatus(status: AssignmentStatus): boolean {
   return (ACTIVE_ASSIGNMENT_STATUSES as readonly string[]).includes(status);
 }
 
+/** 担当を読んだあとに確かめる権限。担当そのものへの操作か、担当への活動記録か */
+export type AssignmentCheck =
+  | { type: "assignment"; action: ActionOf<"assignment"> }
+  | { type: "salesActivity"; action: ActionOf<"salesActivity"> };
+
 /**
- * 担当を行ロックして読み、操作主体が触れるかを確かめる。
- * 営業は自分の担当だけ、運営は全件。それ以外（system・customer）は拒否。
- * 権限判定の共通関数（T1の can()）へのつなぎ込みは統合時に行う。
+ * 担当を行ロックして読み、操作主体が触れるかを authorizeUser で確かめる。
+ * 所有者は読んだ行の userId を渡す。system・customer は拒否（人の操作だけ）。
  */
 export async function loadAssignmentForActor(
   tx: DbOrTx,
   actor: Actor,
   assignmentId: string,
+  check: AssignmentCheck,
 ): Promise<Result<Assignment, "not_found" | "forbidden">> {
-  if (actor.kind !== "sales" && actor.kind !== "ops") return err("forbidden");
+  const user = requireUser(actor);
+  if (!user.ok) return user;
   const [row] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update");
   if (!row) return err("not_found");
-  if (actor.kind === "sales" && row.userId !== actor.userId) return err("forbidden");
+  const auth =
+    check.type === "assignment"
+      ? authorizeUser(actor, check.action, { type: "assignment", ownerUserId: row.userId })
+      : authorizeUser(actor, check.action, { type: "salesActivity", ownerUserId: row.userId });
+  if (!auth.ok) return auth;
   return ok(row);
 }
 

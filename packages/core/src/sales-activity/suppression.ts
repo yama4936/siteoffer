@@ -5,6 +5,7 @@ import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, type Result } from "../common/result.ts";
+import { authorizeUser, requireUser } from "../permissions/policy.ts";
 
 type Company = typeof companies.$inferSelect;
 export type Suppression = Company["suppression"];
@@ -42,7 +43,9 @@ export async function applySuppression(
   input: SuppressInput,
   assignmentEnd: { status: "lost" | "released"; reason: string },
 ): Promise<Result<Company, SuppressError>> {
-  if (actor.kind !== "sales" && actor.kind !== "ops") return err("forbidden");
+  const user = requireUser(actor);
+  if (!user.ok) return user;
+  // 業務条件：営業が記録できる抑止の種類は2つだけ（除外・既存顧客は運営が記録する）
   if (actor.kind === "sales" && input.kind !== "not_now" && input.kind !== "do_not_contact") {
     return err("forbidden", "営業ユーザーが記録できるのは「今は不要」「今後連絡しないで」だけです");
   }
@@ -58,9 +61,20 @@ export async function applySuppression(
     .from(assignments)
     .where(and(eq(assignments.companyId, company.id), inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES])))
     .for("update");
-  if (actor.kind === "sales" && !active.some((a) => a.userId === actor.userId)) {
-    return err("forbidden", "自分が担当している企業だけ営業拒否を記録できます");
-  }
+  // 権限：企業の report_refusal。有効な担当は一意制約で高々1件
+  const auth = authorizeUser(
+    actor,
+    "report_refusal",
+    {
+      type: "company",
+      companyId: company.id,
+      sellable: company.pipelineStatus === "sellable",
+      assignedUserId: active[0]?.userId ?? null,
+    },
+    "自分が担当している企業だけ営業拒否を記録できます",
+  );
+  if (!auth.ok) return auth;
+  // 業務条件：営業は抑止を強める方向にだけ変更できる
   if (actor.kind === "sales" && STRENGTH[company.suppression] > STRENGTH[input.kind]) {
     return err("stronger_suppression_exists", `既に${company.suppression}が記録されています`);
   }
@@ -134,10 +148,28 @@ export async function liftSuppression(
   actor: Actor,
   input: { companyId: string; reason: string },
 ): Promise<Result<Company, LiftError>> {
-  if (actor.kind !== "ops") return err("forbidden", "営業抑止の解除は運営だけが行えます");
+  const user = requireUser(actor, "営業抑止の解除は運営だけが行えます");
+  if (!user.ok) return user;
   return runTx<Company, LiftError>(db, async (tx, fail) => {
     const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
     if (!company) return fail("company_not_found");
+    // 権限：企業の manage。属性は読んだ企業の行と有効な担当から渡す
+    const [active] = await tx
+      .select({ userId: assignments.userId })
+      .from(assignments)
+      .where(and(eq(assignments.companyId, company.id), inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES])));
+    const auth = authorizeUser(
+      actor,
+      "manage",
+      {
+        type: "company",
+        companyId: company.id,
+        sellable: company.pipelineStatus === "sellable",
+        assignedUserId: active?.userId ?? null,
+      },
+      "営業抑止の解除は運営だけが行えます",
+    );
+    if (!auth.ok) return fail(auth.error, auth.message);
     if (company.suppression === "none") fail("not_suppressed");
     const now = clock.now();
     const [updated] = await tx

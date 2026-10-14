@@ -309,6 +309,8 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 
 ## 6. 統合の手順（統合担当）
 
+注意：Agentツールで作るworktreeは、ローカルのmainではなくpush済みの位置から作られる。未pushのコミットがあるときは、subagentに最初に `git log --oneline -1` で起点を確認させ、古ければ `git merge --ff-only main` で最新に合わせさせる。
+
 1. subagentの報告を読み、担当外の変更がないことを差分で確認する。
 2. worktree のブランチを main に取り込む（衝突は統合担当が解消する。他人の変更を強制で上書きしない）。
 3. 新しいスキーマ変更があれば `drizzle-kit generate` でマイグレーションを作り、`pnpm install` で lockfile を整える。

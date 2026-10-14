@@ -5,6 +5,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { authorizeUser } from "../permissions/policy.ts";
 import {
   type Assignment,
   countActiveAssignments,
@@ -36,6 +37,7 @@ export async function claimAssignment(
   actor: Actor,
   companyId: string,
 ): Promise<Result<Assignment, ClaimError>> {
+  // 業務条件：担当を持つのは営業ユーザーだけ（運営も can() では claim を許されるが、担当は営業に付ける）
   if (actor.kind !== "sales") return err("forbidden", "担当の確保は営業ユーザーだけが行えます");
   const userId = actor.userId;
   try {
@@ -50,9 +52,17 @@ export async function claimAssignment(
       if (company.pipelineStatus !== "sellable") fail("company_not_sellable");
 
       const [existing] = await tx
-        .select({ id: assignments.id })
+        .select({ id: assignments.id, userId: assignments.userId })
         .from(assignments)
         .where(and(eq(assignments.companyId, companyId), inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES])));
+      // 権限：企業の claim。属性はいま読んだ企業・担当の行から渡す
+      const auth = authorizeUser(actor, "claim", {
+        type: "company",
+        companyId: company.id,
+        sellable: company.pipelineStatus === "sellable",
+        assignedUserId: existing?.userId ?? null,
+      });
+      if (!auth.ok) fail(auth.error, auth.message);
       if (existing) fail("already_assigned");
 
       const max = await getSetting(tx, "assignment.maxActivePerUser");
