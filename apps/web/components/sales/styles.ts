@@ -50,6 +50,14 @@ export const SALES_CSS = `
 .sales .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 8px; }
 .sales .totals div { border: 1px solid #d0d7de; border-radius: 6px; padding: 8px 12px; }
 .sales .totals strong { display: block; font-size: 1.2em; }
+.sales .markdown { overflow-wrap: anywhere; }
+.sales .markdown h2 { font-size: 1.25rem; }
+.sales .markdown h3 { font-size: 1.1rem; margin: 20px 0 8px; border-left: 4px solid #8c959f; padding-left: 8px; }
+.sales .markdown h4, .sales .markdown h5, .sales .markdown h6 { font-size: 1rem; margin: 16px 0 6px; }
+.sales .markdown th { white-space: normal; }
+.sales .markdown blockquote { margin: 8px 0; padding: 4px 12px; border-left: 4px solid #d4a72c; background: #fff8c5; }
+.sales .markdown pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 4px; padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; }
+.sales .markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
 @media (max-width: 600px) {
   .sales dl.kv { grid-template-columns: 1fr; }
   .sales dl.kv dd { margin-bottom: 6px; }

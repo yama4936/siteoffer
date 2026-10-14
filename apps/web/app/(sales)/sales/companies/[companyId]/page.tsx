@@ -11,6 +11,7 @@ import {
   TermsTable,
 } from "@/components/sales/views";
 import { getDb } from "@/lib/db";
+import { getImprovementAvailability, getImprovementSource } from "@/lib/sales/improvement";
 import { formatDate, formatDateTime } from "@/lib/sales/labels";
 import { getCompanyDetail } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
@@ -26,6 +27,9 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   if (!r.ok) notFound();
   const d = r.value;
   const c = d.company;
+  // 改良資料・改善後サイト（最新の評価済み診断の成果物ディレクトリ）。権限は企業詳細と同じ判定
+  const imp = await getImprovementSource(getDb(), user.actor, companyId);
+  const available = await getImprovementAvailability(imp.ok ? imp.value.artifactDir : null);
 
   return (
     <main>
@@ -130,6 +134,29 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
             {d.proposal.proposalText && <ProposalSummary text={d.proposal.proposalText} />}
           </div>
         )}
+      </section>
+
+      <section>
+        <h2>改良資料と改善後サイト</h2>
+        <ul>
+          <li>
+            {available.hasProposal ? (
+              <Link href={`/sales/companies/${c.id}/proposal`}>改良資料を見る</Link>
+            ) : (
+              <span className="sub">改良資料：準備中</span>
+            )}
+          </li>
+          <li>
+            {available.hasSite ? (
+              <a href={`/sales/companies/${c.id}/site/index.html`} target="_blank" rel="noopener noreferrer">
+                改善後サイトを開く（新しいタブ）
+              </a>
+            ) : (
+              <span className="sub">改善後サイト：準備中</span>
+            )}
+          </li>
+        </ul>
+        <p className="hint">営業の確認用の表示です。企業に渡すURLではありません（ログインが必要です）。</p>
       </section>
 
       <section>
