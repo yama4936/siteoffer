@@ -1,4 +1,5 @@
-import { boolean, index, integer, jsonb, pgEnum, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { assignments } from "./assignment.ts";
 import { createdAt, id, ts } from "./common.ts";
 import { companies } from "./companies.ts";
@@ -52,27 +53,43 @@ export const contracts = pgTable(
     documentRef: text("document_ref"),
     reportNote: text("report_note"),
     reportedAt: ts("reported_at").notNull(),
+    /** 差し戻し・取り消しの理由（運営） */
+    closeReason: text("close_reason"),
+    closedAt: ts("closed_at"),
     confirmedBy: uuid("confirmed_by").references(() => users.id),
     completedAt: ts("completed_at"),
     createdAt: createdAt(),
   },
-  (t) => [index("contracts_company").on(t.companyId), index("contracts_sales_user").on(t.salesUserId)],
+  (t) => [
+    index("contracts_company").on(t.companyId),
+    index("contracts_sales_user").on(t.salesUserId),
+    // 1つの担当に、進行中または完了の契約は1件だけ（成約報告の重複を防ぐ）
+    uniqueIndex("contracts_one_open_per_assignment")
+      .on(t.assignmentId)
+      .where(sql`${t.status} in ('reported', 'under_review', 'completed')`),
+  ],
 );
 
 export const paymentStatus = pgEnum("payment_status", ["pending", "received", "refunded", "cancelled"]);
 
 /** 顧客からの入金。報酬とは別に管理する */
-export const payments = pgTable("payments", {
-  id: id(),
-  contractId: uuid("contract_id")
-    .notNull()
-    .references(() => contracts.id),
-  amount: integer("amount").notNull(),
-  status: paymentStatus("status").notNull().default("pending"),
-  receivedAt: ts("received_at"),
-  note: text("note"),
-  createdAt: createdAt(),
-});
+export const payments = pgTable(
+  "payments",
+  {
+    id: id(),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => contracts.id),
+    amount: integer("amount").notNull(),
+    status: paymentStatus("status").notNull().default("pending"),
+    receivedAt: ts("received_at"),
+    refundedAt: ts("refunded_at"),
+    note: text("note"),
+    recordedBy: uuid("recorded_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("payments_contract").on(t.contractId)],
+);
 
 export const rewardStatus = pgEnum("reward_status", ["accrued", "scheduled", "paid", "cancelled"]);
 
@@ -91,15 +108,22 @@ export const rewards = pgTable("rewards", {
   accruedAt: ts("accrued_at").notNull(),
   scheduledFor: ts("scheduled_for"),
   paidAt: ts("paid_at"),
+  cancelledAt: ts("cancelled_at"),
   createdAt: createdAt(),
 });
 
-/** 報酬の変更・取り消し。元の記録は消さない（14章） */
+export const rewardAdjustmentKind = pgEnum("reward_adjustment_kind", ["amount_change", "cancellation"]);
+
+/**
+ * 報酬の変更・取り消し。元の記録は消さない（14章）。
+ * 現在の報酬額 = rewards.amount（発生時の額）+ delta の合計。
+ */
 export const rewardAdjustments = pgTable("reward_adjustments", {
   id: id(),
   rewardId: uuid("reward_id")
     .notNull()
     .references(() => rewards.id),
+  kind: rewardAdjustmentKind("kind").notNull().default("amount_change"),
   delta: integer("delta").notNull(),
   reason: text("reason").notNull(),
   createdBy: uuid("created_by")

@@ -1,0 +1,194 @@
+import { type DbOrTx, rewardAdjustments, rewards } from "@siteoffer/db";
+import { asc, eq } from "drizzle-orm";
+import type { Actor } from "../common/actor.ts";
+import type { Clock } from "../common/clock.ts";
+import { recordEvent } from "../common/events.ts";
+import { err, ok, type Result } from "../common/result.ts";
+
+/**
+ * 報酬の状態（18章）：契約完了で accrued → scheduled（支払予定）→ paid。取り消しは cancelled。
+ * 金額の変更・取り消しは reward_adjustments に追記し、rewards.amount（発生時の額）は書き換えない。
+ * 顧客の入金（payments）とは独立している。入金の有無で報酬の状態は変わらない（14章で確定）。
+ */
+export type Reward = typeof rewards.$inferSelect;
+export type RewardAdjustment = typeof rewardAdjustments.$inferSelect;
+
+export type RewardError = "forbidden" | "not_found" | "invalid_state" | "invalid_input";
+
+export interface RewardSummary {
+  reward: Reward;
+  adjustments: RewardAdjustment[];
+  /** 発生時の額 + 調整の合計 */
+  currentAmount: number;
+}
+
+export async function getRewardSummary(db: DbOrTx, rewardId: string): Promise<RewardSummary | null> {
+  const [reward] = await db.select().from(rewards).where(eq(rewards.id, rewardId));
+  if (!reward) return null;
+  const adjustments = await db
+    .select()
+    .from(rewardAdjustments)
+    .where(eq(rewardAdjustments.rewardId, rewardId))
+    .orderBy(asc(rewardAdjustments.createdAt));
+  return { reward, adjustments, currentAmount: reward.amount + adjustments.reduce((s, a) => s + a.delta, 0) };
+}
+
+/** 営業本人は自分の報酬を、運営は全件を見られる */
+export async function getRewardForActor(
+  db: DbOrTx,
+  actor: Actor,
+  rewardId: string,
+): Promise<Result<RewardSummary, RewardError>> {
+  const summary = await getRewardSummary(db, rewardId);
+  if (!summary) return err("not_found");
+  if (actor.kind === "ops") return ok(summary);
+  if (actor.kind === "sales" && summary.reward.userId === actor.userId) return ok(summary);
+  return err("forbidden");
+}
+
+async function lockReward(db: DbOrTx, rewardId: string): Promise<Reward | undefined> {
+  const [row] = await db.select().from(rewards).where(eq(rewards.id, rewardId)).for("update");
+  return row;
+}
+
+/** 支払予定日を決める（accrued・scheduled → scheduled） */
+export async function scheduleRewardPayment(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor,
+  input: { rewardId: string; scheduledFor: Date },
+): Promise<Result<Reward, RewardError>> {
+  if (actor.kind !== "ops") return err("forbidden");
+  return db.transaction(async (tx) => {
+    const before = await lockReward(tx, input.rewardId);
+    if (!before) return err("not_found");
+    if (before.status !== "accrued" && before.status !== "scheduled") return err("invalid_state");
+    const [after] = await tx
+      .update(rewards)
+      .set({ status: "scheduled", scheduledFor: input.scheduledFor })
+      .where(eq(rewards.id, input.rewardId))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor,
+      action: "reward.schedule",
+      targetType: "reward",
+      targetId: input.rewardId,
+      before,
+      after,
+    });
+    return ok(after!);
+  });
+}
+
+/** 支払済みにする（scheduled → paid）。顧客入金の有無は条件にしない */
+export async function markRewardPaid(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor,
+  input: { rewardId: string },
+): Promise<Result<Reward, RewardError>> {
+  if (actor.kind !== "ops") return err("forbidden");
+  return db.transaction(async (tx) => {
+    const before = await lockReward(tx, input.rewardId);
+    if (!before) return err("not_found");
+    if (before.status !== "scheduled") return err("invalid_state");
+    const [after] = await tx
+      .update(rewards)
+      .set({ status: "paid", paidAt: clock.now() })
+      .where(eq(rewards.id, input.rewardId))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor,
+      action: "reward.pay",
+      targetType: "reward",
+      targetId: input.rewardId,
+      before,
+      after,
+    });
+    return ok(after!);
+  });
+}
+
+/**
+ * 報酬額を調整する。差額を reward_adjustments に追記し、元の額は変えない。
+ * 取り消し済みの報酬は調整できない。調整後の額が負になる変更は拒否する。
+ */
+export async function adjustReward(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor,
+  input: { rewardId: string; delta: number; reason: string },
+): Promise<Result<RewardSummary, RewardError>> {
+  if (actor.kind !== "ops") return err("forbidden");
+  if (!Number.isSafeInteger(input.delta) || input.delta === 0) return err("invalid_input", "delta");
+  if (!input.reason.trim()) return err("invalid_input", "reason");
+  return db.transaction(async (tx) => {
+    const reward = await lockReward(tx, input.rewardId);
+    if (!reward) return err("not_found");
+    if (reward.status === "cancelled") return err("invalid_state");
+    const before = (await getRewardSummary(tx, input.rewardId))!;
+    if (before.currentAmount + input.delta < 0) return err("invalid_input", "調整後の額が負になります");
+    const [adj] = await tx
+      .insert(rewardAdjustments)
+      .values({
+        rewardId: input.rewardId,
+        kind: "amount_change",
+        delta: input.delta,
+        reason: input.reason.trim(),
+        createdBy: actor.userId,
+        createdAt: clock.now(),
+      })
+      .returning();
+    await recordEvent(tx, clock, {
+      actor,
+      action: "reward.adjust",
+      targetType: "reward",
+      targetId: input.rewardId,
+      before: { currentAmount: before.currentAmount },
+      after: { currentAmount: before.currentAmount + input.delta, adjustmentId: adj!.id },
+    });
+    return ok((await getRewardSummary(tx, input.rewardId))!);
+  });
+}
+
+/**
+ * 報酬を取り消す。現在額を打ち消す調整（cancellation）を追記し、状態を cancelled にする。
+ * 支払済みの報酬の取り消し（返還）の扱いは未決のため、ここでは拒否する。
+ */
+export async function cancelReward(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor,
+  input: { rewardId: string; reason: string },
+): Promise<Result<RewardSummary, RewardError>> {
+  if (actor.kind !== "ops") return err("forbidden");
+  if (!input.reason.trim()) return err("invalid_input", "reason");
+  return db.transaction(async (tx) => {
+    const reward = await lockReward(tx, input.rewardId);
+    if (!reward) return err("not_found");
+    if (reward.status === "cancelled" || reward.status === "paid") return err("invalid_state");
+    const before = (await getRewardSummary(tx, input.rewardId))!;
+    await tx.insert(rewardAdjustments).values({
+      rewardId: input.rewardId,
+      kind: "cancellation",
+      delta: -before.currentAmount,
+      reason: input.reason.trim(),
+      createdBy: actor.userId,
+      createdAt: clock.now(),
+    });
+    const [after] = await tx
+      .update(rewards)
+      .set({ status: "cancelled", cancelledAt: clock.now() })
+      .where(eq(rewards.id, input.rewardId))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor,
+      action: "reward.cancel",
+      targetType: "reward",
+      targetId: input.rewardId,
+      before: { ...before.reward, currentAmount: before.currentAmount },
+      after: { ...after, currentAmount: 0 },
+    });
+    return ok((await getRewardSummary(tx, input.rewardId))!);
+  });
+}

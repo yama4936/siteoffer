@@ -16,3 +16,6 @@ coverage/
 !.env.example
 .data/
 next-env.d.ts
+
+# subagentの作業用worktree
+.claude/worktrees/
