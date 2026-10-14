@@ -183,6 +183,9 @@ describe("企業一覧", () => {
     expect(await ids("score_asc")).toEqual([low.id, rescored.id, high.id, unevaluable.id, none.id]);
     expect(await ids("score_desc")).toEqual([high.id, rescored.id, low.id, unevaluable.id, none.id]);
     expect(await ids("region")).toEqual([high.id, low.id, rescored.id, unevaluable.id, none.id]);
+    // 指定なしは評価点の低い順
+    const def = await listSellableCompanies(db, me.actor, {});
+    expect(def.ok && def.value.map((x) => x.id)).toEqual(await ids("score_asc"));
     const r = await listSellableCompanies(db, me.actor, { sort: "score_asc" });
     expect(r.ok && r.value[1]).toMatchObject({ totalScore: "55" });
     expect(r.ok && r.value[4]).toMatchObject({ totalScore: null });

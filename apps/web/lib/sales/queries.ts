@@ -48,12 +48,12 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 // ---------- 企業一覧 ----------
 
-/** 企業一覧の並び順。region：地域・企業名順（既定）、score_asc／score_desc：最新の評価の総合点順 */
-export const COMPANY_SORTS = ["region", "score_asc", "score_desc"] as const;
+/** 企業一覧の並び順。score_asc（既定）／score_desc：最新の評価の総合点順、region：地域・企業名順 */
+export const COMPANY_SORTS = ["score_asc", "score_desc", "region"] as const;
 export type CompanySort = (typeof COMPANY_SORTS)[number];
 
 export const parseCompanySort = (v: string | undefined): CompanySort =>
-  (COMPANY_SORTS as readonly string[]).includes(v ?? "") ? (v as CompanySort) : "region";
+  (COMPANY_SORTS as readonly string[]).includes(v ?? "") ? (v as CompanySort) : "score_asc";
 
 export interface CompanyListFilter {
   prefecture?: string | undefined;
@@ -142,10 +142,11 @@ export async function listSellableCompanies(
     .as("latest_audit");
   const regionOrder = [asc(companies.prefecture), asc(companies.city), asc(companies.name)];
   // 点数のない企業（未評価・評価不能）は低評価に置き換えず、どちらの並びでも末尾に置く
+  const sort = filter.sort ?? "score_asc";
   const order =
-    filter.sort === "score_asc"
+    sort === "score_asc"
       ? [sql`${latestAudit.totalScore} asc nulls last`, ...regionOrder]
-      : filter.sort === "score_desc"
+      : sort === "score_desc"
         ? [sql`${latestAudit.totalScore} desc nulls last`, ...regionOrder]
         : regionOrder;
   const rows = await db

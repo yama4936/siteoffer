@@ -90,9 +90,9 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Se
             </Field>
             <Field label="並び順" htmlFor="filter-sort">
               <NativeSelect id="filter-sort" name="sort" defaultValue={filter.sort}>
-                <option value="region">地域順</option>
                 <option value="score_asc">評価点の低い順</option>
                 <option value="score_desc">評価点の高い順</option>
+                <option value="region">地域順</option>
               </NativeSelect>
             </Field>
             <div className="flex flex-wrap items-center gap-2">
