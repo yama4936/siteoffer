@@ -6,7 +6,7 @@
  * 2. 提案の生成キュー（pipeline.proposal）へ送る。生成はデモのワーカー（モック）が行い、提案版は運営確認待ちになる
  * 3. 運営確認待ちになった版を運営アカウントで承認し、デモ用の販売・報酬条件の版で営業可能にする（運営画面と同じ関数）
  *
- * 既定は総合点80点以下。以前の70点以下から、地域・業種と候補の質の幅を広げるためのデモ専用値。
+ * 既定は総合点85点以下。全国へ地域を広げ、改善余地が比較的小さい候補も比較できるようにするデモ専用値。
  * --max-score <点>：既定値を一時的に上書きする。超える企業は営業可能を取り下げる（運営画面の withdrawSellable）。
  *   正の設定の閾値（null）は変えない。
  *
@@ -36,7 +36,7 @@ const PROPOSAL_QUEUE = "pipeline.proposal";
 const TERMS_VERSION = "demo-2026-10";
 const OPS_EMAIL = "ops@example.test";
 const WAIT_MS = 30 * 60 * 1000;
-const DEFAULT_MAX_SCORE = 80;
+const DEFAULT_MAX_SCORE = 85;
 const REASON = "デモ用に手動で create に変更（閾値による判定ではない。scripts/import-reports.ts で取り込んだ評価）";
 
 const { PgBoss } = createRequire(new URL("../../worker/package.json", import.meta.url))("pg-boss") as BossModule;
