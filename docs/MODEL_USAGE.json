@@ -1,0 +1,46 @@
+{
+  "session_id": "01a1387a-c08c-7613-a727-458d2a84787e",
+  "date": "2026-10-14",
+  "timezone": "Asia/Tokyo",
+  "source_kind": "Codex local session JSONL: turn_context",
+  "source_file": "rollout-2026-10-14T12-35-31-01a1387a-c08c-7613-a727-458d2a84787e.jsonl",
+  "source_snapshot_sha256": "946bf539b2c420441389258a26e9ba09fc75ba4b8a444a78336816d12924305b",
+  "source_snapshot_timestamp_utc": "2026-10-14T04:32:34.282Z",
+  "scope": "This chat only. Development chat model, not a model used by the SiteOffer application.",
+  "turns": [
+    {
+      "turn_id": "01a1387a-c3cf-7560-b9e4-d38fb8000a61",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "record_timestamp_utc": "2026-10-14T03:35:33.630Z"
+    },
+    {
+      "turn_id": "01a1388e-2009-7643-a7de-c93c5749fc3a",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "record_timestamp_utc": "2026-10-14T03:56:41.039Z"
+    },
+    {
+      "turn_id": "01a13892-b0aa-7ee1-b80f-918411c8182b",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "record_timestamp_utc": "2026-10-14T04:01:40.058Z"
+    },
+    {
+      "turn_id": "01a13895-856f-7da3-a7b8-3c5d9d0dfbf9",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "record_timestamp_utc": "2026-10-14T04:04:45.589Z"
+    },
+    {
+      "turn_id": "01a138a0-6a91-7a70-b973-803d15baf471",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "record_timestamp_utc": "2026-10-14T04:16:39.611Z"
+    }
+  ],
+  "application_generation_model": {
+    "status": "not_selected",
+    "sdk_execution": "not_performed"
+  }
+}
