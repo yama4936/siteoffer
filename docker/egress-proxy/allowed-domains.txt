@@ -1,0 +1,7 @@
+# 生成用コンテナ（Codex CLI）に許可する送信先。必要最小限にする。
+# 下の値は想定。実際に Codex CLI が接続する先は、Docker のある環境でプロキシのログから確認して確定する（未確認）。
+# ChatGPTログイン時の推論・トークン更新
+.chatgpt.com
+auth.openai.com
+# APIキー方式（将来の運営サーバー。24.3）
+api.openai.com

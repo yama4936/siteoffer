@@ -1,0 +1,66 @@
+# 実Codexで生成するときに compose.yaml に重ねる設定（ローカルの試験用）。
+#
+#   docker compose -f compose.yaml -f docker/compose.codex.yaml up -d
+#
+# 重ねたときの相対パスは、最初のファイル（リポジトリ直下の compose.yaml）の場所が基準になる。
+# 状態：用意のみ。この開発環境にはDockerがなく、未起動・未検証。
+#
+# 注意（docker/README.md に詳しく書く）：
+# - ChatGPTログインでワーカーから Codex を自動実行する使い方は、ローカルの試験に限る（利用条件は未確認。24.3）。
+# - ワーカーにホストの Docker ソケットを渡す。ソケットを持つプロセスはホストの root 相当の操作ができるため、
+#   このファイルはローカルの試験以外で使わない。
+# - 生成用コンテナの作業ディレクトリは、ワーカーが作り、ホストの Docker デーモンが bind マウントする。
+#   そのため、ホストとワーカーのコンテナで同じ絶対パスに見える場所（SITEOFFER_CODEX_WORK_DIR）を使う。
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: worker-codex
+    image: siteoffer-worker-codex:local
+    environment:
+      SITEOFFER_GENERATOR: codex
+      # 生成用イメージ（docker/codex-sandbox/Dockerfile を事前にビルドしておく）
+      SITEOFFER_CODEX_IMAGE: ${SITEOFFER_CODEX_IMAGE:-siteoffer-codex-sandbox:local}
+      # 生成用コンテナのネットワーク名。既定は送信先を絞らない試験用ネットワーク（下の codex-open）。
+      # 出口プロキシ経由（siteoffer-codex-egress）は、HTTPS_PROXY を Codex CLI へ渡す変更が入るまで使えない
+      SITEOFFER_CODEX_NETWORK: ${SITEOFFER_CODEX_NETWORK:-siteoffer-codex-open}
+      # ホスト側の auth.json の絶対パス。Docker デーモンがホスト上で解決して読み取り専用でマウントする。
+      # ワーカーのコンテナ自体には認証ファイルをマウントしない
+      SITEOFFER_CODEX_AUTH_FILE: ${SITEOFFER_CODEX_AUTH_FILE:?.env に SITEOFFER_CODEX_AUTH_FILE（ホスト上の auth.json の絶対パス）を設定}
+      SITEOFFER_CODEX_MODEL: ${SITEOFFER_CODEX_MODEL:-}
+      # CodexGenerator は os.tmpdir()/siteoffer-gen に作業ディレクトリを作るため、TMPDIR で共有の場所へ向ける
+      TMPDIR: ${SITEOFFER_CODEX_WORK_DIR:?.env に SITEOFFER_CODEX_WORK_DIR（ホストとワーカーで同じ絶対パス）を設定}
+    volumes:
+      # ホストとコンテナで同じパスにする（docker run の --mount source はホストのパスとして解釈される）
+      - ${SITEOFFER_CODEX_WORK_DIR}:${SITEOFFER_CODEX_WORK_DIR}
+      - /var/run/docker.sock:/var/run/docker.sock
+    # ソケットの所有グループ（ホストの docker グループのGID）。`stat -c %g /var/run/docker.sock` で確認する
+    group_add:
+      - ${DOCKER_GID:?.env に DOCKER_GID（ホストの docker.sock のグループID）を設定}
+
+  # 出口プロキシ（案・未検証）。許可リストのドメインへの HTTPS だけを中継する
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: docker/egress-proxy/Dockerfile
+    image: siteoffer-egress-proxy:local
+    networks:
+      codex-egress:
+        ipv4_address: 172.30.240.2
+      default: {}
+    restart: unless-stopped
+
+# 送信先を絞らない試験用ネットワーク siteoffer-codex-open は、どのサービスも使わないため compose では作られない。
+# docker/README.md の手順で `docker network create` する。
+networks:
+  default: {}
+  # 生成用コンテナ用。外部へ直接出られない（internal）。出口は egress-proxy だけ
+  codex-egress:
+    name: siteoffer-codex-egress
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.240.0/24

@@ -11,3 +11,8 @@ reports
 **/.astro
 **/*.tsbuildinfo
 **/__pycache__
+**/auth.json
+**/*.pem
+**/*.key
+**/*.pyc
+coverage
