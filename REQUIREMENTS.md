@@ -480,8 +480,8 @@ docs/CONVERSATION.mdを会話の原記録として参照する。過去の提案
 | DB | PostgreSQL。ローカルはDocker、将来はRDS/Aurora | 確定 |
 | ジョブキュー | PostgreSQL上のキュー（pg-boss等）。追加の常駐インフラを持たない | 推奨案 |
 | スキーマ検証 | Zod等で診断結果・提案・サイト構成・API入出力を検証 | 推奨案 |
-| ORM・マイグレーション | Prisma / Drizzle等。実装開始時に選定 | 未決 |
-| ローカル起動 | docker composeでDB・アプリ・ワーカーを起動 | 推奨案 |
+| ORM・マイグレーション | Drizzle。テストはPGlite（プロセス内PostgreSQL）を推奨 | Drizzleは確定（2026-10-14） |
+| ローカル起動 | docker composeでDB・アプリ・ワーカーを起動。現在の開発環境ではDockerを使えないため、ファイルの用意だけ行い起動確認はDocker環境で行う | 推奨案（Dockerの扱いは2026-10-14確定） |
 | AWS上の実行方式 | ECS Fargate＋SQS、Lambda、EC2等を後で比較 | 未決（後で判断） |
 
 ### 24.2 認証と権限
@@ -528,6 +528,8 @@ docs/CONVERSATION.mdを会話の原記録として参照する。過去の提案
 - 開発・テスト用に架空企業のフィクスチャを用意する。
 
 ### 24.7 ローカル完了の目安
+
+実装の計画とタスク分割は[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)（推奨案）。
 
 - docker composeでDB・アプリ・ワーカーが起動し、営業・運営でログインできる。
 - 収集→診断→生成→運営確認→営業可能→担当確保→活動記録→契約確認→報酬発生の流れを操作できる。

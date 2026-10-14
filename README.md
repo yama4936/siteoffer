@@ -11,8 +11,9 @@
 2. [agent.md](agent.md)：使用モデル、会話と回答の要約、判断の経緯、作業記録、報告書作成ルール。
 3. [docs/CONVERSATION.md](docs/CONVERSATION.md)：このチャットのユーザー発言・注釈・質問への回答と、アシスタントの公開回答の記録。
 4. [docs/MODEL_USAGE.json](docs/MODEL_USAGE.json)：セッション記録から抽出したターン別モデル情報。
-5. [AGENTS.md](AGENTS.md)：今後このリポジトリで作業するエージェントへの指示。
-6. [.agents/skills/](.agents/skills/)：サイト評価（site-evaluation）と改善提案書（site-proposal）のスキル。設定は [config/site-evaluation.json](config/site-evaluation.json)。
+5. [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)：ローカルMVPの実装計画と、subagentへのタスク分割。
+6. [AGENTS.md](AGENTS.md)：今後このリポジトリで作業するエージェントへの指示。
+7. [.agents/skills/](.agents/skills/)：サイト評価（site-evaluation）と改善提案書（site-proposal）のスキル。設定は [config/site-evaluation.json](config/site-evaluation.json)。
 
 ## 最新の方針
 
