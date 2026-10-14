@@ -47,6 +47,11 @@ export interface ResourceMap {
     assignedUserId: string | null;
     createdBy: string | null;
   };
+  /**
+   * 納品（制作・運営確認・顧客確認・公開の記録、15・18章）。運営が扱う。
+   * 顧客の承認・修正依頼は共有リンクの検証（share-link）で判定し、ここでは扱わない。
+   */
+  delivery: Record<never, never>;
 }
 
 export interface ActionMap {
@@ -68,6 +73,8 @@ export interface ActionMap {
   user: "read" | "list" | "suspend" | "reactivate";
   /** create：発行。revoke：取り消し */
   shareLink: "read" | "create" | "revoke";
+  /** manage：納品の作成・版の追加・状態の変更 */
+  delivery: "read" | "manage";
 }
 
 export type ResourceType = keyof ResourceMap;
@@ -127,6 +134,8 @@ const salesPolicies: { [K in ResourceType]: SalesPolicy<K> } = {
         return r.createdBy !== null && r.createdBy === actor.userId;
     }
   },
+  // 制作・納品は運営の担当（5.2）。営業は閲覧・操作できない（AC-18）
+  delivery: () => false,
 };
 
 /** 運営にも許さない操作。利用停止の対象は営業ユーザーだけ（運営アカウントは seed・管理手順で扱う） */

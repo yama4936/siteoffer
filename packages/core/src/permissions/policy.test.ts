@@ -99,6 +99,9 @@ const table: Row[] = [
   ["自分の担当企業の提案リンクを読む", "read", linkProposal(SALES_A, SALES_B), { sales: Y, ops: Y }],
   ["他人の担当企業の提案リンクを読む", "read", linkProposal(SALES_B, SALES_B), { sales: N, ops: Y }],
   ["納品リンクを読む", "read", linkDelivery(SALES_A, OPS), { sales: N, ops: Y }],
+  // 納品（15・18章・AC-18）。運営だけが扱う
+  ["納品の状態を読む", "read", { type: "delivery" }, { sales: N, ops: Y }],
+  ["納品の作成・版の追加・状態の変更", "manage", { type: "delivery" }, { sales: N, ops: Y }],
 ];
 
 // biome-ignore lint/suspicious/noExplicitAny: 表の行は action と resource の組を動的に持つ
