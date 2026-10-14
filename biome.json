@@ -13,7 +13,8 @@
       "!**/next-env.d.ts",
       "!.claude",
       "!docs",
-      "!config"
+      "!config",
+      "!.data"
     ]
   },
   "formatter": {

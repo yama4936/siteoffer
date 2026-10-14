@@ -7,6 +7,9 @@
 
 ## ローカルで起動する
 
+**Dockerがない環境でデモを見る場合**は `pnpm demo` を使います（モックの生成器と架空企業のフィクスチャだけで動き、実在企業・実API・AWSは使いません）。
+手順・デモ用アカウント・画面の流れは [demo/README.md](demo/README.md) を参照してください。
+
 Docker Desktop（Compose v2）、Node.js 24以上、pnpm（指定版は12.11.2）が必要です。
 リポジトリのルートで実行します。
 

@@ -1,0 +1,28 @@
+{
+  "_comment": "デモ用の仮値。ユーザーが決めた値ではない。pnpm demo のワーカーだけが環境変数 SITEOFFER_EVAL_CONFIG で読む。本番・実在企業の診断には使わない。正の設定は config/site-evaluation.json（閾値は null のまま未決）。threshold と critical_flags_trigger 以外は config/site-evaluation.json と同じ値にそろえる。",
+  "rubric_version": "0.1",
+  "proposal": {
+    "threshold": 70,
+    "_threshold_note": "デモ用の仮値。ユーザーが決めた値ではない。フィクスチャの架空企業（取得済みの収集結果 kakuu-koumuten）の総合点 46.4 が create になるように置いた。",
+    "critical_flags_trigger": true,
+    "_critical_flags_trigger_note": "デモ用の仮値。ユーザーが決めた値ではない。",
+    "min_coverage": 0.7,
+    "_min_coverage_note": "推奨案。評価できた配点の割合がこれ未満なら総合点を確定せず判定保留にする。"
+  },
+  "category_weights": {
+    "_note": "推奨案（アシスタント作成）。ユーザー承認済みの配点ではない。合計100。",
+    "A_conversion": 20,
+    "B_clarity": 20,
+    "C_trust": 15,
+    "D_mobile": 15,
+    "E_performance": 10,
+    "F_seo": 10,
+    "G_accessibility": 10
+  },
+  "collection": {
+    "max_pages": 6,
+    "timeout_seconds": 15,
+    "delay_seconds": 1.0,
+    "user_agent": "SiteOfferAudit/0.1 (+site evaluation; contact: operator)"
+  }
+}

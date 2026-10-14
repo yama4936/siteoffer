@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,7 +26,7 @@ import {
   MockGenerator,
 } from "@siteoffer/generation";
 import type { JobQueue, Logger, WorkerDeps } from "./deps.ts";
-import { defaultGenerationInputBuilder } from "./input.ts";
+import { defaultGenerationInputBuilder, fixtureGenerationInputBuilder } from "./input.ts";
 import { DEFAULT_POLICIES, DEFAULT_SCHEDULES, type StepKind, type StepPolicy } from "./queues.ts";
 import { createAstroSiteBuilder } from "./site-builder.ts";
 
@@ -45,6 +46,15 @@ export interface WorkerConfig {
   auditCollector: { kind: "fixture"; collectedPath: string } | { kind: "python" };
   auditOptions: AuditOptions;
   demoArtifactRoot: string;
+  /** 納品版のビルド結果の保存先（Gitに入れない場所） */
+  deliveryArtifactRoot: string;
+  /**
+   * 生成の入力。default は収集した企業情報と診断から作る。
+   * fixture は fixtures/codex/input.json（モックの固定応答と事実キーが揃った架空企業の入力）で、モック生成器のときだけ選べる（デモ用）
+   */
+  generationInput: "default" | "fixture";
+  /** DBを見てジョブを受け付ける間隔（ミリ秒）。0 なら受付処理を動かさない */
+  intakeIntervalMs: number;
   policies: Record<StepKind, StepPolicy>;
   schedules: { expireAssignments: string; recoverDiscovery: string };
   discoveryStaleAfterMs: number;
@@ -113,6 +123,27 @@ export function resolveWorkerConfig(
     };
   }
 
+  const inputKind = v("SITEOFFER_GENERATION_INPUT") ?? "default";
+  if (inputKind !== "default" && inputKind !== "fixture") {
+    problems.push(`SITEOFFER_GENERATION_INPUT は default か fixture（${inputKind}）`);
+  } else if (inputKind === "fixture" && generator.kind !== "mock") {
+    problems.push("SITEOFFER_GENERATION_INPUT=fixture はモック生成器（SITEOFFER_GENERATOR=mock）のときだけ使える");
+  }
+
+  const intakeIntervalMs = Number(v("SITEOFFER_INTAKE_INTERVAL_MS") ?? 5000);
+  if (!Number.isInteger(intakeIntervalMs) || intakeIntervalMs < 0) problems.push("SITEOFFER_INTAKE_INTERVAL_MS が不正");
+
+  // 評価設定（閾値など）。既定は config/site-evaluation.json。デモでは config/site-evaluation.demo.json を指定する
+  const evalConfig = v("SITEOFFER_EVAL_CONFIG");
+  const evalConfigPath = evalConfig ? path.resolve(REPO_ROOT, evalConfig) : undefined;
+  if (evalConfigPath && !existsSync(evalConfigPath)) problems.push("SITEOFFER_EVAL_CONFIG のファイルがない");
+
+  // 提案の同時実行数（このプロセス内）。Astroのビルドが同時に走るとメモリを使うため、デモでは 1 にする
+  const proposalConcurrency = Number(v("SITEOFFER_PROPOSAL_CONCURRENCY") ?? DEFAULT_GENERATION_LIMITS.maxConcurrent);
+  if (!Number.isInteger(proposalConcurrency) || proposalConcurrency < 1) {
+    problems.push("SITEOFFER_PROPOSAL_CONCURRENCY が不正");
+  }
+
   const staleMinutes = Number(v("SITEOFFER_DISCOVERY_STALE_MINUTES") ?? 60);
   if (!Number.isFinite(staleMinutes) || staleMinutes < 1) problems.push("SITEOFFER_DISCOVERY_STALE_MINUTES が不正");
 
@@ -122,12 +153,17 @@ export function resolveWorkerConfig(
     generator,
     discoveryProviders,
     auditCollector,
-    auditOptions: defaultAuditOptions(env, { paths: { repoRoot: REPO_ROOT } }),
+    auditOptions: defaultAuditOptions(env, {
+      paths: { repoRoot: REPO_ROOT, ...(evalConfigPath ? { configPath: evalConfigPath } : {}) },
+    }),
     demoArtifactRoot: v("SITEOFFER_DEMO_ARTIFACT_DIR") ?? path.join(REPO_ROOT, "reports/app/demos"),
+    deliveryArtifactRoot: v("SITEOFFER_DELIVERY_ARTIFACT_DIR") ?? path.join(REPO_ROOT, "reports/app/deliveries"),
+    generationInput: inputKind === "fixture" ? "fixture" : "default",
+    intakeIntervalMs,
     policies: DEFAULT_POLICIES,
     schedules: { ...DEFAULT_SCHEDULES },
     discoveryStaleAfterMs: staleMinutes * 60 * 1000,
-    concurrency: { discovery: 1, audit: 2, proposal: DEFAULT_GENERATION_LIMITS.maxConcurrent },
+    concurrency: { discovery: 1, audit: 2, proposal: proposalConcurrency },
   });
 }
 
@@ -176,9 +212,11 @@ export function buildWorkerDeps(
       options: config.auditOptions,
     },
     generation: { generator, limiter },
-    buildGenerationInput: defaultGenerationInputBuilder,
+    buildGenerationInput:
+      config.generationInput === "fixture" ? fixtureGenerationInputBuilder : defaultGenerationInputBuilder,
     siteBuilder: createAstroSiteBuilder(),
     demoArtifactRoot: config.demoArtifactRoot,
+    deliveryArtifactRoot: config.deliveryArtifactRoot,
     policies: config.policies,
     discoveryStaleAfterMs: config.discoveryStaleAfterMs,
   };
@@ -191,6 +229,9 @@ export function describeConfig(config: WorkerConfig): Record<string, unknown> {
     requestedModel: config.generator.kind === "codex" ? config.generator.model : null,
     discoveryProviders: config.discoveryProviders,
     auditCollector: config.auditCollector.kind,
+    generationInput: config.generationInput,
+    evaluationConfig: path.relative(REPO_ROOT, config.auditOptions.paths.configPath),
+    intakeIntervalMs: config.intakeIntervalMs,
     databaseConfigured: config.databaseUrl !== null,
   };
 }

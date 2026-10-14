@@ -9,6 +9,7 @@ import { PgBoss } from "pg-boss";
 import { createBossQueue, registerQueues } from "./boss.ts";
 import { buildWorkerDeps, describeConfig, resolveWorkerConfig } from "./config.ts";
 import { consoleLogger } from "./deps.ts";
+import { type IntakeLoop, startIntakeLoop } from "./intake.ts";
 import { createWorkerRuntime } from "./runtime.ts";
 
 export * from "./boss.ts";
@@ -17,6 +18,7 @@ export * from "./content.ts";
 export * from "./deps.ts";
 export * from "./execute.ts";
 export * from "./input.ts";
+export * from "./intake.ts";
 export * from "./ledger.ts";
 export * from "./pipeline/audit.ts";
 export * from "./pipeline/discovery.ts";
@@ -47,12 +49,15 @@ export async function startWorker(env: Record<string, string | undefined> = proc
   const deps = buildWorkerDeps(config, { db, clock: systemClock, queue: createBossQueue(boss), logger });
   const runtime = createWorkerRuntime(deps);
   await registerQueues(boss, runtime, config, logger);
+  // webが作った収集ジョブ・制作中の納品をDBから拾う（webからキューへ直接送る経路はない）
+  const intake: IntakeLoop | null = config.intakeIntervalMs > 0 ? startIntakeLoop(deps, config.intakeIntervalMs) : null;
   logger.info("ワーカーを起動した", describeConfig(config));
 
   let stopping: Promise<void> | null = null;
   const stop = () => {
     stopping ??= (async () => {
       logger.info("ワーカーを停止する（実行中のジョブの完了を待つ）");
+      await intake?.stop();
       await boss.stop({ graceful: true, timeout: 60_000 });
       await close();
     })();

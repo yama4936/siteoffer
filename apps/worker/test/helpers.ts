@@ -40,24 +40,23 @@ export const fixtureInputBuilder: GenerationInputBuilder = async () => loadCodex
 export function fakeSiteBuilder(outcome?: Partial<{ ok: boolean; retryable: boolean; hang: boolean }>) {
   const calls: string[] = [];
   const check: DemoCheckSummary = { ok: true, pages: ["index.html"], counts: {}, errors: [], mobile: "skipped" };
-  const builder: SiteBuilder = {
-    async buildDemo({ workDir }) {
-      calls.push(workDir);
-      if (outcome?.hang) return new Promise(() => {});
-      if (outcome?.ok === false) {
-        return {
-          ok: false,
-          reason: "astro-build-failed",
-          message: "模擬的なビルド失敗",
-          retryable: outcome.retryable ?? true,
-        };
-      }
-      const distDir = path.join(workDir, "dist");
-      await mkdir(distDir, { recursive: true });
-      await writeFile(path.join(distDir, "index.html"), "<!doctype html><title>fake</title>");
-      return { ok: true, distDir, check };
-    },
+  const build: SiteBuilder["buildDemo"] = async ({ workDir }) => {
+    calls.push(workDir);
+    if (outcome?.hang) return new Promise(() => {});
+    if (outcome?.ok === false) {
+      return {
+        ok: false,
+        reason: "astro-build-failed",
+        message: "模擬的なビルド失敗",
+        retryable: outcome.retryable ?? true,
+      };
+    }
+    const distDir = path.join(workDir, "dist");
+    await mkdir(distDir, { recursive: true });
+    await writeFile(path.join(distDir, "index.html"), "<!doctype html><title>fake</title>");
+    return { ok: true, distDir, check };
   };
+  const builder: SiteBuilder = { buildDemo: build, buildDelivery: build };
   return { builder, calls };
 }
 
@@ -120,6 +119,7 @@ export async function setupEnv(
     buildGenerationInput: options.buildInput ?? fixtureInputBuilder,
     siteBuilder: options.siteBuilder ?? fakeSiteBuilder().builder,
     demoArtifactRoot: path.join(dir, "demos"),
+    deliveryArtifactRoot: path.join(dir, "deliveries"),
     policies,
     discoveryStaleAfterMs: 60 * 60 * 1000,
   };

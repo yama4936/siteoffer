@@ -50,6 +50,8 @@ export interface WorkerDeps {
   siteBuilder: SiteBuilder;
   /** デモのビルド結果の保存先（Gitに入れない場所） */
   demoArtifactRoot: string;
+  /** 納品版のビルド結果の保存先（Gitに入れない場所） */
+  deliveryArtifactRoot: string;
   policies: Record<StepKind, StepPolicy>;
   /** 収集ジョブが running のまま、これより長く経っていれば失敗に戻す */
   discoveryStaleAfterMs: number;

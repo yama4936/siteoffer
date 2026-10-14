@@ -1,5 +1,6 @@
 import { type companies, type Db, findings, type siteAudits } from "@siteoffer/db";
-import type { Fact, GenerationInput } from "@siteoffer/schemas";
+import { loadCodexFixture } from "@siteoffer/generation";
+import { type Fact, type GenerationInput, generationInputSchema } from "@siteoffer/schemas";
 import { asc, eq } from "drizzle-orm";
 
 export type CompanyRow = typeof companies.$inferSelect;
@@ -94,3 +95,11 @@ export const defaultGenerationInputBuilder: GenerationInputBuilder = async (db, 
     },
   };
 };
+
+/**
+ * デモ用の入力：fixtures/codex/input.json（架空企業「株式会社あおば工務店」の確認済みの事実）をそのまま使う。
+ * モック生成器の固定応答はこの入力の事実キーを参照しているため、モックで提案・納品を最後まで通すときに使う。
+ * どの企業でも同じ架空企業の内容になる。実生成（Codex）では使わない（設定で拒否する）。
+ */
+export const fixtureGenerationInputBuilder: GenerationInputBuilder = async () =>
+  generationInputSchema.parse(loadCodexFixture("input"));

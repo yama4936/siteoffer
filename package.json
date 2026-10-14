@@ -7,7 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "typecheck": "pnpm -r --if-present typecheck && tsc -p scripts/tsconfig.json",
+    "typecheck": "pnpm -r --if-present typecheck && tsc -p scripts/tsconfig.json && tsc -p demo/tsconfig.json",
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "vitest run",
@@ -25,8 +25,11 @@
     "dev": "pnpm dev:setup && docker compose up --build --detach --wait",
     "dev:stop": "docker compose down",
     "dev:db": "pnpm --filter @siteoffer/db dev-server",
-    "dev:web": "node --env-file-if-exists=.env --run dev:web:exec",
-    "dev:web:exec": "pnpm --filter @siteoffer/web dev --hostname 127.0.0.1"
+    "dev:web": "pnpm --filter @siteoffer/web dev --hostname 127.0.0.1",
+    "dev:web:exec": "pnpm --filter @siteoffer/web dev --hostname 127.0.0.1",
+    "demo": "node --import tsx demo/run.ts",
+    "demo:reset": "node --import tsx demo/run.ts --reset",
+    "demo:users": "node --import tsx demo/seed.ts --show"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
