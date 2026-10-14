@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+  - templates/*
+
+# インストール時にビルドスクリプトの実行を許可するパッケージ
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - pg-boss@12.38.0

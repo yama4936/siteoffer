@@ -28,7 +28,7 @@
 | 対象 | この環境 | 備考 |
 | --- | --- | --- |
 | 型検査・単体テスト・DBを使う結合テスト（PGlite） | できる | 主な検証手段 |
-| Next.js・ワーカーのローカル起動 | 条件付き | DBにPGliteのソケットサーバー（`@electric-sql/pglite-socket`）を使えるかを波0で確かめる。使えなければ起動確認はDocker環境へ回す |
+| Next.js・ワーカーのローカル起動 | できる（波0で確認） | `pnpm dev:db` でPGliteをPostgreSQLのプロトコルで公開（127.0.0.1:54329）。pg-bossのジョブ処理、2接続の同時利用、Next.jsの起動（3100番）を確認した |
 | Astroのビルド | できる | Node だけで動く |
 | 評価スキルの collect.py | できる | 公開サイトへのHTTP取得。テストはフィクスチャで行う |
 | docker compose・生成用コンテナ | できない | ファイルの用意と静的確認（`docker compose config` 相当も不可）だけ |
@@ -60,8 +60,27 @@
 - **ルートの設定**（package.json、pnpm-workspace.yaml、tsconfig、Vitest設定、pnpm-lock.yaml）と **マイグレーション** は統合担当だけが変更する。
 - DBスキーマはドメインごとのファイル（`packages/db/src/schema/<domain>.ts`）に分ける。タスクは自分の担当ファイルの列を追加できる。マイグレーションは作らず、統合担当が取り込み時に `drizzle-kit generate` で作る。
 - 依存パッケージは自分の担当パッケージの package.json にだけ追加してよい。lockfile の衝突は統合担当が `pnpm install` で解消する。
+- Zodスキーマはタスクごとのディレクトリ（`packages/schemas/src/<domain>/`）に置き、`packages/schemas/src/index.ts` への追記は統合担当が行う。
+- `packages/core/src/index.ts` への export の追記も統合担当が行う。各タスクは自分のディレクトリに `index.ts` を置く。
 - 他タスクの担当ファイルを直す必要があるときは、直さずに報告へ書く。
 - agent.md・REQUIREMENTS.md は subagent が編集しない。統合担当が記録する（AGENTS.md の記録義務は統合担当が果たす）。
+
+### 波0で用意したもの（各タスクが使う共通部品）
+
+| 部品 | 場所 | 使い方 |
+| --- | --- | --- |
+| DBスキーマ | `packages/db/src/schema/*.ts` | `import { companies, assignments } from "@siteoffer/db"` |
+| DBの型 | `Db`・`Tx`・`DbOrTx` | 関数は `db: DbOrTx` を受け取り、トランザクションの内外どちらでも呼べるようにする |
+| テスト用DB | `import { createTestDb } from "@siteoffer/db/testing"` | テストごとに作って `close()` する |
+| 操作主体 | `Actor`（sales / ops / system / customer） | 権限判定と操作履歴に使う |
+| 時刻 | `Clock`・`fixedClock()` | `new Date()` を直接呼ばない。テストで時刻を進める |
+| 戻り値 | `Result`・`ok()`・`err()` | 想定内の失敗は例外にせず返す |
+| 操作履歴 | `recordEvent(db, clock, {...})` | 状態を変える処理は同じトランザクションで必ず呼ぶ |
+| 運営設定 | `getSetting(db, key)` | 既定値は `DEFAULT_SETTINGS`（推奨案の3社・72時間など） |
+| ポート | web 3100、preview 3200、開発DB 54329 | 3000番はこのマシンの別のプロセスが使っている |
+
+注意：PGliteは単一プロセスなので、テストで `Promise.all` を使っても並行トランザクションは直列に実行される。
+同時確保・二重報酬の防止は「一意制約で守られていること」をテストで確かめ、本当の同時実行は実PostgreSQL（Docker環境）で確認する。
 
 ## 3. 波（フェーズ）とタスク一覧
 

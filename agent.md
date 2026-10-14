@@ -414,3 +414,31 @@ SDK名とモデル名は別。生成にはCodex SDKを使うとユーザーが�
     アプリ側のAI利用：なし
     未決・未実装・未検証：販売・報酬条件の値、利用条件の文面、参加審査
     次に行う作業：波0（T0）の実装、T15の集計
+
+### 作業H：波0（基盤・スキーマ・共通部品）
+
+    日付・時刻・タイムゾーン：2026-10-14 / Asia/Tokyo
+    作業ID・チャット参照：作業H（作業E〜Gと同じセッション）。docs/IMPLEMENTATION_PLAN.md のT0
+    開発アシスタントのモデルID：claude-opus-5-5
+    根拠となる実行メタデータ：Claude Code のシステム情報に記載された値。APIの返却モデルIDは未確認
+    推論設定・SDK/ツールの版：不明。Node v24.19.0、pnpm 12.11.2
+    ユーザーの依頼・注釈・選択：計画の推奨どおり波0から進める
+    アシスタントの回答の要約：モノレポの土台、17章の全概念のDrizzleスキーマ、テスト用PGlite、共通部品、検査スクリプトを作成した
+    採用した方針と、旧案からの変更：
+      - 版：Next.js 16.4.0、React 19.3.0、drizzle-orm 0.45.4、drizzle-kit 0.31.11、PGlite 0.5.9、pg-boss 12.38.0、Zod 4.6.7、
+        Vitest 5.0.4、Biome 2.5.15。TypeScriptは7系（ネイティブ版）を避けて6.0.3（ツール群のTypeScript API互換のため。アシスタントの判断）
+      - ポート：3000番がこのマシンの別のプロセスで使用中のため、webは3100、previewは3200、開発DBは54329
+      - Dockerなしの開発DBとして @electric-sql/pglite-socket を採用（推奨案）
+      - Next.jsが apps/web/AGENTS.md（Next.js 16の注意書き）を自動生成した。画面担当の参考になるため残す
+    作成・変更したファイル：package.json、pnpm-workspace.yaml、pnpm-lock.yaml、tsconfig.base.json、biome.json、vitest.config.ts、
+      .gitignore、.env.example、scripts/check.sh、scripts/git-check.sh（.env.exampleを許可）、packages/*（db・core・schemas・discovery・audit・generation の雛形）、
+      packages/db/drizzle/0000_init.sql、apps/web・apps/worker・apps/preview の雛形、docs/IMPLEMENTATION_PLAN.md（波0の結果）
+    実施した検証と実際の結果：
+      - scripts/check.sh 成功（型検査・Biome・Vitest 5件）
+      - 一意制約のテスト：有効な担当は企業ごとに1件、解除後は再確保できる、報酬は契約ごとに1件、正規化URLと生成ジョブの冪等キーの重複拒否
+      - PGliteのソケットサーバー：マイグレーション適用、pg-bossでジョブ2件を処理、2接続の同時利用、Next.js（3100番）がHTTP 200を返すことを確認
+    ローカル／モック／実API／AWS／実契約のどこまで確認したか：ローカルのみ。Docker・実API・実生成は未実施
+    Gitコミット・ブランチ・リモート確認：mainに対象ファイルのみコミット。pushはユーザーが行う
+    アプリ側のAI利用：なし
+    未決・未実装・未検証：PGliteでは並行トランザクションが直列になるため、本当の同時実行は実PostgreSQLで要確認
+    次に行う作業：波1（T1〜T7）のsubagentをworktreeで起動

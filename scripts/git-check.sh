@@ -19,7 +19,8 @@ if ! git diff --cached --check; then
 fi
 
 # Gitに入れないファイル
-blocked=$(printf '%s\n' "$staged" | grep -E '(^|/)(reports/|__pycache__/|\.env($|\.)|node_modules/)|\.(pem|key|pyc)$' || true)
+# .env.example（値を空にした例）だけは許可する
+blocked=$(printf '%s\n' "$staged" | grep -E '(^|/)(reports/|__pycache__/|\.env($|\.)|node_modules/)|\.(pem|key|pyc)$' | grep -vE '(^|/)\.env\.example$' || true)
 if [ -n "$blocked" ]; then
   echo "NG: Gitに入れないファイルがステージされています：" >&2
   printf '  %s\n' $blocked >&2

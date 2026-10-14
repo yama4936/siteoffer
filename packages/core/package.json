@@ -1,0 +1,16 @@
+{
+  "name": "@siteoffer/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@siteoffer/db": "workspace:*",
+    "@siteoffer/schemas": "workspace:*",
+    "drizzle-orm": "0.45.4"
+  }
+}

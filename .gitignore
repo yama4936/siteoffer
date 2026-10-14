@@ -1,3 +1,18 @@
 # 実在企業の評価・提案結果（Gitに入れない）
 reports/
 __pycache__/
+
+# Node・ビルド生成物
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+.astro/
+
+# 秘密値・ローカルデータ
+.env
+.env.*
+!.env.example
+.data/
+next-env.d.ts

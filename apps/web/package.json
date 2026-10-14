@@ -1,0 +1,24 @@
+{
+  "name": "@siteoffer/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 3100",
+    "build": "next build",
+    "start": "next start --port 3100",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@siteoffer/core": "workspace:*",
+    "@siteoffer/db": "workspace:*",
+    "@siteoffer/schemas": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
+  }
+}
