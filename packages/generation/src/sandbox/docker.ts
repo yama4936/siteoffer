@@ -14,7 +14,7 @@ import {
 
 /**
  * ジョブごとの使い捨てコンテナでCodexを動かす（24.4）。
- * この開発環境にはDockerがないため、引数の組み立てだけを単体テストしている。実行は未確認。
+ * Codex SDKはこの隔離コンテナ内で実行し、ホストの認証ファイルは読み取り専用で渡す。
  */
 export interface DockerSandboxConfig {
   /** 生成用イメージ（T12で用意。Codex CLI・SDK・このパッケージのエントリを含む） */
@@ -45,7 +45,12 @@ export const DEFAULT_DOCKER_SANDBOX_CONFIG: Omit<DockerSandboxConfig, "image" | 
   memoryMb: 2048,
   pidsLimit: 256,
   tmpfsMb: 256,
-  entryCommand: ["node", "/app/packages/generation/src/sandbox/container-entry.ts"],
+  entryCommand: [
+    "node",
+    "--import",
+    "/app/node_modules/tsx/dist/loader.mjs",
+    "/app/packages/generation/src/sandbox/container-entry.ts",
+  ],
   user: "1000:1000",
 };
 
@@ -74,6 +79,7 @@ export function buildDockerRunArgs(
   spec: Pick<SandboxRunSpec, "jobId" | "workDir" | "timeoutMs">,
 ): string[] {
   if (config.network === "host") throw new Error("生成コンテナに host ネットワークは使わない");
+  if (!/^\d+:\d+$/.test(config.user)) throw new Error("実行ユーザーは数値のUID:GIDで指定する");
   if (!path.isAbsolute(spec.workDir)) throw new Error("作業ディレクトリは絶対パスで指定する");
   if (!path.isAbsolute(config.codexAuthFile)) throw new Error("Codex認証ファイルは絶対パスで指定する");
   for (const p of [spec.workDir, config.codexAuthFile]) {
@@ -81,6 +87,7 @@ export function buildDockerRunArgs(
     if (p.includes(":") || p.includes(",")) throw new Error(`マウントに使えないパス: ${p}`);
   }
   const tmpfs = `rw,noexec,nosuid,size=${config.tmpfsMb}m`;
+  const [uid, gid] = config.user.split(":");
   return [
     "run",
     "--rm",
@@ -114,17 +121,19 @@ export function buildDockerRunArgs(
     "--tmpfs",
     `/tmp:${tmpfs}`,
     "--tmpfs",
-    `${CONTAINER_CODEX_HOME}:rw,nosuid,size=${config.tmpfsMb}m`,
+    `${CONTAINER_CODEX_HOME}:rw,nosuid,size=${config.tmpfsMb}m,uid=${uid},gid=${gid},mode=0700`,
     // マウント：このジョブの作業ディレクトリと、読み取り専用のCodex認証だけ
     "--mount",
     `type=bind,source=${spec.workDir},target=${SANDBOX_WORKDIR}`,
     "--mount",
-    `type=bind,source=${config.codexAuthFile},target=${CONTAINER_CODEX_HOME}/auth.json,readonly`,
+    `type=bind,source=${config.codexAuthFile},target=/run/siteoffer-auth.json,readonly`,
     "--workdir",
     SANDBOX_WORKDIR,
     // 環境変数：値を明示したものだけ。ホストの値を引き継ぐ形式（-e NAME）や --env-file は使わない
     "--env",
     "SITEOFFER_SANDBOX=1",
+    "--env",
+    "SITEOFFER_CODEX_AUTH_SOURCE=/run/siteoffer-auth.json",
     "--env",
     `HOME=${CONTAINER_HOME}`,
     "--env",

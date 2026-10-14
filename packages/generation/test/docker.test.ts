@@ -49,7 +49,7 @@ describe("DockerSandboxRunner の引数", () => {
     const mounts = flagValues(args, "--mount");
     expect(mounts).toEqual([
       "type=bind,source=/tmp/siteoffer-gen/job-1,target=/work",
-      "type=bind,source=/srv/codex/auth.json,target=/home/codex/.codex/auth.json,readonly",
+      "type=bind,source=/srv/codex/auth.json,target=/run/siteoffer-auth.json,readonly",
     ]);
     expect(args).not.toContain("-v");
     expect(args).not.toContain("--volume");
@@ -62,6 +62,7 @@ describe("DockerSandboxRunner の引数", () => {
     expect(envs.map((e) => e.split("=")[0]).sort()).toEqual([
       "CODEX_HOME",
       "HOME",
+      "SITEOFFER_CODEX_AUTH_SOURCE",
       "SITEOFFER_SANDBOX",
       "SITEOFFER_TIMEOUT_MS",
     ]);
@@ -81,9 +82,15 @@ describe("DockerSandboxRunner の引数", () => {
   });
 
   it("host ネットワーク・相対パス・区切り文字を含むパス・不正なジョブIDを拒否する", () => {
+    expect(() => buildDockerRunArgs({ ...config, user: "codex" }, spec)).toThrow();
     expect(() => buildDockerRunArgs({ ...config, network: "host" }, spec)).toThrow();
     expect(() => buildDockerRunArgs(config, { ...spec, workDir: "rel/dir" })).toThrow();
     expect(() => buildDockerRunArgs(config, { ...spec, workDir: "/tmp/a,source=/etc" })).toThrow();
     expect(() => buildDockerRunArgs(config, { ...spec, jobId: "../x" })).toThrow();
+  });
+
+  it("Codexの一時ホームは実行ユーザーだけが書き込める", () => {
+    const args = buildDockerRunArgs({ ...config, user: "501:20" }, spec);
+    expect(flagValues(args, "--tmpfs")).toContain("/home/codex/.codex:rw,nosuid,size=256m,uid=501,gid=20,mode=0700");
   });
 });

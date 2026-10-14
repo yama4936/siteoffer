@@ -1,0 +1,10 @@
+FROM siteoffer-local
+
+USER root
+COPY packages/generation/src/sandbox /app/packages/generation/src/sandbox
+RUN mkdir -p /home/codex/.codex /work \
+    && chmod 755 /home/codex /home/codex/.codex /work
+ENV HOME=/home/codex CODEX_HOME=/home/codex/.codex
+WORKDIR /work
+USER 1000:1000
+CMD ["node", "--import", "/app/node_modules/tsx/dist/loader.mjs", "/app/packages/generation/src/sandbox/container-entry.ts"]

@@ -4,11 +4,12 @@
  *
  * - コンテナ外では動かさない：SITEOFFER_SANDBOX=1 がなければ何もせず終了する。
  * - Codex CLIへの環境変数は許可したものだけを渡す（SDKの env 指定で process.env を継承させない）。
- * - この環境（Dockerなし・Codex未ログイン）では実行確認していない。
+ * - ホストの認証は読み取り専用。アクセス認証をtmpfsへ置き、ホストの更新トークンは使わない。
  */
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
+import { prepareChatGptAuth } from "./auth.ts";
 import { runCodexTurn } from "./codex-turn.ts";
 import {
   SANDBOX_EVENTS_FILE,
@@ -29,6 +30,9 @@ async function main(): Promise<number> {
     return 2;
   }
   const workDir = process.cwd();
+  if (process.env.SITEOFFER_CODEX_AUTH_SOURCE && process.env.CODEX_HOME) {
+    prepareChatGptAuth(process.env.SITEOFFER_CODEX_AUTH_SOURCE, process.env.CODEX_HOME);
+  }
   const resultPath = path.join(workDir, SANDBOX_RESULT_FILE);
   const eventsPath = path.join(workDir, SANDBOX_EVENTS_FILE);
   mkdirSync(path.dirname(resultPath), { recursive: true });

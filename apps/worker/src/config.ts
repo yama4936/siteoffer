@@ -33,7 +33,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 export type GeneratorConfig =
   | { kind: "mock" }
-  | { kind: "codex"; image: string; network: string; codexAuthFile: string; model: string | null };
+  | { kind: "codex"; image: string; network: string; codexAuthFile: string; model: string | null; user?: string };
 
 export type DiscoveryProviderName = "fixture" | "nta";
 
@@ -84,6 +84,7 @@ export function resolveWorkerConfig(
         network: network!,
         codexAuthFile: codexAuthFile!,
         model: v("SITEOFFER_CODEX_MODEL") ?? null,
+        user: v("SITEOFFER_CODEX_USER"),
       };
   } else if (genKind !== "mock") {
     problems.push(`SITEOFFER_GENERATOR は mock か codex（${genKind}）`);
@@ -133,7 +134,12 @@ export function resolveWorkerConfig(
 export function createGenerator(config: GeneratorConfig, env: NodeJS.ProcessEnv = process.env): Generator {
   if (config.kind === "mock") return new MockGenerator();
   const runner = new DockerSandboxRunner(
-    { image: config.image, network: config.network, codexAuthFile: config.codexAuthFile },
+    {
+      image: config.image,
+      network: config.network,
+      codexAuthFile: config.codexAuthFile,
+      ...(config.user ? { user: config.user } : {}),
+    },
     env,
   );
   return new CodexGenerator(runner, { model: config.model });
