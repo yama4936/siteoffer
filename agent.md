@@ -220,8 +220,10 @@ GitHub CLIは未ログイン、SSH認証は不成立だったが、HTTPSのgit p
       停止条件、Gitに入れないものをAGENTS.mdに定め、コミット前の検査スクリプトを追加した
     採用した方針と、旧案からの変更：
       - 作業Bの「pushはしない」→ 検査が通れば確認なしでorigin/mainへpush（ユーザー指示）
-      - push先はmain直接、メッセージは既存履歴に合わせた「種別: 英語の要約」形式（アシスタントの選定）
-    作成・変更したファイル：AGENTS.md（「Gitへの反映（自動）」追加）、scripts/git-check.sh（新規）、agent.md
+      - push先はmain直接（アシスタントの選定）
+      - コミットメッセージ：当初「種別: 英語の要約」を提案 → 件名・本文とも日本語（ユーザー指示）。既にpush対象の英語件名コミットは書き換えない
+      - Claude Codeの自動モードがpushを拒否したため、ユーザーの選択で.claude/settings.jsonにBash(git push origin main)の許可を追加
+    作成・変更したファイル：AGENTS.md（「Gitへの反映（自動）」追加）、scripts/git-check.sh（新規）、.claude/settings.json（新規）、agent.md
     実施した検証と実際の結果：下の「作業Cの反映結果」を参照
     ローカル／モック／実API／AWS／実契約のどこまで確認したか：ローカルでの検査スクリプト実行とGit反映のみ
     Gitコミット・ブランチ・リモート確認：mainに対象ファイルのみコミットしpush。未pushだった作業Bのコミット18eed5dも同時に反映される
