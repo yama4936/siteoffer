@@ -1,0 +1,126 @@
+{
+  "_note": "すべて架空の企業。法人番号はチェックデジットをわざと誤らせた13桁で、実在の法人番号になりえない。URLは .test / .example ドメイン、電話番号は市外局番000の架空値。",
+  "companies": [
+    {
+      "externalId": "F001",
+      "name": "株式会社架空精工",
+      "corporateNumber": "8180009990001",
+      "prefecture": "愛知県",
+      "city": "名古屋市中区",
+      "address": "錦九丁目99番99号",
+      "industry": "製造業",
+      "representativePhone": "000-0000-0001",
+      "sourceUrl": "https://directory.example/companies/F001"
+    },
+    {
+      "externalId": "F002",
+      "name": "有限会社ひだまり工務店",
+      "corporateNumber": "7180009990002",
+      "prefecture": "愛知県",
+      "city": "名古屋市千種区",
+      "address": "架空町一丁目1番1号",
+      "industry": "建設業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F002"
+    },
+    {
+      "externalId": "F003",
+      "name": "株式会社みなと設備",
+      "corporateNumber": "6180009990003",
+      "prefecture": "愛知県",
+      "city": "名古屋市港区",
+      "address": "架空港町3番3号",
+      "industry": "設備工事業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F003"
+    },
+    {
+      "externalId": "F004",
+      "name": "株式会社さくら商事",
+      "corporateNumber": "5180009990004",
+      "prefecture": "愛知県",
+      "city": "名古屋市北区",
+      "address": "架空北町4番4号",
+      "industry": "卸売業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F004"
+    },
+    {
+      "externalId": "F005",
+      "name": "株式会社さくら商事",
+      "corporateNumber": "4180009990005",
+      "prefecture": "愛知県",
+      "city": "春日井市",
+      "address": "架空春日町5番5号",
+      "industry": "卸売業",
+      "representativePhone": "000-0000-0005",
+      "sourceUrl": "https://directory.example/companies/F005"
+    },
+    {
+      "externalId": "F006",
+      "name": "株式会社名古屋精密",
+      "corporateNumber": "9200009990006",
+      "prefecture": "岐阜県",
+      "city": "岐阜市",
+      "address": "架空岐町6番6号",
+      "industry": "製造業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F006"
+    },
+    {
+      "externalId": "F007",
+      "name": "株式会社つばめ運送",
+      "corporateNumber": "2180009990007",
+      "prefecture": "愛知県",
+      "city": "一宮市",
+      "address": "架空宮町7番7号",
+      "industry": "運輸業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F007"
+    },
+    {
+      "externalId": "F008",
+      "name": "喫茶こもれび",
+      "corporateNumber": null,
+      "prefecture": "愛知県",
+      "city": "名古屋市昭和区",
+      "address": "架空昭和町8番8号",
+      "industry": "飲食業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F008"
+    },
+    {
+      "externalId": "F009",
+      "name": "株式会社あおば印刷",
+      "corporateNumber": "9180009990009",
+      "prefecture": "愛知県",
+      "city": "名古屋市中村区",
+      "address": "架空中村町9番9号",
+      "industry": "印刷業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F009"
+    },
+    {
+      "externalId": "F010",
+      "name": "株式会社しらかわ不動産",
+      "corporateNumber": "9080009990010",
+      "prefecture": "静岡県",
+      "city": "静岡市葵区",
+      "address": "架空葵町10番10号",
+      "industry": "不動産業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F010"
+    },
+    {
+      "externalId": "F011",
+      "name": "合同会社ゆうひ電機",
+      "corporateNumber": "6180009990011",
+      "prefecture": null,
+      "city": null,
+      "address": null,
+      "industry": "電気工事業",
+      "representativePhone": null,
+      "sourceUrl": "https://directory.example/companies/F011"
+    }
+  ]
+}

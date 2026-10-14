@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "company": { "name": "株式会社ダミー精機（架空）" },
+  "demo": { "recipientName": "株式会社ダミー精機" },
+  "meta": { "description": "架空の部品加工会社のサイト（テンプレート確認用の例）。要確認の項目が残っている。" },
+  "theme": { "brand": "#1f3a68", "accent": "#d94f30" },
+  "hero": {
+    "catchcopy": "小ロットの精密部品を、短納期で。",
+    "lead": "試作1個から量産前の数百個まで対応します。{{要確認:対応ロット数の上限}}"
+  },
+  "sections": [
+    { "type": "services", "visible": true },
+    { "type": "works", "visible": true },
+    { "type": "company", "visible": true },
+    { "type": "contact", "visible": true }
+  ],
+  "services": {
+    "items": [
+      { "title": "切削加工", "description": "アルミ・ステンレスの切削加工を行います。" },
+      { "title": "試作支援", "description": "図面の段階から加工方法をご提案します。" }
+    ]
+  },
+  "companyInfo": {
+    "rows": [
+      { "label": "会社名", "value": "株式会社ダミー精機（架空）" },
+      { "label": "所在地", "value": "{{要確認:本社所在地}}" },
+      { "label": "設立", "value": "{{要確認：設立年}}" }
+    ]
+  },
+  "works": {
+    "items": [{ "title": "{{要確認:実績の掲載許可}}", "description": "産業機械向け部品の試作" }]
+  },
+  "contact": {
+    "phone": { "display": "{{要確認:代表電話番号}}" },
+    "email": "contact@example.com",
+    "primary": "phone"
+  }
+}

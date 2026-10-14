@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "lang": "ja",
+  "company": {
+    "name": "株式会社ダミー住環境工房（架空）",
+    "shortName": "ダミー住環境工房",
+    "logo": { "src": "images/logo.svg", "alt": "ダミー住環境工房のロゴ（家の形）" }
+  },
+  "meta": {
+    "description": "架空の工務店「ダミー住環境工房」のサイト（テンプレート確認用の例）。住まいの修繕・リフォームをご案内します。"
+  },
+  "theme": { "brand": "#2e6b4f", "accent": "#e08a3c" },
+  "hero": {
+    "catchcopy": "暮らしの「困った」を、地域の職人が素早く直します。",
+    "lead": "水まわり・外壁・内装の修繕から小さなリフォームまで。まずはお電話でご相談ください。",
+    "image": { "src": "images/hero.svg", "alt": "緑の屋根の家と庭のイラスト" }
+  },
+  "sections": [
+    { "type": "services", "visible": true },
+    { "type": "works", "visible": true, "heading": "施工実績" },
+    { "type": "company", "visible": true },
+    { "type": "contact", "visible": true }
+  ],
+  "services": {
+    "intro": "住まいの小さな修繕から部分リフォームまで対応します。",
+    "items": [
+      { "title": "水まわりの修繕", "description": "蛇口・トイレ・給湯まわりの不具合を点検し、修理します。" },
+      { "title": "外壁・屋根の補修", "description": "ひび割れや雨漏りの点検と、部分的な補修を行います。" },
+      { "title": "内装リフォーム", "description": "床・壁紙・建具の張り替えなど、部屋単位の改修を行います。" }
+    ]
+  },
+  "companyInfo": {
+    "rows": [
+      { "label": "会社名", "value": "株式会社ダミー住環境工房（架空）" },
+      { "label": "所在地", "value": "架空県サンプル市見本町1-2-3" },
+      { "label": "代表者", "value": "見本 太郎" },
+      { "label": "設立", "value": "2000年4月" },
+      { "label": "事業内容", "value": "住宅の修繕・リフォーム" }
+    ]
+  },
+  "works": {
+    "intro": "お客様の確認を得て掲載している施工例です。",
+    "items": [
+      {
+        "title": "戸建て住宅の浴室改修",
+        "description": "在来浴室をユニットバスへ改修しました。",
+        "period": "2025年",
+        "image": { "src": "images/work-1.svg", "alt": "改修後の浴室の間取りを示す図" }
+      },
+      {
+        "title": "集合住宅の外壁補修",
+        "description": "外壁のひび割れを補修し、防水塗装を行いました。",
+        "period": "2024年"
+      }
+    ]
+  },
+  "contact": {
+    "phone": { "display": "000-0000-0000" },
+    "email": "info@example.com",
+    "hours": "平日 9:00〜18:00",
+    "note": "お見積りは無料です（架空の例）。",
+    "primary": "phone"
+  }
+}

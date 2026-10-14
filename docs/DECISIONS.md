@@ -67,6 +67,7 @@ SiteOffer（Webサイトの改善提案を営業パートナーが売るサー�
 | 14:29〜14:44 | Claude Code B4 | （波1とT15を並列で実行） | 全体を停止。T15は30件を評価。T2はmainへの取り込み途中 | 作業記録は未追記、付録B4 |
 | 14:29〜 | Claude Code B6 | agent.mdの整理 → 記録を1ファイルに → 初見でも分かる構成に | この判断記録 | 作業I〜K、付録B6 |
 | 15:00〜 | Claude Code B4 | 作業手順の進捗を知りたい → 波1の仕上げを再開 | T2・T3をmainに取り込み。テストの並列数を2に制限 | 作業L |
+| 15:10〜 | Claude Code B4 | （波1の仕上げの続き） | T1・T4・T6・T7をmainに取り込み。T5は作業中 | 作業M |
 
 ## 3. Claude Codeでの開発
 
@@ -136,13 +137,13 @@ APIの返却モデルIDや内部ルーティングまで検証したという意
 | 14:20 | T15-B | 評価データ収集：製造BtoB | 同上 | 完了（8件、ほか評価不能1件） |
 | 14:20 | T15-C | 評価データ収集：医療・士業 | 同上 | 完了（8件） |
 | 14:20 | T15-D | 評価データ収集：店舗・地域サービス | 同上 | 完了 |
-| 14:29 | T1 | 認証・権限 | worktree | 実装済み・未コミット |
+| 14:29 | T1 | 認証・権限 | worktree | mainに取り込み済み（作業M） |
 | 14:29 | T2 | 担当確保・営業活動 | worktree | mainに取り込み済み（作業L） |
 | 14:29 | T3 | 契約・報酬・ドメイン | worktree | mainに取り込み済み（作業L） |
-| 14:30 | T4 | 企業候補の収集 | worktree | 実装済み・テスト未作成 |
-| 14:30 | T5 | Codex生成ラッパー | worktree | 約半分で停止 |
-| 14:30 | T6 | Astroテンプレート | worktree | テスト未作成 |
-| 14:30 | T7 | 診断の組み込み | worktree | テスト未作成 |
+| 14:30 | T4 | 企業候補の収集 | worktree | mainに取り込み済み（作業M） |
+| 14:30 | T5 | Codex生成ラッパー | worktree | 15:13に再開、作業中 |
+| 14:30 | T6 | Astroテンプレート | worktree | mainに取り込み済み（作業M） |
+| 14:30 | T7 | 診断の組み込み | worktree | mainに取り込み済み（作業M） |
 
 状態は、B4の14:41と14:44の報告（付録B4）によります。それ以降の結果は、B4が9章に作業記録として追記します。
 
@@ -188,6 +189,9 @@ APIの返却モデルIDや内部ルーティングまで検証したという意
 | 31 | テストの並列数を2に制限し、同時に動かすsubagentも減らす（シェルのメモリ上限4GBのため） | アシスタント | 当初は既定の並列数・波1を7本同時 | 作業L |
 | 32 | 要件で未決の細部を仮に決めた：営業中の期限超過は解除せず運営確認待ち、活動で期限を延長、運営の担当変更にも上限を適用、報酬の割合計算は円未満切り捨て、支払済み報酬は取り消し不可、契約確認には契約資料の参照を必須 | アシスタント（subagent T2・T3） | 12.2・14章で未決。ユーザーの確認が必要 | 作業L |
 | 33 | コミット前の秘密検査に例外を設ける：テストファイル（*.test.ts）の中で、同じ行に「git-check: allow-dummy-secret」の印がある行だけ許可する | ユーザー | 推奨はダミー値を実行時に組み立てる書き換え（自動判定で止められた）。ほかに該当テストの削除、T2だけ先にコミットする案 | 作業L |
+| 34 | 権限の既定：ワーカー（system）は全許可、提案リンクの閲覧者（customer）は全拒否から始める | アシスタント（subagent T1） | 要件に記載なし。ユーザーの確認が必要 | 作業M |
+| 35 | 国税庁APIには所在地だけで検索する機能がないため、キーワードなしの収集は「期間内に更新があった法人（diff）」に所在地を付けて行う | アシスタント（subagent T4） | 地域の全法人を取る手段ではない。検索APIとの組み合わせは製品選定後 | 作業M |
+| 36 | Biomeは .astro の本文を解析しないため、*.astro では未使用import・変数の警告を無効にする | アシスタント | `--unsafe` の自動修正で必要なimportが消えるのを防ぐ | 作業M |
 
 ## 5. 現在の要件と未決事項
 
@@ -706,7 +710,7 @@ pushの結果はGit履歴と`git ls-remote origin refs/heads/main`で確認す�
 
 ### 作業L：波1の再開とT2・T3の取り込み
 
-    日付・時刻・タイムゾーン：2026-10-14 15:00〜15:20頃 / Asia/Tokyo
+    日付・時刻・タイムゾーン：2026-10-14 15:00〜15:10頃 / Asia/Tokyo
     作業ID・チャット参照：作業L（セッションB4）
     開発アシスタントのモデルID：claude-opus-5-5
     根拠となる実行メタデータ：Claude Code のシステム情報に記載された値。APIの返却モデルIDは未確認
@@ -746,6 +750,48 @@ pushの結果はGit履歴と`git ls-remote origin refs/heads/main`で確認す�
     アプリ側のAI利用：なし
     未決・未実装・未検証：No.32の仮決め、T1〜T7の残り（T1・T4・T6・T7はテストと検査、T5は本体の残り）、通知機能
     次に行う作業：T1・T4・T6・T7のsubagentを2〜3本ずつ再開し、完了したものから取り込む。その後T5
+
+### 作業M：波1の取り込み（T1・T4・T6・T7）
+
+    日付・時刻・タイムゾーン：2026-10-14 15:10〜15:20頃 / Asia/Tokyo
+    作業ID・チャット参照：作業M（セッションB4）。作業Lの続き
+    開発アシスタントのモデルID：claude-opus-5-5
+    根拠となる実行メタデータ：Claude Code のシステム情報に記載された値。APIの返却モデルIDは未確認
+    推論設定・SDK/ツールの版：不明。Node v24.19.0、pnpm 12.11.2、Vitest 5.0.4、Astro 7.3.8
+    ユーザーの依頼・注釈・選択：作業Lの「波1の仕上げを再開」の続き（新しい指示なし）
+    アシスタントの回答の要約：停止していたsubagentを2本ずつ再開し、完了したものから取り込んだ
+    作業の進め方（手順、使ったツール・subagent・worktree、ユーザーへの確認の取り方、途中で変えた進め方）：
+      1. 停止中のsubagentに SendMessage で再開を指示した（T4・T7 → T1・T6 → T5 の順に、同時2本まで）。
+         前回ユーザーが拒否した種類の操作（画像の表示、開発サーバーの起動、テスト以外の使い捨てスクリプト）は避けるよう指示した
+      2. メモリ上限（作業L）のため、subagentには check.sh の代わりに「型検査・Biome・並列数1のVitest」を順に実行させた
+      3. 取り込み前に、各ブランチの差分が担当パスに収まっているかを確認した（T1の packages/core/package.json の exports 追加は報告済みのため採用）
+      4. 各ブランチの差分をパッチで当て、統合担当として export の追記、lockfileの作り直し（pnpm install）、マイグレーションの作り直し（0002・0003）を行った
+      5. T4の「run.ts が外部で変更された」という報告は、T4自身のBash編集だったと確認された
+    採用した方針と、旧案からの変更：
+      - packages/schemas と packages/core の index に discovery・auth・permissions を追加。discovery の相対importを @siteoffer/schemas に置き換えた
+      - biome.json に *.astro 用の override を追加（4章 No.36）
+      - subagentの仮の判断（4章 No.34・35）。T7は collect.py が 127.0.0.1 を拒否するため、評価済みの流れの収集段を collected.json のフィクスチャで代替した
+    作成・変更したファイル：
+      packages/core/src/auth/・permissions/、apps/web/app/(auth)/、apps/web/lib/session.ts、packages/core/package.json（T1）、
+      packages/discovery/、packages/schemas/src/discovery/、fixtures/discovery/、packages/db/src/schema/discovery.ts（T4）、
+      templates/astro-site/（T6）、packages/audit/、fixtures/audit/、packages/db/src/schema/site-audit.ts（T7）、
+      packages/core/src/index.ts、packages/schemas/src/index.ts、packages/db/drizzle/0002・0003 と meta、pnpm-lock.yaml、biome.json、本ファイル
+    実施した検証と実際の結果：
+      - 取り込み後：型検査成功、Biome成功（163ファイル）、Vitest（並列数1）でT1・T4・T7まで14ファイル326件成功、T6のテンプレート2ファイル15件成功
+      - T1：AC-17の許可・拒否の表、利用条件の同意、利用停止、7日でのセッション失効
+      - T4：再収集で増えない、営業抑止の維持、確度判定、別県の「名古屋」企業を名古屋と断定しない、上限件数、国税庁APIの記録済み応答の解析
+      - T6：demoの非公式表示とnoindex、deliveryでの要確認残存によるビルド失敗、壊したdistからの欠陥検出、ローカルChromeでの375px幅の横スクロール計測
+      - T7：実物の score.py・decide.py をサブプロセスで実行（閾値nullでhold、テスト内の仮閾値でcreate・skip）、collect.py が 127.0.0.1 を拒否し評価不能になること
+    ローカル／モック／実API／AWS／実契約のどこまで確認したか：ローカルのみ。PGlite、記録済み応答、固定応答、ローカルのAstroビルドとChrome。
+      実API（国税庁・検索・Codex）、実PostgreSQL、Docker、画面からの登録・ログインの送信は未確認
+    Gitコミット・ブランチ・リモート確認：mainに対象ファイルのみコミット。pushの可否は報告で示す
+    アプリ側のAI利用：なし
+    未決・未実装・未検証：
+      - T2・T3の権限確認をT1の can() につなぎ替える作業（統合の残り）
+      - T5（作業中）、T5とT6・T7の生成器のつなぎ込み
+      - collect.py の改修案（試験用の取得許可、日本語URL、端末によるページの出し分け等。T7・T15の報告）
+      - ログイン試行回数の制限、実行中に落ちた収集ジョブの解除手順
+    次に行う作業：T5の完了を待って取り込み、権限のつなぎ替えを行い、波2へ
 
 <!-- 新しい作業記録はこの行の直前に追加する -->
 

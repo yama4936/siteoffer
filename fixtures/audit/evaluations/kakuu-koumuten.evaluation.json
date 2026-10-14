@@ -1,0 +1,315 @@
+{
+  "_fixture": "採点生成器の固定応答（テスト用）。架空企業 kakuu-koumuten.example の collected.json に対応する。実際のCodexの出力ではない",
+  "schema_version": "0.1",
+  "rubric_version": "0.1",
+  "status": "evaluated",
+  "target_url": "https://kakuu-koumuten.example/",
+  "final_url": "https://kakuu-koumuten.example/",
+  "evaluator": { "skill": "site-evaluation", "model": "不明" },
+  "conditions": { "pages": ["top", "company", "works", "contact"], "screenshot": false, "pagespeed": "not_run" },
+  "company": {
+    "name": "架空工務店",
+    "name_source": "https://kakuu-koumuten.example/company.html の会社概要の表",
+    "location": "架空県架空市1-2-3",
+    "location_source": "https://kakuu-koumuten.example/company.html",
+    "industry_guess": "住宅リフォーム"
+  },
+  "site_context": {
+    "purpose_guess": "地域の個人客からのリフォーム相談の獲得",
+    "target_guess": "架空市の戸建て所有者",
+    "primary_conversion_guess": "電話・問い合わせフォーム",
+    "basis": "トップのh1「架空市の住まいのリフォーム」とサービス一覧",
+    "is_inference": true
+  },
+  "items": [
+    {
+      "id": "A1",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "問い合わせへのリンクはフッターのみ。ヘッダーにない",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "footer 内リンク「お問い合わせ」"
+        }
+      ],
+      "reason": "最下部までスクロールしないと連絡手段に辿り着けないため",
+      "inference": false,
+      "improvement_hint": "ヘッダーとファーストビューに問い合わせボタンを常設"
+    },
+    {
+      "id": "A2",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "電話番号は本文のみで tel: リンクがない",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "footer の「TEL 000-0000-0000」。tel_links が空"
+        }
+      ],
+      "reason": "スマホから電話をかけるには番号を手で入力する必要がある",
+      "inference": false,
+      "improvement_hint": "電話番号を tel: リンクにする"
+    },
+    {
+      "id": "A3",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "行動を促す文言はフッターの「お問い合わせ」のみ",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "cta_links が1件"
+        }
+      ],
+      "reason": "相談の入口が少ない",
+      "inference": false,
+      "improvement_hint": "サービス説明の後に相談ボタンを置く"
+    },
+    {
+      "id": "A4",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        {
+          "fact": "フォームの入力項目は4、必須は3",
+          "url": "https://kakuu-koumuten.example/contact.html",
+          "evidence": "form action=/send の入力要素"
+        }
+      ],
+      "reason": "項目数は少ないが、ラベル要素がない",
+      "inference": false,
+      "improvement_hint": "各入力欄にラベルを付ける"
+    },
+    {
+      "id": "B1",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        {
+          "fact": "h1 は「架空市の住まいのリフォーム」",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "h1 要素"
+        }
+      ],
+      "reason": "地域と業種は伝わるが、強みが分からない",
+      "inference": false,
+      "improvement_hint": "h1 の下に強みを一文で添える"
+    },
+    {
+      "id": "B2",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "サービスは「水まわりリフォーム」「外壁塗装」の2行の列挙のみ",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "h2「サービス」直下の ul"
+        }
+      ],
+      "reason": "工事の範囲や対応内容が分からない",
+      "inference": false,
+      "improvement_hint": "サービスごとに対応範囲と流れを書く"
+    },
+    {
+      "id": "B3",
+      "status": "scored",
+      "level": 0,
+      "observations": [
+        {
+          "fact": "料金・流れ・FAQのページや見出しがない",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "headings と internal_links に該当なし"
+        }
+      ],
+      "reason": "依頼前の判断材料がない",
+      "inference": false,
+      "improvement_hint": "依頼の流れと目安料金の考え方を載せる"
+    },
+    {
+      "id": "C1",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        {
+          "fact": "会社概要に会社名と所在地がある",
+          "url": "https://kakuu-koumuten.example/company.html",
+          "evidence": "table の「会社名」「所在地」行"
+        }
+      ],
+      "reason": "基本情報はあるが、代表者・沿革がない",
+      "inference": false,
+      "improvement_hint": "代表者名と創業年を追記"
+    },
+    {
+      "id": "C2",
+      "status": "scored",
+      "level": 0,
+      "observations": [
+        {
+          "fact": "施工事例ページは「準備中です。」のみ",
+          "url": "https://kakuu-koumuten.example/works.html",
+          "evidence": "本文"
+        }
+      ],
+      "reason": "実績を確認できない",
+      "inference": false,
+      "improvement_hint": "施工事例を写真付きで掲載"
+    },
+    {
+      "id": "C3",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "著作権表示が 2016 年",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "footer「© 2016 架空工務店」"
+        }
+      ],
+      "reason": "更新が止まっている印象を与える可能性がある（推測）",
+      "inference": true,
+      "improvement_hint": "お知らせ欄か更新日を設ける"
+    },
+    {
+      "id": "C4",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        { "fact": "最終URLが https", "url": "https://kakuu-koumuten.example/", "evidence": "site.https = true" }
+      ],
+      "reason": "HTTPSで配信されている",
+      "inference": false,
+      "improvement_hint": "現状維持"
+    },
+    {
+      "id": "D1",
+      "status": "scored",
+      "level": 0,
+      "observations": [
+        {
+          "fact": "viewport メタタグがない",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "head 内に meta name=viewport なし"
+        }
+      ],
+      "reason": "スマホで縮小表示になる",
+      "inference": false,
+      "improvement_hint": "viewport を設定しレスポンシブにする"
+    },
+    { "id": "D2", "status": "unevaluable", "reason": "スクリーンショットを取得していない" },
+    { "id": "E1", "status": "unevaluable", "reason": "速度測定（PageSpeed Insights）を実行していない" },
+    {
+      "id": "E2",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        {
+          "fact": "トップの内部リンク4件にリンク切れなし",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "site.link_check.broken が空"
+        }
+      ],
+      "reason": "エラーや古い技術は見当たらない",
+      "inference": false,
+      "improvement_hint": "現状維持"
+    },
+    {
+      "id": "F1",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        {
+          "fact": "title と description がある",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "title「架空工務店｜地域の住まいのリフォーム」"
+        }
+      ],
+      "reason": "内容に合った title・description がある",
+      "inference": false,
+      "improvement_hint": "現状維持"
+    },
+    {
+      "id": "F2",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        { "fact": "h1 が1つ、h2 が1つ", "url": "https://kakuu-koumuten.example/", "evidence": "headings" }
+      ],
+      "reason": "構造はあるが見出しが少ない",
+      "inference": false,
+      "improvement_hint": "サービスごとに見出しを付ける"
+    },
+    {
+      "id": "F3",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        {
+          "fact": "sitemap.xml が 404、robots.txt は 200",
+          "url": "https://kakuu-koumuten.example/sitemap.xml",
+          "evidence": "site.sitemap_xml_status = 404"
+        }
+      ],
+      "reason": "noindex はないがサイトマップがない",
+      "inference": false,
+      "improvement_hint": "sitemap.xml を用意"
+    },
+    {
+      "id": "F4",
+      "status": "scored",
+      "level": 0,
+      "observations": [
+        {
+          "fact": "構造化データと OGP がない",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "jsonld_types と og が空"
+        }
+      ],
+      "reason": "SNS共有時の表示を制御できない",
+      "inference": false,
+      "improvement_hint": "OGP と LocalBusiness の構造化データを追加"
+    },
+    {
+      "id": "G1",
+      "status": "scored",
+      "level": 0,
+      "observations": [
+        {
+          "fact": "トップの画像1枚に alt 属性がない",
+          "url": "https://kakuu-koumuten.example/",
+          "evidence": "img src=/img/top.jpg"
+        }
+      ],
+      "reason": "画像の内容が読み上げで伝わらない",
+      "inference": false,
+      "improvement_hint": "画像に代替テキストを付ける"
+    },
+    {
+      "id": "G2",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        {
+          "fact": "html lang=ja がある。フォームに label 要素がない",
+          "url": "https://kakuu-koumuten.example/contact.html",
+          "evidence": "form の labels = 0"
+        }
+      ],
+      "reason": "言語指定はあるがフォームのラベルがない",
+      "inference": false,
+      "improvement_hint": "フォームにラベルを付ける"
+    },
+    { "id": "G3", "status": "unevaluable", "reason": "スクリーンショットを取得していないため視認性を確認できない" }
+  ],
+  "critical_flags": [{ "id": "CF-NOT-MOBILE", "item": "D1", "fact": "viewport メタタグなし" }],
+  "sales_notes": {
+    "product_fit": "1ページサイトで改善可能",
+    "proposal_ease": "不明",
+    "web_dependency_guess": "不明",
+    "existing_vendor": "不明",
+    "recent_renewal_signs": "copyright 2016",
+    "budget_decision_maker": "不明"
+  }
+}

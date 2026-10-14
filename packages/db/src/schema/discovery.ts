@@ -23,6 +23,10 @@ export const discoveryJobs = pgTable("discovery_jobs", {
   skippedCount: integer("skipped_count").notNull().default(0),
   failedCount: integer("failed_count").notNull().default(0),
   attempts: integer("attempts").notNull().default(0),
+  /** 1回の収集で扱う候補の上限件数（8.1「件数の上限」） */
+  maxResults: integer("max_results"),
+  /** 候補ごとの失敗・スキップ理由。[{ externalId, stage, reason }] */
+  failures: jsonb("failures").notNull().default([]),
   error: text("error"),
   createdBy: uuid("created_by").references(() => users.id),
   startedAt: ts("started_at"),
@@ -40,6 +44,8 @@ export const discoverySources = pgTable(
       .references(() => discoveryJobs.id),
     companyId: uuid("company_id").references(() => companies.id),
     provider: text("provider").notNull(),
+    /** company：企業候補の出典（法人番号API等）／site：公式サイト候補の出典（検索API等） */
+    role: text("role").notNull().default("company"),
     externalId: text("external_id").notNull(),
     sourceUrl: text("source_url"),
     fetchedAt: ts("fetched_at").notNull(),

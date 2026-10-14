@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "mode": "delivery",
+  "company": { "name": "ためし珈琲焙煎所（架空）" },
+  "meta": {
+    "title": "ためし珈琲焙煎所（架空）| 自家焙煎の豆を少量ずつ",
+    "description": "架空の珈琲焙煎所のサイト（テンプレート確認用の例）。実績を載せない構成。"
+  },
+  "theme": { "brand": "#3b2a20", "accent": "#f2c14e" },
+  "hero": {
+    "catchcopy": "毎週焼きたての豆を、ご注文の分だけ。",
+    "lead": "業務用・ギフト用のご相談はメールで承ります。"
+  },
+  "sections": [
+    { "type": "services", "visible": true, "heading": "取り扱い" },
+    { "type": "contact", "visible": true },
+    { "type": "company", "visible": true, "heading": "お店について" },
+    { "type": "works", "visible": true }
+  ],
+  "services": {
+    "items": [
+      { "title": "焙煎豆の販売", "description": "浅煎りから深煎りまで、季節の豆を少量ずつ焙煎します。" },
+      { "title": "業務用の卸", "description": "飲食店向けに、定期的な卸売のご相談を承ります。" }
+    ]
+  },
+  "companyInfo": {
+    "rows": [
+      { "label": "店名", "value": "ためし珈琲焙煎所（架空）" },
+      { "label": "所在地", "value": "架空県見本市試験町4-5-6" }
+    ]
+  },
+  "contact": {
+    "email": "hello@example.com",
+    "phone": { "display": "000-1111-2222", "tel": "00011112222" },
+    "primary": "email"
+  }
+}

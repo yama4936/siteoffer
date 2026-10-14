@@ -1,0 +1,19 @@
+---
+/** 入力の画像を出す。src はビルド関数が出力の images/ へコピー済みの相対パス。 */
+import { hasMarker, splitMarkers } from "../../lib/markers.ts";
+import type { SiteImage } from "../../schema/site-input.ts";
+
+interface Props {
+  image: SiteImage;
+  class?: string;
+  eager?: boolean;
+}
+const { image, class: className, eager = false } = Astro.props;
+// alt に要確認マーカーが残っている場合（demoのみ）は説明部分を alt に入れる
+const alt = hasMarker(image.alt)
+  ? splitMarkers(image.alt)
+      .map((p) => (p.kind === "text" ? p.text : `要確認：${p.note}`))
+      .join("")
+  : image.alt;
+---
+<img src={image.src} alt={alt} class={className} loading={eager ? "eager" : "lazy"} decoding="async" />

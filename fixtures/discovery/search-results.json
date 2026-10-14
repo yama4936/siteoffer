@@ -1,0 +1,111 @@
+{
+  "_note": "検索系APIのモック応答（架空）。キーは企業名。同名企業は同じ結果を受け取る。evidence はページ上で確認できた情報を表す。",
+  "results": {
+    "株式会社架空精工": [
+      {
+        "url": "https://kakuseiko.test/",
+        "title": "株式会社架空精工 | 精密部品の製造",
+        "evidence": {
+          "companyName": "株式会社架空精工",
+          "address": "愛知県名古屋市中区錦九丁目99番99号",
+          "corporateNumber": "8180009990001"
+        }
+      },
+      {
+        "url": "https://www.kakuseiko-online.test/shop/",
+        "title": "架空精工 オンラインショップ",
+        "evidence": {
+          "companyName": "株式会社架空精工",
+          "address": "名古屋市中区錦九丁目99番99号",
+          "corporateNumber": null
+        }
+      },
+      {
+        "url": "https://portal-directory.example/c/F001",
+        "title": "株式会社架空精工の会社情報 - 企業ポータル",
+        "evidence": { "companyName": "株式会社架空精工", "address": "名古屋市中区錦", "corporateNumber": null }
+      }
+    ],
+    "有限会社ひだまり工務店": [
+      {
+        "url": "https://hidamari-koumuten.test/",
+        "title": "ひだまり工務店",
+        "evidence": { "companyName": "ひだまり工務店", "address": null, "corporateNumber": null }
+      }
+    ],
+    "株式会社みなと設備": [
+      {
+        "url": "https://portal-directory.example/c/F003",
+        "title": "株式会社みなと設備 - 企業ポータル",
+        "evidence": {
+          "companyName": "株式会社みなと設備",
+          "address": "名古屋市港区架空港町3番3号",
+          "corporateNumber": null
+        }
+      },
+      {
+        "url": "https://sns.example/minato_setsubi",
+        "title": "みなと設備（公式）",
+        "thirdParty": true,
+        "evidence": { "companyName": "みなと設備", "address": null, "corporateNumber": null }
+      }
+    ],
+    "株式会社さくら商事": [
+      {
+        "url": "https://sakura-shoji.test/",
+        "title": "株式会社さくら商事",
+        "evidence": {
+          "companyName": "株式会社さくら商事",
+          "address": "愛知県春日井市架空春日町5番5号",
+          "corporateNumber": null
+        }
+      },
+      {
+        "url": "https://jobs.example/company/sakura",
+        "title": "株式会社さくら商事の求人",
+        "evidence": { "companyName": "株式会社さくら商事", "address": null, "corporateNumber": null }
+      }
+    ],
+    "株式会社名古屋精密": [
+      {
+        "url": "https://nagoya-seimitsu.test/",
+        "title": "名古屋精密",
+        "evidence": {
+          "companyName": "株式会社名古屋精密",
+          "address": "岐阜県岐阜市架空岐町6番6号",
+          "corporateNumber": null
+        }
+      }
+    ],
+    "株式会社つばめ運送": [],
+    "喫茶こもれび": [
+      {
+        "url": "https://comorebi-cafe.test/",
+        "title": "喫茶こもれび",
+        "evidence": {
+          "companyName": "喫茶こもれび",
+          "address": "名古屋市昭和区架空昭和町8番8号",
+          "corporateNumber": null
+        }
+      }
+    ],
+    "株式会社あおば印刷": [
+      {
+        "url": "http://WWW.Aoba-Print.test/?utm_source=portal&utm_medium=listing&gclid=abc123",
+        "title": "あおば印刷",
+        "evidence": { "companyName": "株式会社あおば印刷", "address": null, "corporateNumber": "9180009990009" }
+      }
+    ],
+    "株式会社しらかわ不動産": [
+      {
+        "url": "https://shirakawa-fudosan.test/",
+        "title": "しらかわ不動産",
+        "evidence": {
+          "companyName": "株式会社しらかわ不動産",
+          "address": "静岡県静岡市葵区架空葵町10番10号",
+          "corporateNumber": null
+        }
+      }
+    ]
+  }
+}

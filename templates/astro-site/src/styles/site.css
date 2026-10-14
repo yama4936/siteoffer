@@ -1,0 +1,297 @@
+/* 共通スタイル。色は html の style 属性で渡す変数（--brand / --accent と各文字色）で差し替える。外部フォントは使わない。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.8;
+  color: #1a1a1a;
+  background: #ffffff;
+  overflow-wrap: anywhere;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+a {
+  color: inherit;
+}
+
+.container {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+/* 非公式デモの表示（demoのみ出力） */
+.demo-notice {
+  margin: 0;
+  padding: 10px 16px;
+  background: #fff3cd;
+  color: #5c4400;
+  border-bottom: 2px solid #e0a800;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.demo-notice-footer {
+  border: 2px solid #e0a800;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+/* 要確認マーカー（demoのみ残る） */
+.needs-confirm {
+  background: #ffe1e1;
+  color: #8a0000;
+  border: 2px dashed #d40000;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-weight: 700;
+}
+
+.site-header {
+  background: var(--brand);
+  color: var(--brand-text);
+}
+
+.header-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1.15rem;
+  text-decoration: none;
+}
+
+.logo-img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.95rem;
+}
+
+.nav-list a {
+  text-decoration: none;
+}
+
+.nav-list a:hover,
+.nav-list a:focus-visible {
+  text-decoration: underline;
+}
+
+.hero {
+  background: color-mix(in srgb, var(--brand) 10%, #ffffff);
+  padding: 56px 0;
+}
+
+.hero-inner {
+  display: grid;
+  gap: 32px;
+  align-items: center;
+}
+
+@media (min-width: 768px) {
+  .hero-inner:has(.hero-media) {
+    grid-template-columns: 3fr 2fr;
+  }
+}
+
+.hero-company {
+  margin: 0 0 8px;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.hero h1 {
+  margin: 0 0 16px;
+  font-size: clamp(1.6rem, 4.5vw, 2.6rem);
+  line-height: 1.35;
+}
+
+.hero-lead {
+  margin: 0 0 24px;
+}
+
+.hero-img {
+  border-radius: 12px;
+  width: 100%;
+}
+
+.contact-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.btn {
+  display: inline-block;
+  max-width: 100%;
+  padding: 12px 22px;
+  border-radius: 999px;
+  font-weight: 700;
+  text-decoration: none;
+  border: 2px solid var(--accent);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.btn-secondary {
+  background: #ffffff;
+  color: #1a1a1a;
+}
+
+.btn-disabled {
+  border-style: dashed;
+  border-color: #999999;
+  background: #f5f5f5;
+}
+
+.section {
+  padding: 56px 0;
+}
+
+.section:nth-of-type(even) {
+  background: #f7f7f7;
+}
+
+.section-title {
+  margin: 0 0 24px;
+  font-size: clamp(1.35rem, 3.2vw, 1.8rem);
+  padding-left: 12px;
+  border-left: 6px solid var(--brand);
+  line-height: 1.4;
+}
+
+.section-intro {
+  margin: 0 0 24px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 20px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e3e3e3;
+  border-top: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.card p {
+  margin: 0;
+}
+
+.card-img {
+  border-radius: 6px;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.card-meta {
+  font-size: 0.85rem;
+  color: #555555;
+}
+
+.info-table {
+  margin: 0;
+  border-top: 1px solid #dddddd;
+}
+
+.info-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px 24px;
+  padding: 14px 4px;
+  border-bottom: 1px solid #dddddd;
+}
+
+@media (min-width: 640px) {
+  .info-row {
+    grid-template-columns: 10em 1fr;
+  }
+}
+
+.info-row dt {
+  font-weight: 700;
+}
+
+.info-row dd {
+  margin: 0;
+}
+
+.contact-box {
+  display: grid;
+  gap: 12px;
+}
+
+.contact-hours,
+.contact-note {
+  margin: 0;
+}
+
+.site-footer {
+  background: var(--brand);
+  color: var(--brand-text);
+  padding: 32px 0;
+  font-size: 0.9rem;
+}
+
+.site-footer .demo-notice {
+  color: #5c4400;
+}
+
+.site-footer p {
+  margin: 0 0 6px;
+}

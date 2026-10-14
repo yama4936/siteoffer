@@ -1,0 +1,150 @@
+---
+/**
+ * 1ページの企業サイト。構成：ファーストビュー → 入力の sections の順（サービス・会社情報・実績・問い合わせ）。
+ * 外部の計測タグ・フォント・CDNは読み込まない。問い合わせは電話・メールのリンクのみ。
+ */
+import "../styles/site.css";
+import { loadResolvedSite } from "../../lib/load.ts";
+import { demoNoticeText, textColorOn, visibleSections } from "../../lib/resolve.ts";
+import ContactLinks from "../components/ContactLinks.astro";
+import Img from "../components/Img.astro";
+import T from "../components/T.astro";
+
+const { mode, input } = loadResolvedSite();
+const isDemo = mode === "demo";
+const sections = visibleSections(input);
+const notice = demoNoticeText(input);
+const title = input.meta.title ?? `${input.company.name} | ${input.hero.catchcopy}`;
+const plain = (s: string) => s.replace(/\{\{\s*要確認\s*[:：]?([^}]*)\}\}/g, "（要確認：$1）");
+const { brand, accent } = input.theme;
+const themeStyle = `--brand:${brand};--brand-text:${textColorOn(brand)};--accent:${accent};--accent-text:${textColorOn(accent)};`;
+const year = new Date().getFullYear();
+const copyright = input.footer?.copyright ?? input.company.name;
+---
+<!doctype html>
+<html lang={input.lang} style={themeStyle} data-mode={mode}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{isDemo ? `【非公式デモ】${plain(title)}` : plain(title)}</title>
+    <meta name="description" content={plain(input.meta.description)} />
+    {isDemo && <meta name="robots" content="noindex, nofollow, noarchive" />}
+    <meta name="theme-color" content={brand} />
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    {isDemo && (
+      <div class="demo-notice demo-notice-top" role="note" data-demo-notice="top">
+        {notice}
+      </div>
+    )}
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="logo" href="#top">
+          {input.company.logo ? <Img image={input.company.logo} class="logo-img" eager /> : null}
+          <span><T text={input.company.shortName ?? input.company.name} /></span>
+        </a>
+        <nav aria-label="ページ内リンク">
+          <ul class="nav-list">
+            {sections.map((s) => (
+              <li>
+                <a href={`#${s.id}`}><T text={s.heading} /></a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="container hero-inner">
+          <div class="hero-text">
+            <p class="hero-company"><T text={input.company.name} /></p>
+            <h1 id="hero-title"><T text={input.hero.catchcopy} /></h1>
+            {input.hero.lead && <p class="hero-lead"><T text={input.hero.lead} /></p>}
+            <ContactLinks contact={input.contact} primaryOnly />
+          </div>
+          {input.hero.image && (
+            <div class="hero-media">
+              <Img image={input.hero.image} class="hero-img" eager />
+            </div>
+          )}
+        </div>
+      </section>
+
+      {sections.map((s) => (
+        <section id={s.id} class:list={["section", `section-${s.type}`]} aria-labelledby={`${s.id}-title`}>
+          <div class="container">
+            <h2 id={`${s.id}-title`} class="section-title"><T text={s.heading} /></h2>
+
+            {s.type === "services" && input.services && (
+              <>
+                {input.services.intro && <p class="section-intro"><T text={input.services.intro} /></p>}
+                <ul class="cards">
+                  {input.services.items.map((item) => (
+                    <li class="card">
+                      {item.image && <Img image={item.image} class="card-img" />}
+                      <h3><T text={item.title} /></h3>
+                      <p><T text={item.description} /></p>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {s.type === "company" && input.companyInfo && (
+              <>
+                {input.companyInfo.intro && <p class="section-intro"><T text={input.companyInfo.intro} /></p>}
+                <dl class="info-table">
+                  {input.companyInfo.rows.map((row) => (
+                    <div class="info-row">
+                      <dt><T text={row.label} /></dt>
+                      <dd><T text={row.value} /></dd>
+                    </div>
+                  ))}
+                </dl>
+              </>
+            )}
+
+            {s.type === "works" && input.works && (
+              <>
+                {input.works.intro && <p class="section-intro"><T text={input.works.intro} /></p>}
+                <ul class="cards">
+                  {input.works.items.map((item) => (
+                    <li class="card">
+                      {item.image && <Img image={item.image} class="card-img" />}
+                      {item.period && <p class="card-meta"><T text={item.period} /></p>}
+                      <h3><T text={item.title} /></h3>
+                      {item.description && <p><T text={item.description} /></p>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {s.type === "contact" && (
+              <div class="contact-box">
+                <ContactLinks contact={input.contact} />
+                {input.contact.hours && <p class="contact-hours">受付時間：<T text={input.contact.hours} /></p>}
+                {input.contact.note && <p class="contact-note"><T text={input.contact.note} /></p>}
+              </div>
+            )}
+          </div>
+        </section>
+      ))}
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        {isDemo && (
+          <p class="demo-notice demo-notice-footer" role="note" data-demo-notice="footer">
+            {notice}
+          </p>
+        )}
+        <p class="copyright">&copy; {year} <T text={copyright} /></p>
+        <p><a href="#top">ページの先頭へ</a></p>
+      </div>
+    </footer>
+  </body>
+</html>

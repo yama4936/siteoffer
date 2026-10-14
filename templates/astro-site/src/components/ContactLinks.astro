@@ -1,0 +1,53 @@
+---
+/**
+ * 電話・メールのリンク。フォームは作らない（11章）。
+ * 値に要確認マーカーがある場合はリンクにせず、マーカー表示だけにする（誤った番号へ発信させない）。
+ */
+import { hasMarker } from "../../lib/markers.ts";
+import { telHref } from "../../lib/resolve.ts";
+import type { SiteInput } from "../../schema/site-input.ts";
+import T from "./T.astro";
+
+interface Props {
+  contact: SiteInput["contact"];
+  /** primary だけを出す（ファーストビュー用）。 */
+  primaryOnly?: boolean;
+}
+const { contact, primaryOnly = false } = Astro.props;
+const showPhone = contact.phone && (!primaryOnly || contact.primary === "phone");
+const showEmail = contact.email && (!primaryOnly || contact.primary === "email");
+const order = contact.primary === "email" ? ["email", "phone"] : ["phone", "email"];
+---
+<ul class="contact-links">
+  {order.map((kind) => {
+    if (kind === "phone" && showPhone && contact.phone) {
+      const p = contact.phone;
+      return (
+        <li>
+          {hasMarker(p.display) || hasMarker(p.tel) ? (
+            <span class="btn btn-disabled">電話：<T text={p.display} /></span>
+          ) : (
+            <a class:list={["btn", contact.primary === "phone" ? "btn-primary" : "btn-secondary"]} href={telHref(p)} data-contact="phone">
+              電話する：{p.display}
+            </a>
+          )}
+        </li>
+      );
+    }
+    if (kind === "email" && showEmail && contact.email) {
+      const e = contact.email;
+      return (
+        <li>
+          {hasMarker(e) ? (
+            <span class="btn btn-disabled">メール：<T text={e} /></span>
+          ) : (
+            <a class:list={["btn", contact.primary === "email" ? "btn-primary" : "btn-secondary"]} href={`mailto:${e}`} data-contact="email">
+              メールで問い合わせる：{e}
+            </a>
+          )}
+        </li>
+      );
+    }
+    return null;
+  })}
+</ul>

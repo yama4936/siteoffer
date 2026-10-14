@@ -1,0 +1,20 @@
+---
+/**
+ * 文字列を出力する。要確認マーカーは目立つ表示（mark要素）に置き換える。
+ * delivery ではマーカーが残っているとビルド前に失敗するので、ここに来るのは demo のときだけ。
+ */
+import { splitMarkers } from "../../lib/markers.ts";
+
+interface Props {
+  text: string;
+}
+const { text } = Astro.props;
+const parts = splitMarkers(text);
+---
+{parts.map((p) =>
+  p.kind === "text" ? (
+    p.text
+  ) : (
+    <mark class="needs-confirm" data-needs-confirm={p.note}>要確認：{p.note || "内容未確認"}</mark>
+  ),
+)}
