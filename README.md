@@ -8,7 +8,7 @@
 ## 読む順番
 
 1. [REQUIREMENTS.md](REQUIREMENTS.md)：確定方針、機能要件、推奨仕様、未決事項、受け入れ条件。
-2. [docs/DECISIONS.md](docs/DECISIONS.md)：判断記録。使用モデル、判断の経緯、作業の進め方と作業記録、報告書作成ルール。付録に会話記録とターン別モデル情報。
+2. [docs/DECISIONS.md](docs/DECISIONS.md)：判断記録。開発の流れ、Claude Codeでの開発（セッション・subagent）、判断の一覧、作業記録。付録にCodexとClaude Codeの会話記録、ターン別モデル情報。
 3. [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)：ローカルMVPの実装計画と、subagentへのタスク分割。
 4. [AGENTS.md](AGENTS.md)：今後このリポジトリで作業するエージェントへの指示。
 5. [.agents/skills/](.agents/skills/)：サイト評価（site-evaluation）と改善提案書（site-proposal）のスキル。設定は [config/site-evaluation.json](config/site-evaluation.json)。
