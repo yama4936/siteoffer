@@ -11,6 +11,7 @@ import {
   markRewardPaid,
   scheduleRewardPayment,
 } from "../reward/reward.ts";
+import { recordActivity } from "../sales-activity/activity.ts";
 import {
   type ContractSnapshot,
   confirmContract,
@@ -75,6 +76,23 @@ describe("成約報告（営業）", () => {
     const { salesActor, assignment } = await reported();
     const r = await reportContract(db, clock, salesActor, { assignmentId: assignment.id });
     expect(r).toMatchObject({ ok: false, error: "already_reported" });
+    expect(await db.select().from(contracts)).toHaveLength(1);
+  });
+
+  it("活動記録で先に「契約確認待ち」を記録して担当が contract_pending でも、契約がなければ報告できる", async () => {
+    const base = await seedBase(db);
+    const act = await recordActivity(db, clock, base.salesActor, {
+      assignmentId: base.assignment.id,
+      kind: "contract_review",
+    });
+    expect(act.ok).toBe(true);
+    const [before] = await db.select().from(assignments).where(eq(assignments.id, base.assignment.id));
+    expect(before!.status).toBe("contract_pending");
+
+    const r = await reportContract(db, clock, base.salesActor, { assignmentId: base.assignment.id });
+    expect(r.ok).toBe(true);
+    const again = await reportContract(db, clock, base.salesActor, { assignmentId: base.assignment.id });
+    expect(again).toMatchObject({ ok: false, error: "already_reported" });
     expect(await db.select().from(contracts)).toHaveLength(1);
   });
 

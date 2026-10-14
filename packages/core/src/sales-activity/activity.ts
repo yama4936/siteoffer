@@ -13,6 +13,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { authorizeUser, requireUser } from "../permissions/policy.ts";
 import { applySuppression, type DeclineKind } from "./suppression.ts";
 
@@ -40,7 +41,8 @@ export type RecordActivityError =
   | "not_active"
   | "invalid_input"
   | "company_not_found"
-  | "stronger_suppression_exists";
+  | "stronger_suppression_exists"
+  | "secret_like_value";
 
 /** 担当の進み具合（後戻りさせない） */
 const PROGRESS: Partial<Record<AssignmentStatus, number>> = {
@@ -107,6 +109,9 @@ export async function recordActivity(
   if (input.decline && input.decline.kind !== "not_now" && input.decline.recontactAfter) {
     return err("invalid_input", "再連絡の目安は「今は不要」のときだけ記録できます");
   }
+  // 活動メモに移管コード・パスワード・鍵らしき値を残さない（13章）。値はエラーに含めない
+  const secret = findSecretInFields({ note: input.note, declineReason: input.decline?.reason });
+  if (secret) return err("secret_like_value", `${secret.field} に秘密らしき値が含まれているため保存しませんでした`);
 
   return runTx<{ activity: SalesActivity; assignment: Assignment }, RecordActivityError>(db, async (tx, fail) => {
     const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {

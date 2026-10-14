@@ -74,6 +74,24 @@ describe("活動記録（12.3）", () => {
     expect(r.value.assignment.lastActivityAt?.getTime()).toBe(clock.now().getTime());
   });
 
+  it("活動メモに秘密らしき値があれば保存せず、値をエラーに含めない", async () => {
+    const { s, assignment } = await claimed();
+    const r = await recordActivity(db, clock, s.actor, {
+      assignmentId: assignment.id,
+      kind: "no_answer",
+      note: "移管コード: Xy7#kP2q!Lm",
+    });
+    expect(r.ok === false && r.error).toBe("secret_like_value");
+    expect(JSON.stringify(r)).not.toContain("Xy7#kP2q!Lm");
+    expect(await db.select().from(salesActivities)).toHaveLength(0);
+    const plain = await recordActivity(db, clock, s.actor, {
+      assignmentId: assignment.id,
+      kind: "no_answer",
+      note: "パスワードは制作会社が管理しているとのこと",
+    });
+    expect(plain.ok).toBe(true);
+  });
+
   it("未来の活動日時・過去の次回対応日は受け付けない", async () => {
     const { s, assignment } = await claimed();
     const future = await recordActivity(db, clock, s.actor, {

@@ -70,7 +70,13 @@ export type ContractError =
   | "document_required"
   | "proposal_version_mismatch";
 
-const REPORTABLE_ASSIGNMENT_STATUSES = ["claimed", "working", "negotiating", "awaiting_ops"] as const;
+const REPORTABLE_ASSIGNMENT_STATUSES = [
+  "claimed",
+  "working",
+  "negotiating",
+  "awaiting_ops",
+  "contract_pending",
+] as const;
 const OPEN_CONTRACT_STATUSES = ["reported", "under_review"] as const;
 
 function isUniqueViolation(e: unknown): boolean {
@@ -111,7 +117,15 @@ export async function reportContract(
       // 権限：契約の report。所有者は読んだ担当の営業ユーザー
       const auth = authorizeUser(actor, "report", { type: "contract", ownerUserId: a.userId });
       if (!auth.ok) return auth;
-      if (a.status === "contract_pending") return err("already_reported");
+      // 報告済みかは、担当の状態ではなく進行中・完了の契約があるかで判定する。
+      // 活動記録で「契約確認待ち」「契約完了（申告）」を先に記録すると、担当は contract_pending になるが契約はまだない
+      const [open] = await tx
+        .select({ id: contracts.id })
+        .from(contracts)
+        .where(
+          and(eq(contracts.assignmentId, a.id), inArray(contracts.status, ["reported", "under_review", "completed"])),
+        );
+      if (open) return err("already_reported");
       if (!(REPORTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status)) return err("invalid_state");
 
       const now = clock.now();
