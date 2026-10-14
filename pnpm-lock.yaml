@@ -202,6 +202,9 @@ importers:
       '@siteoffer/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@siteoffer/discovery':
+        specifier: workspace:*
+        version: link:../../packages/discovery
       '@siteoffer/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

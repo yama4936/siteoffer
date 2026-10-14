@@ -1,0 +1,722 @@
+/**
+ * 運営画面のサーバー処理。Server Function（app/(ops)/ops/actions.ts）から呼ぶ。
+ * - 入口で requireOps を通し、運営以外は forbidden を返す（AC-17）
+ * - 担当・抑止・契約・入金・報酬・ドメイン希望・利用停止は core の業務関数を呼ぶ
+ * - core に無い運営の操作（候補の修正、提案版のレビュー、営業可能化、販売・報酬条件の版、運営設定、収集ジョブの作成）は
+ *   ここで実装し、状態を変える処理は同じトランザクションで recordEvent を呼ぶ
+ */
+
+import {
+  type Actor,
+  adjustReward,
+  authorizeUser,
+  type Clock,
+  cancelReward,
+  confirmContract,
+  confirmDomainPreference,
+  DEFAULT_SETTINGS,
+  err,
+  extendAssignment,
+  liftSuppression,
+  markRewardPaid,
+  ok,
+  type PaymentTargetStatus,
+  parseRewardRule,
+  type Result,
+  reactivateUser,
+  reassignAssignment,
+  recordEvent,
+  recordPayment,
+  rejectContract,
+  releaseAssignment,
+  type SettingKey,
+  scheduleRewardPayment,
+  startContractReview,
+  suppressCompany,
+  suspendUser,
+  updatePaymentStatus,
+} from "@siteoffer/core";
+import {
+  appSettings,
+  companies,
+  type DbOrTx,
+  productTerms,
+  proposals,
+  proposalVersions,
+  websites,
+} from "@siteoffer/db";
+import { createDiscoveryJob } from "@siteoffer/discovery";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { type OpsActor, requireOps } from "./guard";
+import { type SellableIssue, sellableIssues } from "./sellable";
+
+export interface OpsDeps {
+  db: DbOrTx;
+  clock: Clock;
+}
+
+type Company = typeof companies.$inferSelect;
+type OfficialSiteStatus = Company["officialSiteStatus"];
+
+class Abort extends Error {
+  readonly code: string;
+  readonly detail: string | undefined;
+  constructor(code: string, detail?: string) {
+    super(code);
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+/** トランザクション内で fail() すると巻き戻して Result の err を返す */
+async function inTx<T>(db: DbOrTx, fn: (tx: DbOrTx, fail: (code: string, detail?: string) => never) => Promise<T>) {
+  try {
+    const value = await db.transaction((tx) =>
+      fn(tx, (code, detail) => {
+        throw new Abort(code, detail);
+      }),
+    );
+    return ok(value) as Result<T, string>;
+  } catch (e) {
+    if (e instanceof Abort) return err(e.code, e.detail) as Result<T, string>;
+    throw e;
+  }
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur && typeof cur === "object"; i++) {
+    if ((cur as { code?: unknown }).code === "23505") return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/** 運営だけに許した上で core の業務関数を呼ぶ。core 側でも権限を判定する（二重の確認） */
+async function asOps<T>(
+  actor: Actor | null,
+  fn: (ops: OpsActor) => Promise<Result<T, string>>,
+): Promise<Result<T, string>> {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  return fn(ops.value);
+}
+
+/** 企業の manage 権限（運営だけ）。対象を読む前の確認 */
+function authorizeCompanyManage(actor: Actor | null, companyId: string) {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  const auth = authorizeUser(ops.value, "manage", {
+    type: "company",
+    companyId,
+    sellable: false,
+    assignedUserId: null,
+  });
+  if (!auth.ok) return auth;
+  return ops;
+}
+
+// ───────────── 1. 収集条件・ジョブ・候補 ─────────────
+
+/** 収集ジョブの登録（実行はワーカーの担当）。運営かどうかはここで確かめ、登録は discovery の createDiscoveryJob に任せる */
+export const DISCOVERY_PROVIDERS = ["fixture", "nta-corporate-number"] as const;
+export type DiscoveryProviderName = (typeof DISCOVERY_PROVIDERS)[number];
+
+export async function createDiscoveryJobByOps(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { provider: string; criteria: unknown },
+): Promise<Result<{ jobId: string }, string>> {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  if (!(DISCOVERY_PROVIDERS as readonly string[]).includes(input.provider)) {
+    return err("invalid_provider", "取得元が不正です");
+  }
+  const r = await createDiscoveryJob(db, clock, {
+    provider: input.provider,
+    criteria: input.criteria,
+    createdBy: ops.value.userId,
+    actor: ops.value,
+  });
+  if (!r.ok) return err(r.error, r.message ?? "収集条件が不正です");
+  return ok({ jobId: r.value.jobId });
+}
+
+export interface CandidatePatch {
+  name?: string;
+  prefecture?: string | null;
+  city?: string | null;
+  address?: string | null;
+  addressSourceUrl?: string | null;
+  industry?: string | null;
+  representativePhone?: string | null;
+}
+
+const PATCH_KEYS = [
+  "name",
+  "prefecture",
+  "city",
+  "address",
+  "addressSourceUrl",
+  "industry",
+  "representativePhone",
+] as const satisfies readonly (keyof CandidatePatch)[];
+
+/** 候補の修正（運営）。変更した項目だけを操作履歴に残す */
+export async function updateCandidate(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; patch: CandidatePatch },
+): Promise<Result<Company, string>> {
+  const ops = authorizeCompanyManage(actor, input.companyId);
+  if (!ops.ok) return ops;
+  if (input.patch.name !== undefined && !input.patch.name.trim()) return err("invalid_input", "企業名は必須です");
+  if (input.patch.addressSourceUrl && !/^https?:\/\//.test(input.patch.addressSourceUrl)) {
+    return err("invalid_input", "住所の出典URLは http(s) で始めてください");
+  }
+  return inTx(db, async (tx, fail) => {
+    const [before] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
+    if (!before) return fail("not_found");
+    const changes: Partial<Record<(typeof PATCH_KEYS)[number], string | null>> = {};
+    const prev: Record<string, unknown> = {};
+    for (const key of PATCH_KEYS) {
+      const v = input.patch[key];
+      if (v === undefined) continue;
+      const next = key === "name" ? (v ?? "").trim() : v?.trim() || null;
+      if (next !== before[key]) {
+        changes[key] = next;
+        prev[key] = before[key];
+      }
+    }
+    if (Object.keys(changes).length === 0) return before;
+    const [after] = await tx
+      .update(companies)
+      .set({ ...changes, name: changes.name ?? undefined, updatedAt: clock.now() })
+      .where(eq(companies.id, before.id))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "company.update_by_ops",
+      targetType: "company",
+      targetId: before.id,
+      before: prev,
+      after: changes,
+    });
+    return after!;
+  });
+}
+
+/**
+ * 公式サイトの確度を運営が確定・変更する（needs_review → confirmed など）。
+ * confirmed にするときに websiteId を渡すと、そのサイトを企業の主サイトにする。
+ */
+export async function setOfficialSiteStatus(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; status: OfficialSiteStatus; websiteId?: string | null; note?: string },
+): Promise<Result<Company, string>> {
+  const ops = authorizeCompanyManage(actor, input.companyId);
+  if (!ops.ok) return ops;
+  if (!["confirmed", "candidate", "needs_review", "not_found"].includes(input.status)) {
+    return err("invalid_input", "公式サイトの確度が不正です");
+  }
+  return inTx(db, async (tx, fail) => {
+    const [before] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
+    if (!before) return fail("not_found");
+    let primaryWebsiteId: string | null = null;
+    if (input.websiteId) {
+      const [site] = await tx
+        .select()
+        .from(websites)
+        .where(and(eq(websites.id, input.websiteId), eq(websites.companyId, before.id)));
+      if (!site) return fail("website_not_found", "この企業のサイトではありません");
+      if (input.status === "confirmed") {
+        await tx.update(websites).set({ isPrimary: false }).where(eq(websites.companyId, before.id));
+        await tx.update(websites).set({ isPrimary: true }).where(eq(websites.id, site.id));
+        primaryWebsiteId = site.id;
+      }
+    }
+    const [after] = await tx
+      .update(companies)
+      .set({ officialSiteStatus: input.status, updatedAt: clock.now() })
+      .where(eq(companies.id, before.id))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "company.official_site_status",
+      targetType: "company",
+      targetId: before.id,
+      before: { officialSiteStatus: before.officialSiteStatus },
+      after: { officialSiteStatus: input.status, primaryWebsiteId, note: input.note?.trim() || null },
+    });
+    return after!;
+  });
+}
+
+/** 候補の除外・既存顧客の記録（企業共通の抑止。再収集で営業可能に戻らない） */
+export function excludeCandidate(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; kind: "excluded" | "existing_customer"; reason: string },
+) {
+  return asOps(actor, (ops) => {
+    if (input.kind !== "excluded" && input.kind !== "existing_customer") {
+      return Promise.resolve(err("invalid_input", "除外の種類が不正です"));
+    }
+    if (!input.reason.trim()) return Promise.resolve(err("invalid_input", "理由を入力してください"));
+    return suppressCompany(db, clock, ops, {
+      companyId: input.companyId,
+      kind: input.kind,
+      reason: input.reason.trim(),
+    });
+  });
+}
+
+// ───────────── 2. 診断・生成・レビュー・営業可能化 ─────────────
+
+/**
+ * 提案版のレビュー（運営確認）。in_review の版だけを承認・差し戻しできる。
+ * 承認しただけでは営業可能にしない（販売条件・報酬条件の確認が別に要る、makeSellable）。
+ */
+export async function reviewProposalVersion(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { proposalVersionId: string; decision: "approved" | "rejected"; note?: string },
+): Promise<Result<typeof proposalVersions.$inferSelect, string>> {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  if (input.decision !== "approved" && input.decision !== "rejected") return err("invalid_input", "判定が不正です");
+  const note = input.note?.trim() || null;
+  if (input.decision === "rejected" && !note) return err("invalid_input", "差し戻しの理由を入力してください");
+  return inTx(db, async (tx, fail) => {
+    const [row] = await tx
+      .select({ version: proposalVersions, companyId: proposals.companyId })
+      .from(proposalVersions)
+      .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+      .where(eq(proposalVersions.id, input.proposalVersionId))
+      .for("update");
+    if (!row) return fail("not_found");
+    const auth = authorizeUser(ops.value, "manage", {
+      type: "company",
+      companyId: row.companyId,
+      sellable: false,
+      assignedUserId: null,
+    });
+    if (!auth.ok) return fail(auth.error, auth.message);
+    const before = row.version;
+    if (before.status !== "in_review") return fail("invalid_state", "運営確認待ちの版だけをレビューできます");
+    const now = clock.now();
+    const [after] = await tx
+      .update(proposalVersions)
+      .set({ status: input.decision, reviewedBy: ops.value.userId, reviewedAt: now, reviewNote: note })
+      .where(eq(proposalVersions.id, before.id))
+      .returning();
+    // 提案の準備段階：差し戻しは保留（再生成待ち）にする。承認は運営確認中のまま（営業可能化は別操作）
+    const [company] = await tx.select().from(companies).where(eq(companies.id, row.companyId)).for("update");
+    if (company && (company.pipelineStatus === "generated" || company.pipelineStatus === "in_review")) {
+      const nextPipeline = input.decision === "approved" ? "in_review" : "on_hold";
+      if (nextPipeline !== company.pipelineStatus) {
+        await tx
+          .update(companies)
+          .set({ pipelineStatus: nextPipeline, updatedAt: now })
+          .where(eq(companies.id, company.id));
+      }
+    }
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: input.decision === "approved" ? "proposal_version.approve" : "proposal_version.reject",
+      targetType: "proposal_version",
+      targetId: before.id,
+      before: { status: before.status },
+      after: { status: after!.status, note, companyId: row.companyId },
+    });
+    return after!;
+  });
+}
+
+/** 企業の最新の提案版（版番号が最大） */
+export async function latestProposalVersion(db: DbOrTx, companyId: string) {
+  const [row] = await db
+    .select({
+      id: proposalVersions.id,
+      version: proposalVersions.version,
+      status: proposalVersions.status,
+    })
+    .from(proposalVersions)
+    .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+    .where(eq(proposals.companyId, companyId))
+    .orderBy(desc(proposalVersions.version))
+    .limit(1);
+  return row ?? null;
+}
+
+const SELLABLE_ISSUE_TEXT: Record<SellableIssue, string> = {
+  company_suppressed: "営業抑止（営業拒否・除外・既存顧客）があります",
+  already_sellable: "すでに営業可能です",
+  no_proposal_version: "提案版がありません",
+  review_not_approved: "最新の提案版が運営確認（承認）されていません",
+  terms_not_selected: "販売条件・報酬条件の版を選んでください",
+  terms_not_ready: "販売条件・報酬条件が未設定または無効です",
+};
+
+export function sellableIssueText(issue: SellableIssue): string {
+  return SELLABLE_ISSUE_TEXT[issue];
+}
+
+/**
+ * 営業可能にする（AC-09・14章）。サーバー側で次をすべて確かめる：
+ * 運営だけ／最新の提案版が承認済み／販売条件・報酬条件が設定済み（isTermsReadyForSales）／営業抑止がない。
+ * 使った提案版と条件の版は操作履歴に残す（companies に条件の版を持つ列がないため。報告参照）。
+ */
+export async function makeSellable(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; productTermsId: string | null },
+): Promise<Result<Company, string>> {
+  const ops = authorizeCompanyManage(actor, input.companyId);
+  if (!ops.ok) return ops;
+  return inTx(db, async (tx, fail) => {
+    const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
+    if (!company) return fail("not_found");
+    const latest = await latestProposalVersion(tx, company.id);
+    let terms: typeof productTerms.$inferSelect | null = null;
+    if (input.productTermsId) {
+      const [t] = await tx.select().from(productTerms).where(eq(productTerms.id, input.productTermsId));
+      if (!t) return fail("terms_not_found", "販売条件・報酬条件の版が見つかりません");
+      terms = t;
+    }
+    const issues = sellableIssues({ company, latestVersion: latest, terms });
+    if (issues.length > 0) return fail(issues[0]!, issues.map(sellableIssueText).join(" / "));
+    const now = clock.now();
+    const [after] = await tx
+      .update(companies)
+      .set({ pipelineStatus: "sellable", updatedAt: now })
+      .where(eq(companies.id, company.id))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "company.make_sellable",
+      targetType: "company",
+      targetId: company.id,
+      before: { pipelineStatus: company.pipelineStatus },
+      after: {
+        pipelineStatus: "sellable",
+        proposalVersionId: latest!.id,
+        proposalVersion: latest!.version,
+        productTermsId: terms!.id,
+        productTermsVersion: terms!.version,
+      },
+    });
+    return after!;
+  });
+}
+
+/** 営業可能の取り下げ（sellable → on_hold）。既存の担当には触れない */
+export async function withdrawSellable(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; reason: string },
+): Promise<Result<Company, string>> {
+  const ops = authorizeCompanyManage(actor, input.companyId);
+  if (!ops.ok) return ops;
+  if (!input.reason.trim()) return err("invalid_input", "理由を入力してください");
+  return inTx(db, async (tx, fail) => {
+    const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
+    if (!company) return fail("not_found");
+    if (company.pipelineStatus !== "sellable") return fail("invalid_state", "営業可能な候補ではありません");
+    const [after] = await tx
+      .update(companies)
+      .set({ pipelineStatus: "on_hold", updatedAt: clock.now() })
+      .where(eq(companies.id, company.id))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "company.withdraw_sellable",
+      targetType: "company",
+      targetId: company.id,
+      before: { pipelineStatus: company.pipelineStatus },
+      after: { pipelineStatus: "on_hold", reason: input.reason.trim() },
+    });
+    return after!;
+  });
+}
+
+// ───────────── 3. 担当状況・営業拒否・引き継ぎ ─────────────
+
+export const releaseAssignmentByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { assignmentId: string; reason: string },
+) =>
+  asOps(actor, (ops) =>
+    input.reason.trim()
+      ? releaseAssignment(db, clock, ops, { assignmentId: input.assignmentId, reason: input.reason.trim() })
+      : Promise.resolve(err("invalid_input", "解除の理由を入力してください")),
+  );
+
+export const reassignAssignmentByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { assignmentId: string; toUserId: string; reason: string },
+) =>
+  asOps(actor, (ops) =>
+    input.reason.trim()
+      ? reassignAssignment(db, clock, ops, { ...input, reason: input.reason.trim() })
+      : Promise.resolve(err("invalid_input", "付け替えの理由を入力してください")),
+  );
+
+export const extendAssignmentByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: Parameters<typeof extendAssignment>[3],
+) => asOps(actor, (ops) => extendAssignment(db, clock, ops, input));
+
+export const liftSuppressionByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; reason: string },
+) =>
+  asOps(actor, (ops) =>
+    input.reason.trim()
+      ? liftSuppression(db, clock, ops, { companyId: input.companyId, reason: input.reason.trim() })
+      : Promise.resolve(err("invalid_input", "解除の理由を入力してください")),
+  );
+
+// ───────────── 4. 商品条件・契約確認・入金・報酬 ─────────────
+
+export interface ProductTermsInput {
+  version: string;
+  name: string;
+  scopeText: string;
+  price: number | null;
+  monthlyFee: number | null;
+  rewardRule: unknown | null;
+}
+
+/**
+ * 販売条件・報酬条件の版を作る。既存の版は書き換えない（契約は完了時の写しで固定、14章・AC-16）。
+ * 価格・報酬条件が未設定の版も保存できるが、その版では営業可能にできない（isTermsReadyForSales）。
+ */
+export async function createProductTermsVersion(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: ProductTermsInput,
+): Promise<Result<typeof productTerms.$inferSelect, string>> {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  const auth = authorizeUser(ops.value, "manage", { type: "productTerms" });
+  if (!auth.ok) return auth;
+  const version = input.version.trim();
+  const name = input.name.trim();
+  if (!version || !name) return err("invalid_input", "版と名称は必須です");
+  for (const [label, v] of [
+    ["価格", input.price],
+    ["月額", input.monthlyFee],
+  ] as const) {
+    if (v !== null && (!Number.isSafeInteger(v) || v < 0)) return err("invalid_input", `${label}は0以上の整数（円）`);
+  }
+  if (input.rewardRule !== null) {
+    const rule = parseRewardRule(input.rewardRule);
+    if (!rule.ok) return err("invalid_input", "報酬条件が不正です（定額は0以上の整数、割合は0〜10000の万分率）");
+  }
+  try {
+    return await inTx(db, async (tx) => {
+      const [row] = await tx
+        .insert(productTerms)
+        .values({
+          version,
+          name,
+          scope: { description: input.scopeText.trim() },
+          price: input.price,
+          monthlyFee: input.monthlyFee,
+          rewardRule: input.rewardRule,
+          active: true,
+          createdAt: clock.now(),
+        })
+        .returning();
+      await recordEvent(tx, clock, {
+        actor: ops.value,
+        action: "product_terms.create",
+        targetType: "product_terms",
+        targetId: row!.id,
+        after: row,
+      });
+      return row!;
+    });
+  } catch (e) {
+    if (isUniqueViolation(e)) return err("version_taken", "同じ版名が既にあります");
+    throw e;
+  }
+}
+
+/** 版の有効・無効を切り替える（無効の版では営業可能にできない。既存契約の写しは変わらない） */
+export async function setProductTermsActive(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { productTermsId: string; active: boolean },
+): Promise<Result<typeof productTerms.$inferSelect, string>> {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  const auth = authorizeUser(ops.value, "manage", { type: "productTerms" });
+  if (!auth.ok) return auth;
+  return inTx(db, async (tx, fail) => {
+    const [before] = await tx
+      .select()
+      .from(productTerms)
+      .where(eq(productTerms.id, input.productTermsId))
+      .for("update");
+    if (!before) return fail("not_found");
+    const [after] = await tx
+      .update(productTerms)
+      .set({ active: input.active })
+      .where(eq(productTerms.id, before.id))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: input.active ? "product_terms.activate" : "product_terms.deactivate",
+      targetType: "product_terms",
+      targetId: before.id,
+      before: { active: before.active },
+      after: { active: input.active },
+    });
+    return after!;
+  });
+}
+
+export const startContractReviewByOps = ({ db, clock }: OpsDeps, actor: Actor | null, contractId: string) =>
+  asOps(actor, (ops) => startContractReview(db, clock, ops, { contractId }));
+
+export const confirmContractByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: Parameters<typeof confirmContract>[3],
+) => asOps(actor, (ops) => confirmContract(db, clock, ops, input));
+
+export const rejectContractByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { contractId: string; reason: string },
+) =>
+  asOps(actor, (ops) =>
+    input.reason.trim()
+      ? rejectContract(db, clock, ops, input)
+      : Promise.resolve(err("invalid_input", "差し戻しの理由を入力してください")),
+  );
+
+export const recordPaymentByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: Parameters<typeof recordPayment>[3],
+) => asOps(actor, (ops) => recordPayment(db, clock, ops, input));
+
+export const updatePaymentStatusByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { paymentId: string; status: PaymentTargetStatus },
+) => asOps(actor, (ops) => updatePaymentStatus(db, clock, ops, input));
+
+export const scheduleRewardByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { rewardId: string; scheduledFor: Date },
+) => asOps(actor, (ops) => scheduleRewardPayment(db, clock, ops, input));
+
+export const markRewardPaidByOps = ({ db, clock }: OpsDeps, actor: Actor | null, rewardId: string) =>
+  asOps(actor, (ops) => markRewardPaid(db, clock, ops, { rewardId }));
+
+export const adjustRewardByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { rewardId: string; delta: number; reason: string },
+) => asOps(actor, (ops) => adjustReward(db, clock, ops, input));
+
+export const cancelRewardByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { rewardId: string; reason: string },
+) => asOps(actor, (ops) => cancelReward(db, clock, ops, input));
+
+// ───────────── 5. ドメイン希望 ─────────────
+
+export const confirmDomainPreferenceByOps = ({ db, clock }: OpsDeps, actor: Actor | null, id: string) =>
+  asOps(actor, (ops) => confirmDomainPreference(db, clock, ops, { id }));
+
+// ───────────── 6. 設定・操作履歴・利用停止 ─────────────
+
+/** 運営が画面から変更できる設定と、受け付ける範囲（整数） */
+export const EDITABLE_SETTINGS: Record<SettingKey, { label: string; min: number; max: number }> = {
+  "assignment.maxActivePerUser": { label: "同時担当の上限（社）", min: 1, max: 100 },
+  "assignment.unstartedTimeoutHours": { label: "未着手の自動解除（時間）", min: 1, max: 24 * 90 },
+  "shareLink.defaultTtlHours": { label: "提案リンクの既定の有効期間（時間）", min: 1, max: 24 * 90 },
+  "session.ttlHours": { label: "ログインの有効期間（時間）", min: 1, max: 24 * 90 },
+};
+
+/** 運営設定の変更。変更前後を操作履歴に残す（同じトランザクション） */
+export async function updateSetting(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { key: string; value: number },
+): Promise<Result<{ key: SettingKey; value: number }, string>> {
+  const ops = requireOps(actor);
+  if (!ops.ok) return ops;
+  const auth = authorizeUser(ops.value, "update", { type: "settings" });
+  if (!auth.ok) return auth;
+  if (!Object.hasOwn(EDITABLE_SETTINGS, input.key)) return err("invalid_input", "変更できない設定です");
+  const key = input.key as SettingKey;
+  const rule = EDITABLE_SETTINGS[key];
+  if (!Number.isSafeInteger(input.value) || input.value < rule.min || input.value > rule.max) {
+    return err("invalid_input", `${rule.label}は${rule.min}〜${rule.max}の整数で入力してください`);
+  }
+  return inTx(db, async (tx) => {
+    const [row] = await tx.select().from(appSettings).where(eq(appSettings.key, key)).for("update");
+    const before = (row?.value ?? DEFAULT_SETTINGS[key]) as number;
+    const now = clock.now();
+    await tx
+      .insert(appSettings)
+      .values({ key, value: input.value, updatedBy: ops.value.userId, updatedAt: now })
+      .onConflictDoUpdate({
+        target: appSettings.key,
+        set: { value: input.value, updatedBy: ops.value.userId, updatedAt: now },
+      });
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "settings.update",
+      targetType: "settings",
+      targetId: key,
+      before: { value: before, default: row === undefined },
+      after: { value: input.value },
+    });
+    return { key, value: input.value };
+  });
+}
+
+export const suspendSalesUser = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { userId: string; reason?: string },
+) => asOps(actor, (ops) => suspendUser(db, clock, ops, input.userId, input.reason?.trim() || undefined));
+
+export const reactivateSalesUser = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { userId: string; reason?: string },
+) => asOps(actor, (ops) => reactivateUser(db, clock, ops, input.userId, input.reason?.trim() || undefined));
+
+/** 複数の企業の最新の提案版をまとめて読む（一覧での営業可能化の可否表示用） */
+export async function latestProposalVersions(db: DbOrTx, companyIds: string[]) {
+  if (companyIds.length === 0) return new Map<string, { id: string; version: number; status: string }>();
+  const rows = await db
+    .select({
+      companyId: proposals.companyId,
+      id: proposalVersions.id,
+      version: proposalVersions.version,
+      status: proposalVersions.status,
+    })
+    .from(proposalVersions)
+    .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+    .where(inArray(proposals.companyId, companyIds))
+    .orderBy(desc(proposalVersions.version));
+  const map = new Map<string, { id: string; version: number; status: string }>();
+  for (const r of rows) if (!map.has(r.companyId)) map.set(r.companyId, r);
+  return map;
+}

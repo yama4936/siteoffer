@@ -1,0 +1,363 @@
+"use server";
+
+/**
+ * 運営画面の Server Function。直接POSTでも呼べるため、権限は各処理（lib/ops/commands.ts → core）で判定する。
+ * ここでは FormData を読み、処理を呼び、結果の文言を付けて元の画面へ戻すだけにする。
+ */
+import { type Actor, type PaymentTargetStatus, type Result, systemClock } from "@siteoffer/core";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+import {
+  adjustRewardByOps,
+  cancelRewardByOps,
+  confirmContractByOps,
+  confirmDomainPreferenceByOps,
+  createDiscoveryJobByOps,
+  createProductTermsVersion,
+  excludeCandidate,
+  extendAssignmentByOps,
+  liftSuppressionByOps,
+  makeSellable,
+  markRewardPaidByOps,
+  type OpsDeps,
+  reactivateSalesUser,
+  reassignAssignmentByOps,
+  recordPaymentByOps,
+  rejectContractByOps,
+  releaseAssignmentByOps,
+  reviewProposalVersion,
+  scheduleRewardByOps,
+  setOfficialSiteStatus,
+  setProductTermsActive,
+  startContractReviewByOps,
+  suspendSalesUser,
+  updateCandidate,
+  updatePaymentStatusByOps,
+  updateSetting,
+  withdrawSellable,
+} from "@/lib/ops/commands";
+import { jstDate, optInt, optStr, safeReturnTo, str, withFlash } from "@/lib/ops/form";
+import { getCurrentActor } from "@/lib/session";
+
+async function run(
+  fd: FormData,
+  fn: (deps: OpsDeps, actor: Actor | null) => Promise<Result<unknown, string>>,
+  okMessage: string,
+): Promise<never> {
+  const actor = await getCurrentActor();
+  let r: Result<unknown, string>;
+  try {
+    r = await fn({ db: getDb(), clock: systemClock }, actor);
+  } catch (e) {
+    // 想定外の失敗（不正なIDによるDBエラー等）。詳細はサーバーのログにだけ残し、画面には出さない
+    console.error("ops action failed", e);
+    r = { ok: false, error: "unexpected", message: "処理に失敗しました。入力内容を確認してください" };
+  }
+  const back = safeReturnTo(fd.get("returnTo"));
+  revalidatePath("/ops", "layout");
+  redirect(withFlash(back, r.ok ? { msg: okMessage } : { error: r.message ? `${r.message}（${r.error}）` : r.error }));
+}
+
+// 1. 収集条件・ジョブ・候補
+
+export async function createDiscoveryJobAction(fd: FormData) {
+  const keywords = str(fd, "keywords")
+    .split(/[,、\s]+/)
+    .filter(Boolean);
+  const limit = optInt(fd, "limit");
+  const criteria = {
+    prefecture: optStr(fd, "prefecture") ?? undefined,
+    city: optStr(fd, "city") ?? undefined,
+    cityCode: optStr(fd, "cityCode") ?? undefined,
+    industry: optStr(fd, "industry") ?? undefined,
+    keywords,
+    limit: limit ?? undefined,
+  };
+  await run(
+    fd,
+    (d, a) => createDiscoveryJobByOps(d, a, { provider: str(fd, "provider"), criteria }),
+    "収集ジョブを登録しました（実行はワーカーが行います）",
+  );
+}
+
+export async function updateCandidateAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      updateCandidate(d, a, {
+        companyId: str(fd, "companyId"),
+        patch: {
+          name: str(fd, "name"),
+          prefecture: optStr(fd, "prefecture"),
+          city: optStr(fd, "city"),
+          address: optStr(fd, "address"),
+          addressSourceUrl: optStr(fd, "addressSourceUrl"),
+          industry: optStr(fd, "industry"),
+          representativePhone: optStr(fd, "representativePhone"),
+        },
+      }),
+    "候補を修正しました",
+  );
+}
+
+export async function setOfficialSiteStatusAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      setOfficialSiteStatus(d, a, {
+        companyId: str(fd, "companyId"),
+        status: str(fd, "status") as Parameters<typeof setOfficialSiteStatus>[2]["status"],
+        websiteId: optStr(fd, "websiteId"),
+        note: str(fd, "note"),
+      }),
+    "公式サイトの確度を更新しました",
+  );
+}
+
+export async function excludeCandidateAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      excludeCandidate(d, a, {
+        companyId: str(fd, "companyId"),
+        kind: str(fd, "kind") as "excluded" | "existing_customer",
+        reason: str(fd, "reason"),
+      }),
+    "候補を除外しました（再収集でも営業可能に戻りません）",
+  );
+}
+
+// 2. 診断・生成・レビュー・営業可能化
+
+export async function reviewProposalAction(fd: FormData) {
+  const decision = str(fd, "decision") as "approved" | "rejected";
+  await run(
+    fd,
+    (d, a) =>
+      reviewProposalVersion(d, a, { proposalVersionId: str(fd, "proposalVersionId"), decision, note: str(fd, "note") }),
+    decision === "approved" ? "提案版を承認しました" : "提案版を差し戻しました",
+  );
+}
+
+export async function makeSellableAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => makeSellable(d, a, { companyId: str(fd, "companyId"), productTermsId: optStr(fd, "productTermsId") }),
+    "営業可能にしました",
+  );
+}
+
+export async function withdrawSellableAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => withdrawSellable(d, a, { companyId: str(fd, "companyId"), reason: str(fd, "reason") }),
+    "営業可能を取り下げました",
+  );
+}
+
+// 3. 担当状況・営業拒否・引き継ぎ
+
+export async function releaseAssignmentAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => releaseAssignmentByOps(d, a, { assignmentId: str(fd, "assignmentId"), reason: str(fd, "reason") }),
+    "担当を解除しました",
+  );
+}
+
+export async function reassignAssignmentAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      reassignAssignmentByOps(d, a, {
+        assignmentId: str(fd, "assignmentId"),
+        toUserId: str(fd, "toUserId"),
+        reason: str(fd, "reason"),
+      }),
+    "担当を付け替えました",
+  );
+}
+
+export async function extendAssignmentAction(fd: FormData) {
+  const expiresAt = jstDate(fd, "expiresAt");
+  const resume = optStr(fd, "resumeStatus") as "claimed" | "working" | "negotiating" | "contract_pending" | null;
+  await run(
+    fd,
+    async (d, a) =>
+      expiresAt
+        ? extendAssignmentByOps(d, a, {
+            assignmentId: str(fd, "assignmentId"),
+            expiresAt,
+            reason: str(fd, "reason"),
+            ...(resume ? { resumeStatus: resume } : {}),
+          })
+        : { ok: false, error: "invalid_expiry", message: "期限を入力してください" },
+    "期限を延長しました",
+  );
+}
+
+export async function liftSuppressionAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => liftSuppressionByOps(d, a, { companyId: str(fd, "companyId"), reason: str(fd, "reason") }),
+    "営業抑止を解除しました",
+  );
+}
+
+// 4. 商品条件・契約確認・入金・報酬
+
+export async function createProductTermsAction(fd: FormData) {
+  const rewardType = str(fd, "rewardType");
+  const rewardValue = optInt(fd, "rewardValue");
+  const rewardRule =
+    rewardType === "fixed" && rewardValue !== null
+      ? { type: "fixed", amount: rewardValue }
+      : rewardType === "rate" && rewardValue !== null
+        ? { type: "rate", basisPoints: rewardValue }
+        : null;
+  await run(
+    fd,
+    (d, a) =>
+      createProductTermsVersion(d, a, {
+        version: str(fd, "version"),
+        name: str(fd, "name"),
+        scopeText: str(fd, "scope"),
+        price: optInt(fd, "price"),
+        monthlyFee: optInt(fd, "monthlyFee"),
+        rewardRule,
+      }),
+    "販売条件・報酬条件の版を作成しました",
+  );
+}
+
+export async function setProductTermsActiveAction(fd: FormData) {
+  const active = str(fd, "active") === "true";
+  await run(
+    fd,
+    (d, a) => setProductTermsActive(d, a, { productTermsId: str(fd, "productTermsId"), active }),
+    active ? "版を有効にしました" : "版を無効にしました",
+  );
+}
+
+export async function startContractReviewAction(fd: FormData) {
+  await run(fd, (d, a) => startContractReviewByOps(d, a, str(fd, "contractId")), "契約資料の確認を開始しました");
+}
+
+export async function confirmContractAction(fd: FormData) {
+  const productTermsId = optStr(fd, "productTermsId");
+  const documentRef = optStr(fd, "documentRef");
+  await run(
+    fd,
+    (d, a) =>
+      confirmContractByOps(d, a, {
+        contractId: str(fd, "contractId"),
+        ...(productTermsId ? { productTermsId } : {}),
+        ...(documentRef ? { documentRef } : {}),
+      }),
+    "契約完了を確認しました（報酬は1件だけ発生します）",
+  );
+}
+
+export async function rejectContractAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => rejectContractByOps(d, a, { contractId: str(fd, "contractId"), reason: str(fd, "reason") }),
+    "成約報告を差し戻しました",
+  );
+}
+
+export async function recordPaymentAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      recordPaymentByOps(d, a, {
+        contractId: str(fd, "contractId"),
+        amount: optInt(fd, "amount") ?? Number.NaN,
+        received: str(fd, "received") === "on",
+        note: optStr(fd, "note"),
+      }),
+    "入金を記録しました",
+  );
+}
+
+export async function updatePaymentStatusAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      updatePaymentStatusByOps(d, a, {
+        paymentId: str(fd, "paymentId"),
+        status: str(fd, "status") as PaymentTargetStatus,
+      }),
+    "入金の状態を更新しました",
+  );
+}
+
+export async function scheduleRewardAction(fd: FormData) {
+  const scheduledFor = jstDate(fd, "scheduledFor");
+  await run(
+    fd,
+    async (d, a) =>
+      scheduledFor
+        ? scheduleRewardByOps(d, a, { rewardId: str(fd, "rewardId"), scheduledFor })
+        : { ok: false, error: "invalid_input", message: "支払予定日を入力してください" },
+    "支払予定日を設定しました",
+  );
+}
+
+export async function markRewardPaidAction(fd: FormData) {
+  await run(fd, (d, a) => markRewardPaidByOps(d, a, str(fd, "rewardId")), "支払済みにしました");
+}
+
+export async function adjustRewardAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      adjustRewardByOps(d, a, {
+        rewardId: str(fd, "rewardId"),
+        delta: optInt(fd, "delta") ?? Number.NaN,
+        reason: str(fd, "reason"),
+      }),
+    "報酬を調整しました（元の記録は残ります）",
+  );
+}
+
+export async function cancelRewardAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => cancelRewardByOps(d, a, { rewardId: str(fd, "rewardId"), reason: str(fd, "reason") }),
+    "報酬を取り消しました（元の記録は残ります）",
+  );
+}
+
+// 5. ドメイン希望
+
+export async function confirmDomainPreferenceAction(fd: FormData) {
+  await run(fd, (d, a) => confirmDomainPreferenceByOps(d, a, str(fd, "id")), "ドメイン希望を確認済みにしました");
+}
+
+// 6. 設定・利用停止
+
+export async function updateSettingAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => updateSetting(d, a, { key: str(fd, "key"), value: optInt(fd, "value") ?? Number.NaN }),
+    "設定を変更しました（操作履歴に記録しました）",
+  );
+}
+
+export async function suspendUserAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => suspendSalesUser(d, a, { userId: str(fd, "userId"), reason: str(fd, "reason") }),
+    "利用停止にしました",
+  );
+}
+
+export async function reactivateUserAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => reactivateSalesUser(d, a, { userId: str(fd, "userId"), reason: str(fd, "reason") }),
+    "利用停止を解除しました",
+  );
+}

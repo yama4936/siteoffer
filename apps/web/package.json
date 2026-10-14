@@ -11,6 +11,7 @@
   "dependencies": {
     "@siteoffer/core": "workspace:*",
     "@siteoffer/db": "workspace:*",
+    "@siteoffer/discovery": "workspace:*",
     "@siteoffer/schemas": "workspace:*",
     "drizzle-orm": "0.45.4",
     "next": "16.4.0",
