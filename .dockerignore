@@ -1,0 +1,13 @@
+.git
+.claude
+.env
+.env.*
+!.env.example
+.data
+reports
+**/node_modules
+**/.next
+**/dist
+**/.astro
+**/*.tsbuildinfo
+**/__pycache__

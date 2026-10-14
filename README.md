@@ -3,7 +3,65 @@
 企業サイトの改善機会を自動で見つけ、AIで改善案とサイトを作成し、営業パートナーが提案・契約を進めるサービス。
 契約後は運営が制作、クラウド環境の整備、公開まで担当する。
 
-このリポジトリは2026-10-14時点の要件定義・開発引き継ぎ資料。アプリ実装、OpenAI APIの実行、AWS環境の構築は未着手。
+ローカルMVPを開発中です。営業・運営画面、認証と業務処理、ワーカーとプレビュー配信を実装しています。外部API実行・AWS構築・本番公開は未実施です。
+
+## ローカルで起動する
+
+Docker Desktop（Compose v2）、Node.js 24以上、pnpm（指定版は12.11.2）が必要です。
+リポジトリのルートで実行します。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+初回は `.env` にランダムなDBパスワードを作り、PostgreSQL 17、Next.js、ワーカー、別ポートのプレビューをDockerで起動します。
+マイグレーションと開発用の利用条件・ユーザー作成が完了してからWeb画面が起動します。
+既存の `.env` は上書きしません。手動で作った場合は `.env.example` を参考に `POSTGRES_PASSWORD` を設定してください。
+通常は [ログイン画面](http://localhost:3100/login) を開きます。
+
+```sh
+pnpm dev:users        # 自分の端末で開発用メール・パスワードを表示
+pnpm dev:check        # 実DBのログイン・画面応答・役割境界を確認
+docker compose ps    # 起動状態
+docker compose logs --tail 50 web
+pnpm dev:stop        # 停止（DBデータを保持）
+```
+
+運営は `ops@example.test` でログインして `/ops`、営業は `sales@example.test` で `/sales` を開きます。
+営業の自己登録は `/register` です。仮の利用条件は開発用で、本番用の確定文面ではありません。
+起動時のDBは空で、実在企業の取り込み・評価・生成は自動実行しません。
+ワーカーは架空企業のフィクスチャ、取得済みの診断データ、モック生成器に固定しています。実Codexの認証情報やAPIキーは渡しません。
+閾値は未決の `null` のままで、診断後の自動提案生成は保留になります。
+Webは `127.0.0.1:3100`、プレビューは `127.0.0.1:3200`、DBは `127.0.0.1:54329` に限定して公開します。
+プレビューの `/` は404が正常です。有効な共有リンクからだけ成果物を閲覧できます。
+Composeのポートは `.env` の `WEB_PORT`、`PREVIEW_PORT`、`DATABASE_PORT` で変更できます。DBポート変更時は `DATABASE_URL` も合わせて変更します。
+
+DBデータはDockerの `siteoffer_postgres-data` ボリューム、開発用ログイン情報は `.data/dev-users.json` に保存します。
+`.env` と `.data/` はGit対象外です。再起動・再実行でユーザーやパスワードは変わりません。
+ワーカーの成果物はGit対象外の `reports/` に保存し、プレビュー側には読み取り専用で渡します。
+`docker compose down --volumes` はDBを削除するため、通常の停止には使わないでください。
+アプリのコンテナはソースをビルド時にコピーするため、変更の反映には再度 `pnpm dev` を実行します。
+このイメージは開発用で、企業ごとの生成コードを実行する隔離イメージとは別です。
+
+### ホスト側で画面を開発する
+
+```sh
+pnpm dev:setup
+docker compose up --detach --wait db
+pnpm db:migrate
+pnpm dev:seed
+pnpm dev:web
+```
+
+ComposeのWebが起動中なら先に `docker compose stop web` を実行します。
+ホスト側の `pnpm dev:web` はルートの `.env` を読み、`127.0.0.1:3100` で起動します。Dockerなしの場合は `pnpm dev:db` でPGliteを起動し、
+`.env` の `DATABASE_URL` を `.env.example` 内のPGlite用URLに変更してから `pnpm dev:seed` と `pnpm dev:web` を実行できます。
+PGliteは開発・テスト用で、実PostgreSQLの同時トランザクション検証を代替しません。
+
+```sh
+pnpm check           # 型検査・Lint・自動テスト（外部APIはモック）
+```
 
 ## 読む順番
 

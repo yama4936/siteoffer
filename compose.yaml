@@ -1,0 +1,94 @@
+name: siteoffer
+
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: siteoffer
+      POSTGRES_USER: siteoffer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?pnpm dev:setup を実行してください}
+    ports:
+      - "127.0.0.1:${DATABASE_PORT:-54329}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siteoffer -d siteoffer"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  init:
+    build: .
+    image: siteoffer-local
+    environment:
+      DATABASE_URL: postgres://siteoffer:${POSTGRES_PASSWORD}@db:5432/siteoffer
+    command: ["sh", "-c", "pnpm db:migrate && pnpm dev:seed"]
+    volumes:
+      - ./.data:/app/.data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    image: siteoffer-local
+    build: .
+    init: true
+    environment:
+      DATABASE_URL: postgres://siteoffer:${POSTGRES_PASSWORD}@db:5432/siteoffer
+      NEXT_TELEMETRY_DISABLED: "1"
+      PREVIEW_ORIGIN: http://localhost:${PREVIEW_PORT:-3200}
+    command: ["pnpm", "--filter", "@siteoffer/web", "exec", "next", "dev", "--hostname", "0.0.0.0", "--port", "3100"]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3100}:3100"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 30s
+
+  worker:
+    image: siteoffer-local
+    init: true
+    stop_grace_period: 70s
+    environment:
+      DATABASE_URL: postgres://siteoffer:${POSTGRES_PASSWORD}@db:5432/siteoffer
+      SITEOFFER_GENERATOR: mock
+      SITEOFFER_DISCOVERY_PROVIDERS: fixture
+      SITEOFFER_AUDIT_COLLECTOR: fixture
+      SITEOFFER_DEMO_ARTIFACT_DIR: /app/reports/app/demos
+    command: ["pnpm", "--filter", "@siteoffer/worker", "start"]
+    volumes:
+      - ./reports:/app/reports
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  preview:
+    image: siteoffer-local
+    init: true
+    environment:
+      DATABASE_URL: postgres://siteoffer:${POSTGRES_PASSWORD}@db:5432/siteoffer
+      PREVIEW_HOST: 0.0.0.0
+      PREVIEW_PORT: "3200"
+      PREVIEW_ARTIFACT_BASE_DIR: /app/reports/app/demos
+      PREVIEW_FRAME_ANCESTORS: http://localhost:${WEB_PORT:-3100} http://127.0.0.1:${WEB_PORT:-3100}
+    command: ["pnpm", "--filter", "@siteoffer/preview", "start"]
+    ports:
+      - "127.0.0.1:${PREVIEW_PORT:-3200}:3200"
+    volumes:
+      - ./reports:/app/reports:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3200/').then(r=>process.exit(r.status===404?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
