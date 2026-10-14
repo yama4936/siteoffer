@@ -43,9 +43,13 @@ export const generationJobs = pgTable(
     promptVersion: text("prompt_version").notNull(),
     inputRef: jsonb("input_ref"),
     outputRef: jsonb("output_ref"),
+    /** 検証済みの出力（文章・サイト構成のJSON）。検証に通らなかった出力は入れない */
+    output: jsonb("output"),
     threadId: text("thread_id"),
     requestId: text("request_id"),
     usage: jsonb("usage"),
+    /** 失敗の分類（timeout / sandbox_error / invalid_json / schema_violation / fact_violation 等） */
+    errorCode: text("error_code"),
     error: text("error"),
     startedAt: ts("started_at"),
     finishedAt: ts("finished_at"),

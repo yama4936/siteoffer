@@ -9,9 +9,11 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@openai/codex-sdk": "0.162.1",
     "@siteoffer/core": "workspace:*",
     "@siteoffer/db": "workspace:*",
     "@siteoffer/schemas": "workspace:*",
-    "drizzle-orm": "0.45.4"
+    "drizzle-orm": "0.45.4",
+    "zod": "4.6.7"
   }
 }

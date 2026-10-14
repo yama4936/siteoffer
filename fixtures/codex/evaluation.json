@@ -1,0 +1,262 @@
+{
+  "schema_version": "0.1",
+  "rubric_version": "0.1",
+  "status": "evaluated",
+  "fatal_reason": null,
+  "target_url": "https://aoba-koumuten.example/",
+  "final_url": "https://aoba-koumuten.example/",
+  "collected_at": "2026-10-14T10:00:00+09:00",
+  "evaluated_at": "2026-10-14T10:20:00+09:00",
+  "evaluator": { "skill": "site-evaluation", "model": "不明" },
+  "conditions": { "pages": ["top", "company"], "screenshot": false, "pagespeed": "not run" },
+  "company": {
+    "name": "株式会社あおば工務店",
+    "name_source": "トップページの表記",
+    "location": "サンプル県あおば市中央1-2-3",
+    "location_source": "https://aoba-koumuten.example/company/",
+    "industry_guess": "住宅リフォーム"
+  },
+  "site_context": {
+    "purpose_guess": "地域の個人客からのリフォーム相談の獲得",
+    "target_guess": "あおば市内の戸建て所有者",
+    "primary_conversion_guess": "電話",
+    "basis": "トップの説明文が地域名と個人向けの工事を挙げていること",
+    "is_inference": true
+  },
+  "items": [
+    {
+      "id": "A1",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "問い合わせへのリンクはフッターのみ",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "フッター内リンク「お問い合わせ」"
+        }
+      ],
+      "reason": "最下部までスクロールしないと連絡手段に辿り着けないため",
+      "inference": false,
+      "improvement_hint": "ヘッダーとファーストビューに電話ボタンを常設"
+    },
+    {
+      "id": "A2",
+      "status": "unevaluable",
+      "reason": "スクリーンショットを取得していないため、スマホでの操作性を確認できない"
+    },
+    {
+      "id": "A3",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "行動を促す文言がない",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "本文に「お問い合わせ」以外の誘導文がない"
+        }
+      ],
+      "reason": "相談の次の一歩が示されていないため",
+      "inference": false,
+      "improvement_hint": "「無料で相談する」などの文言をサービス説明の直後に置く"
+    },
+    { "id": "A4", "status": "not_applicable", "reason": "フォームがなく、電話での連絡が主のため" },
+    {
+      "id": "B1",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        { "fact": "h1 見出しがない", "url": "https://aoba-koumuten.example/", "evidence": "collected の h1 が空" }
+      ],
+      "reason": "冒頭で何の会社か伝わりにくいため",
+      "inference": false,
+      "improvement_hint": "地域と事業を一文で示す見出しを置く"
+    },
+    {
+      "id": "B2",
+      "status": "scored",
+      "level": 2,
+      "observations": [
+        {
+          "fact": "サービスが3種類に分けて記載されている",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "本文「住宅リフォーム・水まわり工事・外壁塗装」"
+        }
+      ],
+      "reason": "扱う工事の種類は分かるが、内容の説明が短いため",
+      "inference": false,
+      "improvement_hint": "サービスごとに対応範囲を説明する"
+    },
+    {
+      "id": "B3",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "工事の流れやよくある質問のページがない",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "取得したページ一覧"
+        }
+      ],
+      "reason": "依頼前の判断材料が少ないため",
+      "inference": false,
+      "improvement_hint": "依頼の流れを掲載する"
+    },
+    {
+      "id": "C1",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        {
+          "fact": "会社概要に所在地・代表電話が掲載されている",
+          "url": "https://aoba-koumuten.example/company/",
+          "evidence": "会社概要の表"
+        }
+      ],
+      "reason": "基本的な会社情報が揃っているため",
+      "inference": false,
+      "improvement_hint": null
+    },
+    {
+      "id": "C2",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        { "fact": "施工事例のページがない", "url": "https://aoba-koumuten.example/", "evidence": "取得したページ一覧" }
+      ],
+      "reason": "仕上がりを確認できる材料がないため",
+      "inference": false,
+      "improvement_hint": "施工事例を写真付きで掲載する"
+    },
+    {
+      "id": "C3",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "copyright 表記が2016",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "フッター「copyright 2016」"
+        }
+      ],
+      "reason": "更新されていない印象を与えるため",
+      "inference": true,
+      "improvement_hint": "お知らせ欄などで更新日を示す"
+    },
+    {
+      "id": "C4",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        {
+          "fact": "HTTPSで配信されている",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "collected の https が true"
+        }
+      ],
+      "reason": "証明書エラーがないため",
+      "inference": false,
+      "improvement_hint": null
+    },
+    {
+      "id": "D1",
+      "status": "scored",
+      "level": 0,
+      "observations": [
+        {
+          "fact": "viewport メタタグがない",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "collected の viewport が false"
+        }
+      ],
+      "reason": "スマホではパソコン用の画面が縮小表示されるため",
+      "inference": false,
+      "improvement_hint": "レスポンシブな構成にする"
+    },
+    { "id": "D2", "status": "unevaluable", "reason": "スクリーンショットを取得していないため" },
+    { "id": "E1", "status": "unevaluable", "reason": "表示速度を測定していないため" },
+    {
+      "id": "E2",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        {
+          "fact": "取得したページにエラーがない",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "取得結果の状態"
+        }
+      ],
+      "reason": "主要ページが表示できているため",
+      "inference": false,
+      "improvement_hint": null
+    },
+    {
+      "id": "F1",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "meta description がない",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "collected の meta_description が null"
+        }
+      ],
+      "reason": "検索結果での説明文を制御できないため",
+      "inference": false,
+      "improvement_hint": "地域と事業を含む説明文を設定する"
+    },
+    {
+      "id": "F2",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        { "fact": "h1 見出しがない", "url": "https://aoba-koumuten.example/", "evidence": "collected の h1 が空" }
+      ],
+      "reason": "見出しの構造が分かりにくいため",
+      "inference": false,
+      "improvement_hint": "ページの主題を h1 にする"
+    },
+    {
+      "id": "F3",
+      "status": "scored",
+      "level": 3,
+      "observations": [
+        {
+          "fact": "noindex の指定がない",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "取得したHTMLのmeta要素"
+        }
+      ],
+      "reason": "検索エンジンに登録できる状態のため",
+      "inference": false,
+      "improvement_hint": null
+    },
+    { "id": "F4", "status": "unevaluable", "reason": "構造化データの取得結果がないため" },
+    {
+      "id": "G1",
+      "status": "scored",
+      "level": 1,
+      "observations": [
+        {
+          "fact": "代替テキストのない画像が多い",
+          "url": "https://aoba-koumuten.example/",
+          "evidence": "collected の images_without_alt"
+        }
+      ],
+      "reason": "画像の内容が読み上げで伝わらないため",
+      "inference": false,
+      "improvement_hint": "画像に代替テキストを設定する"
+    },
+    { "id": "G2", "status": "unevaluable", "reason": "言語指定の取得結果がないため" },
+    { "id": "G3", "status": "unevaluable", "reason": "描画結果がなく、目視で確認できないため" }
+  ],
+  "critical_flags": [{ "id": "CF-NOT-MOBILE", "item": "D1", "fact": "viewport メタタグなし" }],
+  "sales_notes": {
+    "product_fit": "1ページサイトで改善可能",
+    "proposal_ease": "サービスが明確で、デモの構成を作りやすい",
+    "web_dependency_guess": "高（推測：地域の個人客はWeb検索で業者を探す傾向）",
+    "existing_vendor": "不明",
+    "recent_renewal_signs": "なし。copyright 2016",
+    "budget_decision_maker": "不明"
+  },
+  "summary": {}
+}

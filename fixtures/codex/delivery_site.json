@@ -1,0 +1,36 @@
+{
+  "companyName": "株式会社あおば工務店",
+  "catchphrase": "あおば市の住まいのことなら、あおば工務店へ。",
+  "lead": "住宅リフォーム、水まわり工事、外壁塗装まで、住まいの困りごとにお応えします。",
+  "services": [
+    {
+      "name": "住宅リフォーム",
+      "description": "内装の張り替えから間取りの変更まで、暮らしに合わせた改修をご提案します。"
+    },
+    { "name": "水まわり工事", "description": "キッチン・浴室・トイレの交換や修理を承ります。" },
+    { "name": "外壁塗装", "description": "外壁の状態を確認し、塗り替えの時期と方法をご案内します。" }
+  ],
+  "companyInfo": {
+    "address": "サンプル県あおば市中央1-2-3",
+    "representative": "代表取締役 青葉 太郎",
+    "established": "1998年4月",
+    "businessHours": "9:00〜18:00（日曜定休）",
+    "licenses": [{ "name": "建設業許可 サンプル県知事許可（般-10）第00000号", "factRef": "license.construction" }]
+  },
+  "achievements": [
+    { "title": "施工実績", "description": "年間120件（2025年度、社内集計）", "factRef": "achievement.yearly" }
+  ],
+  "contact": {
+    "phone": "000-111-2222",
+    "email": null,
+    "address": "サンプル県あおば市中央1-2-3",
+    "note": "営業時間内にお電話ください。"
+  },
+  "colors": {
+    "primary": "#2F6B3F",
+    "secondary": "#DDE5B6",
+    "accent": "#C8553D",
+    "background": "#FFFFFF",
+    "text": "#1F2933"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "question": "費用はいくらかかりますか。",
+      "answer": "料金は内容によって変わるため、担当から改めてご案内します。",
+      "category": "price",
+      "factRefs": []
+    },
+    {
+      "question": "どこまで作ってもらえますか。",
+      "answer": "企業向けの1ページのサイトの制作と公開までが対象です。予約や決済の機能は含みません。",
+      "category": "scope",
+      "factRefs": []
+    },
+    {
+      "question": "今のドメインはそのまま使えますか。",
+      "answer": "継続してお使いになりたいか、移管や新しい取得をご希望かを伺い、担当に引き継ぎます。手続きは担当から改めてご案内します。",
+      "category": "domain",
+      "factRefs": []
+    },
+    {
+      "question": "見本に載っている会社の情報はどこから取りましたか。",
+      "answer": "御社のホームページに掲載されている会社名・所在地・電話番号をもとにしています。公開前に必ず内容をご確認いただきます。",
+      "category": "trust",
+      "factRefs": ["company.name", "company.address", "company.phone"]
+    }
+  ]
+}
