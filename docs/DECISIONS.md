@@ -664,8 +664,12 @@ SDK名とモデル名は別。生成にはCodex SDKを使うとユーザーが�
   apps/web の /sales/companies/[companyId]/proposal・site/[[...path]]（lib/sales/improvement.ts、簡易Markdown表示、権限判定は findReadableCompany に切り出し）を作った。
   demo-promote-imported に --max-score を足し、デモのDBで70点超の24社の営業可能を取り下げた（残りは実在7社＋架空3社）
 - 検証：web の型検査・Biome成功、追加テスト20件成功。apps/web 全体のテストは並列2ではメモリ上限で落ち、並列1で2回に分けて70件成功（subagentの報告）。check.py は一時サイトで動作確認。
-  ブラウザでの表示は未確認。7社の提案書・改善後サイトの生成は1回目が読み込みの権限拒否で全件停止し、2〜3社ずつ再実行中
-- 未完了：7社の生成と結果の確認。改善後サイトの別オリジン配信。decide.py に「以下」の指定がない。collected.json に生のHTML・CSSがなく配色はスクリーンショット頼み
+  7社の生成は1回目（ワークフロー）が読み込みの権限拒否で全件停止し、通常のsubagentで2〜3社ずつ再実行した。7社とも対象内（サーバー処理が中心のサイトはなかった）で、
+  提案書（decision=create、proposal.json検証済み）と改善後サイト（1〜6ページ）を reports/sites/<domain>/2026-10-14/ に作成、check.py は全社エラー0・警告0。
+  デモのDBで営業ユーザーとして配信関数を呼び、7社とも index.html を返し、..%2f の外部参照は404、未ログインは /login へ移ることを確認。ブラウザでの画面確認は一部の社のみ（subagentのheadless Chrome、file://）
+- 未完了：各社の【要確認】（18〜26種類）は企業・運営の確認待ち。改善後サイトの別オリジン配信。subagentが挙げたスキルの不備は未修正：
+  collected.json に評価時の追加取得ページ・外部リンクのhref・生のHTML/CSSが残らない、本文3000字で切れる、ページ分類（role）と電話番号抽出の誤り、
+  decide.py に「以下」の指定がない、proposal.json に閾値の上書きを記録する欄がない、業種別の表現規制（医療広告など）の指針がない
 
 ### 作業AE：診断の項目を「改善が必要」と「問題なし」に分けて折りたたむ（部品の追加）
 
