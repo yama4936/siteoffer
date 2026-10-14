@@ -6,9 +6,11 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@siteoffer/astro-site": "workspace:*",
     "@siteoffer/audit": "workspace:*",
     "@siteoffer/core": "workspace:*",
     "@siteoffer/db": "workspace:*",
@@ -17,9 +19,11 @@
     "@siteoffer/schemas": "workspace:*",
     "drizzle-orm": "0.45.4",
     "pg": "8.23.1",
-    "pg-boss": "12.38.0"
+    "pg-boss": "12.38.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@types/pg": "^8.23.1"
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15"
   }
 }

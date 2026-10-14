@@ -422,8 +422,8 @@ export async function getCompanyDetail(
           versionId: pv.id,
           version: pv.version,
           demoUrl: pv.demoArtifactDir ? demoPreviewUrl(pv.id) : null,
-          proposalText: pickContent(pv.content, ["proposalText", "proposal_text"], proposalTextSchema),
-          callScript: pickContent(pv.content, ["callScript", "call_script"], callScriptSchema),
+          proposalText: pickContent(pv.content, ["proposalText"], proposalTextSchema),
+          callScript: pickContent(pv.content, ["callScript"], callScriptSchema),
         }
       : null,
     terms: terms.ok ? terms.value : [],
