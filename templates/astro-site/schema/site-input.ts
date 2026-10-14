@@ -1,11 +1,11 @@
 /**
  * 生成サイト（1ページの企業サイト）の入力JSON（site.json）の形。
  *
- * - テンプレートはこの入力だけを読んでページを組み立てる。内容・構成（セクションの順序と表示可否）・色を差し替える。
+ * - テンプレートはこの入力だけを読んでページを組み立てる。内容・構成・アートディレクションを差し替える。
  * - サイト構成の正はこのスキーマ。生成（T5）の出力スキーマ（demo_site / delivery_site）は
  *   schema/site-generation.ts で同じ形から作り、packages/schemas/src/generation/ はそれを再利用する。
- * - 文字列には要確認マーカー `{{要確認:説明}}` を入れてよい（未確認の事実を仮置きする印。lib/markers.ts）。
- *   demoでは目立つ表示で残し、deliveryではビルドを失敗させる。
+ * - 文字列には要確認マーカー `{{要確認:説明}}` を入れてよい（運営が手で直した入力の確認印。lib/markers.ts）。
+ *   demoでは営業用画面から省きビルド結果の markers に残す。deliveryではビルドを失敗させる。
  */
 import { z } from "zod";
 
@@ -19,6 +19,14 @@ export type SiteMode = z.infer<typeof SiteModeSchema>;
 
 /** 色。`#rrggbb` の16進のみ（CSS注入を避けるため任意の文字列は受け付けない）。 */
 export const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "色は #rrggbb の形式で指定する");
+
+/** 業種・ブランドに合わせて選ぶ視覚表現。固定テンプレート1種類に見えないための最小限の設計軸。 */
+export const VisualStyleSchema = z.enum(["professional", "warm", "editorial", "bold"]);
+export type VisualStyle = z.infer<typeof VisualStyleSchema>;
+export const HeroLayoutSchema = z.enum(["split", "centered", "statement"]);
+export type HeroLayout = z.infer<typeof HeroLayoutSchema>;
+export const SectionRhythmSchema = z.enum(["alternating", "continuous"]);
+export type SectionRhythm = z.infer<typeof SectionRhythmSchema>;
 
 /**
  * 画像。src は入力JSONのあるディレクトリからの相対パス（ビルド時に出力の /images/ へコピーする）。
@@ -81,10 +89,13 @@ export const SiteInputSchema = z
       /** meta description。 */
       description: z.string().min(1),
     }),
-    /** 色。brand＝ヘッダー・見出し帯などの基調色、accent＝ボタン・強調の色。文字色はコントラストから自動で決める。 */
+    /** 配色と視覚方針。色だけでなく、業種に合うスタイルとページのリズムを明示する。 */
     theme: z.object({
       brand: HexColorSchema,
       accent: HexColorSchema,
+      style: VisualStyleSchema.default("professional"),
+      heroLayout: HeroLayoutSchema.default("split"),
+      sectionRhythm: SectionRhythmSchema.default("alternating"),
     }),
     /** ファーストビュー。会社名・キャッチ・主な問い合わせ手段（contact.primary）のボタンを出す。 */
     hero: z.object({

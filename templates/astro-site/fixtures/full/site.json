@@ -9,7 +9,13 @@
   "meta": {
     "description": "架空の工務店「ダミー住環境工房」のサイト（テンプレート確認用の例）。住まいの修繕・リフォームをご案内します。"
   },
-  "theme": { "brand": "#2e6b4f", "accent": "#e08a3c" },
+  "theme": {
+    "brand": "#2e6b4f",
+    "accent": "#e08a3c",
+    "style": "warm",
+    "heroLayout": "split",
+    "sectionRhythm": "alternating"
+  },
   "hero": {
     "catchcopy": "暮らしの「困った」を、地域の職人が素早く直します。",
     "lead": "水まわり・外壁・内装の修繕から小さなリフォームまで。まずはお電話でご相談ください。",

@@ -21,7 +21,7 @@ export function markerRegex(): RegExp {
   return /\{\{\s*要確認\s*[:：]?([^}]*)\}\}/g;
 }
 
-/** 出力HTMLに残ったマーカーの痕跡（生のマーカーまたはテンプレートの表示要素）。 */
+/** 旧出力HTMLに残ったマーカーの痕跡。新しいデモは営業用画面へ表示しない。 */
 export const MARKER_ATTRIBUTE = "data-needs-confirm";
 
 export interface MarkerHit {

@@ -5,7 +5,13 @@
     "title": null,
     "description": "あおば市の株式会社あおば工務店。住宅リフォーム、水まわり工事、外壁塗装まで、住まいの困りごとにお応えします。"
   },
-  "theme": { "brand": "#2F6B3F", "accent": "#C8553D" },
+  "theme": {
+    "brand": "#2F6B3F",
+    "accent": "#C8553D",
+    "style": "warm",
+    "heroLayout": "split",
+    "sectionRhythm": "alternating"
+  },
   "hero": {
     "catchcopy": "あおば市の住まいのことなら、あおば工務店へ。",
     "lead": "住宅リフォーム、水まわり工事、外壁塗装まで、住まいの困りごとにお応えします。"

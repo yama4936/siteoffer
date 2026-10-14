@@ -11,7 +11,8 @@
   - h1 が1つか、見出し階層の飛び
   - form 要素（サーバー処理を前提にしていないか）
   - 非公式の改善案である旨の表示
-  - 【要確認：…】の件数と箇所、rebuild.json との突き合わせ
+  - 営業用HTMLへの内部確認注記の露出（1件でもエラー）
+  - design-brief.json / quality-review.json / rebuild.json
 
 使い方:
   python3 check.py reports/sites/<domain>/<date>/site
@@ -26,7 +27,7 @@ import sys
 import urllib.parse
 from html.parser import HTMLParser
 
-TBC_RE = re.compile(r"【要確認[：:][^】]*】|【要確認】")
+TBC_RE = re.compile(r"【要確認[：:][^】]*】|【要確認】|要確認[：:]|\b(?:TBD|TODO)\b", re.I)
 DEMO_WORDS = ("非公式",)
 TRACKING_RE = re.compile(
     r"googletagmanager|google-analytics|gtag\(|\bga\(|fbq\(|clarity\.ms|_satellite|hotjar|ptengine", re.I)
@@ -235,8 +236,6 @@ class Checker:
     def scan_tbc(self, f, raw):
         for i, ln in enumerate(raw.splitlines(), 1):
             for m in TBC_RE.finditer(ln):
-                if ln[m.end():].startswith("を含み"):
-                    continue  # フッターの非公式表示の文言は確認事項に数えない
                 self.tbc.append({"file": f, "line": i, "text": m.group(0)})
 
     def check_html(self, path):
@@ -311,7 +310,6 @@ class Checker:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
         self.check_css_text(f, 1, text, path)
-        self.scan_tbc(f, text)
 
     def check_js(self, path):
         f = self.rel(path)
@@ -345,11 +343,84 @@ class Checker:
         for name in self.pages:
             if name not in listed_pages:
                 self.warn(f, None, "rebuild_json", f"pages に載っていないページ：{name}")
-        listed = " ".join(json.dumps(x, ensure_ascii=False) for x in rb.get("needs_confirmation", []) or [])
-        missing = sorted({t["text"] for t in self.tbc if t["file"].endswith((".html", ".htm")) and t["text"] not in listed})
-        for t in missing:
-            self.warn(f, None, "needs_confirmation", f"サイト内の {t} が needs_confirmation にない")
+        check = rb.get("check") if isinstance(rb.get("check"), dict) else {}
+        if "quality_status" not in check or "quality_score" not in check:
+            self.warn(f, None, "rebuild_json", "check に quality_status / quality_score がない")
         return rb
+
+    def read_json(self, name):
+        path = os.path.join(self.root, name)
+        if not os.path.isfile(path):
+            self.err(name, None, "quality_artifact", f"{name} がない")
+            return None
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            self.err(name, None, "quality_artifact", f"JSON として読めない：{e}")
+            return None
+
+    def check_quality_artifacts(self):
+        brief = self.read_json("design-brief.json")
+        if isinstance(brief, dict):
+            for key in ("audience", "primary_action", "brand_traits", "preserve", "change",
+                        "visual_direction", "content_strategy", "avoid"):
+                if key not in brief or brief[key] in (None, "", []):
+                    self.err("design-brief.json", None, "design_brief", f"{key} がない、または空")
+            vd = brief.get("visual_direction")
+            if isinstance(vd, dict):
+                for key in ("style", "hero_layout", "section_rhythm", "signature_motif", "image_strategy"):
+                    if not vd.get(key):
+                        self.err("design-brief.json", None, "design_brief", f"visual_direction.{key} がない")
+            else:
+                self.err("design-brief.json", None, "design_brief", "visual_direction がオブジェクトでない")
+
+        review = self.read_json("quality-review.json")
+        if not isinstance(review, dict):
+            return
+        status = review.get("status")
+        if status not in ("pass", "needs_revision", "not_run"):
+            self.err("quality-review.json", None, "quality_review", "status は pass / needs_revision / not_run")
+            return
+        if status == "not_run":
+            self.warn("quality-review.json", None, "quality_review", "実画面の品質レビューが未実施")
+            return
+        if status == "needs_revision":
+            self.err("quality-review.json", None, "quality_review", "品質レビューに未解決の修正事項がある")
+        scores = review.get("scores")
+        expected = {
+            "brand_specificity": 20, "visual_hierarchy": 20, "information_design": 20,
+            "content_trust": 15, "mobile": 15, "polish": 10,
+        }
+        if not isinstance(scores, dict):
+            self.err("quality-review.json", None, "quality_review", "scores がない")
+            return
+        values = []
+        for key, maximum in expected.items():
+            value = scores.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0 or value > maximum:
+                self.err("quality-review.json", None, "quality_review", f"scores.{key} は0〜{maximum}")
+            else:
+                values.append(value)
+        total = review.get("total")
+        if len(values) == len(expected) and total != sum(values):
+            self.err("quality-review.json", None, "quality_review", "total が scores の合計と一致しない")
+        fatal = review.get("fatal_issues")
+        if not isinstance(fatal, list):
+            self.err("quality-review.json", None, "quality_review", "fatal_issues が配列でない")
+        if status == "pass" and (not isinstance(total, (int, float)) or isinstance(total, bool) or total < 80):
+            self.err("quality-review.json", None, "quality_review", "pass には80点以上が必要")
+        if status == "pass" and fatal:
+            self.err("quality-review.json", None, "quality_review", "致命項目が残っているため pass にできない")
+        viewports = review.get("viewports")
+        if not isinstance(viewports, list) or len(viewports) < 2:
+            self.err("quality-review.json", None, "quality_review", "PC・スマホのviewportsが必要")
+        else:
+            widths = {v.get("width") for v in viewports if isinstance(v, dict)}
+            if not any(isinstance(w, (int, float)) and w >= 1000 for w in widths):
+                self.err("quality-review.json", None, "quality_review", "PC幅のレビューがない")
+            if not any(isinstance(w, (int, float)) and w <= 430 for w in widths):
+                self.err("quality-review.json", None, "quality_review", "スマホ幅のレビューがない")
 
     def run(self):
         html, css, js = [], [], []
@@ -376,6 +447,10 @@ class Checker:
             page = self.pages.get(target)
             if page is not None and urllib.parse.unquote(frag) not in page.ids:
                 self.warn(f, line, "anchor", f"ページ内リンク先 #{frag} が {target} にない")
+        for item in self.tbc:
+            self.err(item["file"], item["line"], "internal_annotation",
+                     f"営業用HTMLに内部確認注記を表示しない：{item['text']}")
+        self.check_quality_artifacts()
         self.check_rebuild_json()
 
         by_text = {}

@@ -29,7 +29,7 @@ collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの�
 | 強み | evaluation の items のうちレベル3、evaluation.md の「強み」 |
 | 施策 | `proposal.json` の `actions[]` と `issues[]` |
 
-`text_excerpt` は3000字で切れている。切れた先の内容を補わない。必要な情報が途中で切れていたら【要確認】にする。
+`text_excerpt` は3000字で切れている。切れた先の内容を補わない。必要な情報が途中で切れていたら、その内容をHTMLに出さず rebuild.json の確認事項にする。
 
 ## 2. デザインの引き継ぎ
 
@@ -45,7 +45,7 @@ collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの�
 
 ### 変えるもの
 
-提案書の施策で直すと決めた部分だけ。施策にない変更（好みでの全面的なデザイン変更）はしない。
+提案書の施策に加え、可読性、視覚階層、余白、レスポンシブ、デザインの一貫性を成立させるためのシステム変更は行ってよい。元サイトの低品質な装飾や窮屈な構成まで引き継がない。全面的な別ブランド化はせず、何を残し何を変えたかを design-brief.json と rebuild.json に残す。
 
 ### 色の調整
 
@@ -75,7 +75,7 @@ a,b=sorted([L(sys.argv[1]),L(sys.argv[2])]); print(round((b+0.05)/(a+0.05),2))
 | --- | --- | --- |
 | 単独ページで残す | 本文が十分あり（目安：text_length 800字以上）、元サイトでもメニュー項目 | 会社概要、サービス、施工事例 |
 | トップのセクションに統合 | 本文が薄い、トップと内容が重なる、提案書で統合を勧めている | 「ご挨拶」だけのページ、料金が数行 |
-| 新しく足す | 提案書の施策が求めていて、元サイトにない | 「ご依頼の流れ」「よくある質問」（中身は【要確認】が多くなる） |
+| 新しく足す | 提案書の施策が求め、確認済みの材料だけで内容を構成できる | 「ご依頼の流れ」「よくある質問」。未確認の回答を並べるだけなら作らない |
 | 作らない | 取得していない、サーバー処理が必要、内容がない | ログイン、検索結果、未取得のブログ記事 |
 
 3. 提案書が1ページサイトを前提にしている施策（`scope_note` に「1ページサイト」等）なら、index.html にセクションをまとめ、ページ内リンク（`#service` 等）でメニューを作る。
@@ -94,6 +94,8 @@ $OUT/site/
   about.html …（必要なページだけ）
   assets/style.css
   assets/main.js        … 必要なときだけ
+  design-brief.json
+  quality-review.json
   rebuild.json
 ```
 
@@ -119,7 +121,7 @@ $OUT/site/
 - `<meta name="description">`：80〜120字目安で、そのページの内容を要約。
 - `<meta name="robots" content="noindex, nofollow">`：非公式デモを検索に出さない。
 - h1 はページの主題を表すテキスト1つ。セクションは h2、その中は h3。階層を飛ばさない。
-- 画像（プレースホルダー）に代替テキスト。装飾だけの要素は `aria-hidden="true"`。
+- 画像に代替テキスト。装飾だけの要素は `aria-hidden="true"`。
 - 本文 16px 以上、行間 1.7 程度、ボタンは高さ48px以上・間隔8px以上（D2）。
 - 本文のコントラスト 4.5:1 以上（G3）。
 - `:focus-visible` で見えるフォーカス枠（outline を消さない）。
@@ -128,29 +130,22 @@ $OUT/site/
 ### 非公式の明記
 
 - 全ページの最上部に帯：「これは SiteOffer が作成した非公式の改善案（デモ）です。<社名>の公式サイトではありません。」
-- フッター：「SiteOfferによる非公式の改善案（デモ）です。掲載内容は【要確認】を含みます」
+- フッター：「SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません」
 - 著作権表示（© 社名）は書かない。企業の公式物に見えるため。
 
-### 事実と【要確認】
+### 事実と確認事項
 
-- 書いてよい：collected.json・evaluation.json で確認できた事実（社名・所在地・電話・業務内容の名称・見出しにある強み等）。表記は元のまま。
-- 【要確認：…】にする：受付時間・定休日・料金・「無料」・対応エリアの範囲・実績件数・資格・お客様の声・スタッフ紹介・FAQ の答え・創業年（確認できていない場合）。
-- 書き方：`<span class="tbc">【要確認：受付時間】</span>`。文中に埋めるときは「受付 【要確認：受付時間】」のように、何を確認するかが分かる名詞にする。
-- 文言案の例を置くときも数値・固有名を作らない。例：「創業【要確認：創業年】年の実績」。
-- 電話・メールが確認できないときは連絡ボタンを `contact.html` への導線にし、ボタン内に【要確認：連絡先】。
+- HTMLに書いてよいのは、collected.json・evaluation.json で確認できた事実（社名・所在地・電話・業務内容の名称・確認済みの強み等）だけ。
+- 受付時間・料金・「無料」・対応範囲・実績・資格・お客様の声・スタッフ・FAQの答え・創業年が未確認なら、HTMLの該当行・カード・セクションを省く。
+- `【要確認】`、`TBD`、ダミー値をHTMLに表示しない。確認したい内容は rebuild.json の `needs_confirmation` に、対象・関連ページ・質問を書いて残す。
+- 電話・メールが確認できないときは、存在しない連絡ボタンを作らない。確認済みの外部フォームがあればそれだけを使い、連絡手段が何もなければ問い合わせセクション自体を省く。
 
-### プレースホルダー画像
+### 画像表現
 
-```html
-<figure class="ph">
-  <div class="ph__box" role="img" aria-label="事務所の外観写真（差し替え予定）"></div>
-  <figcaption>事務所の外観写真 <span class="tbc">【要確認：元画像の利用許諾】</span></figcaption>
-</figure>
-```
-
-- 色面は主色の淡色（背景との差が分かる程度）。縦横比は元の位置に合わせる（`aspect-ratio`）。
-- 文字入りの画像（電話番号画像・見出し画像）はテキストに置き換え、プレースホルダーにしない。
-- アイコン程度の装飾画像は CSS・文字で代用するか省く。
+- 許諾済みのローカル素材、特定の人物・施設・実績を装わない生成画像、CSS・インラインSVGの抽象表現、画像なしのいずれかを design-brief.json で選ぶ。
+- 営業用ファーストビューに「画像予定地」「差し替え予定」などのプレースホルダーを置かない。
+- 文字入りの元画像（電話番号画像・見出し画像）は、確認済み内容だけをHTMLテキストに置き換える。
+- 元画像の参照URLと許諾確認の必要性は rebuild.json に記録する。
 
 ## 5. セクション別の改善パターン
 
@@ -160,21 +155,21 @@ $OUT/site/
 
 - **ヘッダーの連絡ボタン**（A1）：右上に「電話する」（`tel:`）と「お問い合わせ」（contact.html か外部フォーム）。PC では電話番号を文字でも表示。
 - **スマホ下部の固定バー**（A1・A2）：幅768px未満で画面下に固定。左「電話」、右「お問い合わせ」。高さ56px以上。`body` の下余白で本文が隠れないようにする。電話番号が確認できないときは電話ボタンを置かない。
-- **受付時間を番号の直下に**（A2）：確認できたものだけ。なければ【要確認：受付時間】。
-- **行動が分かる文言**（A3）：「まずは電話で相談」「見積もりを依頼する」。「無料」は確認できたときだけ。未確認なら「（相談無料【要確認：相談料の有無】）」。
-- **各セクション末尾の導線**（A3）：サービス・実績・料金の後に同じボタン。
+- **受付時間を番号の直下に**（A2）：確認できたものだけ。未確認なら表示しない。
+- **行動が分かる文言**（A3）：「まずは電話で相談」「見積もりを依頼する」。「無料」は確認できたときだけ。
+- **各セクション末尾の導線**（A3）：判断に必要な説明を読んだ直後など、意味のある箇所に置く。同じボタンを段落ごとに反復しない。
 - **フォームの置き換え**（A4）：元のフォームの項目を表示用に箇条書きで示し（「お名前・ご連絡先・ご相談内容をお伝えください」）、`mailto:` か元の外部フォームURLへのリンク。自社サーバーのフォームはリンクしない（送信先が元サイトの処理になるため）。
 
 ### B. 情報の明確さ
 
-- **ファーストビュー**（B1）：h1 を「業種＋地域＋提供価値」の1文に。地域・業種は確認できた表記。サブコピーに強み1行（確認できたもの、なければ【要確認】）。直下に連絡ボタン。
-- **サービスのカード**（B2）：サービスごとに「対象／内容／範囲／目安」。元サイトの業務名を使い、内容は元の本文を要約。目安（期間・料金）は【要確認】が基本。
-- **ご依頼の流れ・FAQ**（B3）：3〜5ステップ。手順の中身は元サイトにあればそれを、なければ一般的な段取りを「例」と明示して【要確認】を付ける。FAQ の答えは作らず、質問だけ置いて答えを【要確認】にしてもよい。
+- **ファーストビュー**（B1）：h1 を「業種＋地域＋提供価値」の1文に。確認済みの強みだけをサブコピーに使い、主要な連絡手段があれば直下に置く。プレースホルダー画像は置かない。
+- **サービス表現**（B2）：元サイトの業務名と本文を要約する。すべてを同じカードにせず、項目数と関係に応じてリスト、左右分割、段差のあるグリッド等を選ぶ。未確認の期間・料金欄は作らない。
+- **ご依頼の流れ・FAQ**（B3）：確認済みの手順・回答がある場合だけ作る。一般論を企業の正式な流れとして表示しない。
 
 ### C. 信頼性
 
-- **会社概要の表**（C1）：`<table>` で正式名称・所在地・代表者・設立・事業内容・許認可・連絡先。確認できない行は【要確認】。地図は外部地図サービスへのリンク（埋め込まない）。
-- **実績**（C2）：元サイトにある事例の見出し・場所・内容を短く。写真はプレースホルダー。お客様の声は掲載許可が確認できないので【要確認：掲載許可】。
+- **会社概要の表**（C1）：正式名称・所在地・代表者・設立・事業内容・許認可・連絡先のうち確認できた行だけを表示。地図は外部地図サービスへのリンク（埋め込まない）。
+- **実績**（C2）：確認できた事例だけを短く掲載する。許諾済み写真がなければ、画像枠を作らず文章だけで成立させる。お客様の声は掲載許可まで確認できた場合だけ使う。
 - **更新情報**（C3）：古いお知らせ・終了したキャンペーンは載せない。日付付きのお知らせ欄は、更新の体制が確認できるまで置かないのを基本にする。
 
 ### D. スマホ対応
@@ -186,21 +181,23 @@ $OUT/site/
 ### E. 表示速度・技術品質
 
 - 静的HTML＋CSS1ファイル＋（必要なら）小さな JS1ファイル。外部読み込みなし（E1）。
-- 画像はプレースホルダーなので重くならない。納品時の画像の扱い（WebP・遅延読み込み）は rebuild.json の `notes` に書く。
+- ローカル画像を使う場合は適切な寸法・形式にし、ファーストビュー以外は遅延読み込みを検討する。納品時の画像方針は rebuild.json の `notes` に書く。
 - リンク切れなし（E2。check.py で確認）。
 
 ### F. 技術的SEO
 
 - ページごとの title・description（F1）、h1 は1つ（F2）。
-- sitemap.xml・構造化データ（F3・F4）：デモは noindex なので必須にしない。施策にあれば、LocalBusiness の JSON-LD を確認できた項目だけで `<script type="application/ld+json">` に書く（外部読み込みではない）。施策に OGP があれば `og:title`・`og:description` まで。`og:image` は画像がないので置かない。
+- sitemap.xml・構造化データ（F3・F4）：デモは noindex なので必須にしない。施策にあれば、LocalBusiness の JSON-LD を確認できた項目だけで `<script type="application/ld+json">` に書く。OGP画像は利用可能なローカル画像がある場合だけ指定する。
 - noindex はデモ専用。納品サイトでは外すことを rebuild.json の `notes` に書く。
 
 ### G. アクセシビリティ
 
 - 代替テキスト（G1）、`lang="ja"`・ボタンやリンクの文字で行き先が分かる（G2）、コントラストとフォーカス表示（G3）。
-- 色だけで情報を伝えない（【要確認】は色＋文字）。
+- 色だけで情報を伝えない。
 
-## 6. ひな形
+## 6. 最低限の構造例
+
+これはデザインのひな形ではなく、必須要素の位置関係を示すだけ。クラス名、レイアウト、セクション表現をそのまま全案件へ流用しない。design-brief.json に合わせて構成する。
 
 ### HTML（1ページ分の骨組み）
 
@@ -234,7 +231,7 @@ $OUT/site/
 </main>
 <footer class="site-footer">
   <p><社名>　<所在地>　TEL <番号></p>
-  <p class="demo-note">SiteOfferによる非公式の改善案（デモ）です。掲載内容は【要確認】を含みます</p>
+  <p class="demo-note">SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません。</p>
 </footer>
 <div class="callbar"><a href="tel:0000000000">電話する</a><a href="contact.html">お問い合わせ</a></div>
 </body>
@@ -251,8 +248,6 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
 .skip{position:absolute;left:-9999px}.skip:focus{left:8px;top:8px;background:#fff;padding:8px;z-index:100}
 .demo-band{background:#333;color:#fff;font-size:14px;padding:6px 16px;text-align:center}
 .btn{display:inline-flex;align-items:center;min-height:48px;padding:0 20px;border-radius:6px;background:var(--primary);color:#fff;text-decoration:none;font-weight:bold}
-.tbc{background:#fff3cd;color:#5c4400;padding:0 4px;border-radius:3px}
-.ph__box{aspect-ratio:4/3;background:var(--primary-weak);border-radius:6px}
 .callbar{display:none}
 @media (max-width:767px){
   .header-cta{display:none}
@@ -281,7 +276,7 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
     "scope_ref": "../rebuild-scope.json"
   },
   "company": {"name": "株式会社例", "name_source": "evaluation.json company.name_source"},
-  "demo_notice": "SiteOfferによる非公式の改善案（デモ）です。掲載内容は【要確認】を含みます",
+  "demo_notice": "SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません。",
   "pages": [
     {"file": "index.html", "title": "…", "role": "top", "source_urls": ["https://example.co.jp/"], "sections": ["ファーストビュー", "業務内容", "ご依頼の流れ", "お問い合わせ"]}
   ],
@@ -289,7 +284,7 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
   "actions_applied": [
     {"action_id": "P-01", "title": "ヘッダーとスマホ下部に連絡ボタンを常設する", "pages": ["index.html", "about.html"], "how": "ヘッダー右上に電話・問い合わせボタン、768px未満で下部固定バー"}
   ],
-  "actions_not_applied": [{"action_id": "P-07", "reason": "画像はプレースホルダーのため対象外。納品時に対応"}],
+  "actions_not_applied": [{"action_id": "P-07", "reason": "企業固有画像の利用許諾が未確認のため、抽象表現で構成"}],
   "inherited": {
     "colors": [{"role": "primary", "value": "#1a4c8b", "source": "screenshot-desktop.png ヘッダー背景", "approximate": true, "adjusted": null}],
     "logo": {"treatment": "text", "text": "株式会社例", "source": "evaluation.json company.name", "note": "元ロゴ画像は利用許諾未確認のため使わない"},
@@ -298,16 +293,16 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
     "tone": "白地に紺、写真少なめの堅い印象"
   },
   "images": [
-    {"page": "index.html", "label": "事務所の外観写真", "original_src": "https://example.co.jp/img/main.jpg", "status": "【要確認：元画像の利用許諾】"}
+    {"page": "index.html", "label": "元サイトの事務所外観写真", "original_src": "https://example.co.jp/img/main.jpg", "treatment": "HTMLでは使わず抽象表現に変更", "needs_permission": true}
   ],
   "excluded_features": ["問い合わせフォームの送信（mailto: リンクに置き換え）"],
   "needs_confirmation": [
-    {"text": "【要確認：受付時間】", "pages": ["index.html", "contact.html"], "ask": "電話の受付時間・定休日"}
+    {"subject": "受付時間", "related_pages": ["index.html", "contact.html"], "ask": "電話の受付時間・定休日。確認前はHTMLに表示しない"}
   ],
-  "check": {"ok": true, "errors": 0, "warnings": 1, "needs_confirmation_count": 6, "notes": ["…"]},
+  "check": {"ok": true, "errors": 0, "warnings": 0, "quality_status": "pass", "quality_score": 88, "notes": ["…"]},
   "notes": ["デモ用に noindex を付けている。納品サイトでは外す"]
 }
 ```
 
 - `actions_applied[].action_id` は proposal.json の `actions[].id` と一致させる。全施策が `actions_applied` か `actions_not_applied` のどちらかに入ること。
-- `needs_confirmation` はサイト内の【要確認】を文言ごとにまとめる。同じ文言が複数ページにあれば1件にして `pages` に並べる（check.py の件数は出現回数なので、件数が一致しなくてよい。漏れがないかを見る）。フッターの非公式表示の「【要確認】を含みます」は確認事項ではないので、check.py は数えず、ここにも書かない。
+- `needs_confirmation` は営業用HTMLから省いた未確認事項を対象ごとにまとめる。関連するページと、企業へ聞く内容を書く。確認事項があること自体はデモの不合格ではなく、画面に内部注記を露出することが不合格。

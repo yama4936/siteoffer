@@ -2,8 +2,14 @@
   "schemaVersion": 1,
   "company": { "name": "株式会社ダミー精機（架空）" },
   "demo": { "recipientName": "株式会社ダミー精機" },
-  "meta": { "description": "架空の部品加工会社のサイト（テンプレート確認用の例）。要確認の項目が残っている。" },
-  "theme": { "brand": "#1f3a68", "accent": "#d94f30" },
+  "meta": { "description": "架空の部品加工会社のサイト（テンプレート確認用の例）。精密部品の加工内容をご案内します。" },
+  "theme": {
+    "brand": "#1f3a68",
+    "accent": "#d94f30",
+    "style": "bold",
+    "heroLayout": "statement",
+    "sectionRhythm": "continuous"
+  },
   "hero": {
     "catchcopy": "小ロットの精密部品を、短納期で。",
     "lead": "試作1個から量産前の数百個まで対応します。{{要確認:対応ロット数の上限}}"

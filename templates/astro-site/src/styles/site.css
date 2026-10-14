@@ -40,19 +40,21 @@ a {
 /* 非公式デモの表示（demoのみ出力） */
 .demo-notice {
   margin: 0;
-  padding: 10px 16px;
-  background: #fff3cd;
-  color: #5c4400;
-  border-bottom: 2px solid #e0a800;
-  font-size: 0.9rem;
-  font-weight: 700;
+  padding: 7px 16px;
+  background: #20242a;
+  color: #ffffff;
+  border-bottom: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
   text-align: center;
+  letter-spacing: 0.02em;
 }
 
 .demo-notice-footer {
-  border: 2px solid #e0a800;
-  border-radius: 6px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
   margin-bottom: 16px;
+  background: transparent;
 }
 
 /* 要確認マーカー（demoのみ残る） */
@@ -159,6 +161,53 @@ a {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* 会社ごとのアートディレクション。生成側は色だけでなく、この組み合わせを選ぶ。 */
+html[data-hero-layout="centered"] .hero-inner {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 840px;
+  text-align: center;
+  justify-items: center;
+}
+
+html[data-hero-layout="centered"] .contact-links {
+  justify-content: center;
+}
+
+html[data-hero-layout="centered"] .hero-media {
+  width: min(100%, 720px);
+}
+
+html[data-hero-layout="statement"] .hero {
+  background: var(--brand);
+  color: var(--brand-text);
+  padding: clamp(72px, 10vw, 128px) 0;
+}
+
+html[data-hero-layout="statement"] .hero-inner {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-hero-layout="statement"] .hero-text {
+  max-width: 900px;
+}
+
+html[data-hero-layout="statement"] .hero-company {
+  color: inherit;
+  opacity: 0.78;
+}
+
+html[data-hero-layout="statement"] .hero h1 {
+  max-width: 18em;
+  font-size: clamp(2.2rem, 6vw, 4.8rem);
+  line-height: 1.14;
+  letter-spacing: -0.035em;
+}
+
+html[data-hero-layout="statement"] .hero-img {
+  max-height: 440px;
+  object-fit: cover;
 }
 
 .btn {
@@ -289,9 +338,118 @@ a {
 }
 
 .site-footer .demo-notice {
-  color: #5c4400;
+  color: inherit;
 }
 
 .site-footer p {
   margin: 0 0 6px;
+}
+
+html[data-section-rhythm="continuous"] .section:nth-of-type(even) {
+  background: transparent;
+}
+
+/* professional：士業・医療・BtoB向け。直線的で情報の信頼感を優先する。 */
+html[data-style="professional"] .site-header {
+  border-bottom: 1px solid color-mix(in srgb, var(--brand) 72%, #ffffff);
+}
+
+html[data-style="professional"] .btn,
+html[data-style="professional"] .card,
+html[data-style="professional"] .hero-img {
+  border-radius: 3px;
+}
+
+/* warm：地域サービス・店舗向け。硬いカードの反復を避け、柔らかい面を使う。 */
+html[data-style="warm"] body {
+  background: color-mix(in srgb, var(--brand) 3%, #fffaf4);
+}
+
+html[data-style="warm"]:not([data-hero-layout="statement"]) .hero {
+  background:
+    radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--accent) 18%, transparent) 0 14%, transparent 15%),
+    color-mix(in srgb, var(--brand) 8%, #fffaf4);
+}
+
+html[data-style="warm"] .btn {
+  border-radius: 999px;
+}
+
+html[data-style="warm"] .card,
+html[data-style="warm"] .hero-img,
+html[data-style="warm"] .contact-box {
+  border-radius: 20px;
+}
+
+html[data-style="warm"] .card {
+  border-top-width: 1px;
+  box-shadow: 0 14px 40px color-mix(in srgb, var(--brand) 10%, transparent);
+}
+
+/* editorial：設計・飲食・文化系向け。余白と文字の強弱で見せる。 */
+html[data-style="editorial"] body {
+  font-family: Georgia, "Yu Mincho", "Hiragino Mincho ProN", serif;
+}
+
+html[data-style="editorial"] .site-header {
+  background: #ffffff;
+  color: var(--brand);
+  border-bottom: 1px solid #d8d8d8;
+}
+
+html[data-style="editorial"]:not([data-hero-layout="statement"]) .hero {
+  background: #f7f5f0;
+  padding: clamp(72px, 9vw, 120px) 0;
+}
+
+html[data-style="editorial"] .hero h1,
+html[data-style="editorial"] .section-title {
+  font-weight: 500;
+  letter-spacing: 0.025em;
+}
+
+html[data-style="editorial"] .section-title {
+  padding-left: 0;
+  padding-bottom: 12px;
+  border-left: 0;
+  border-bottom: 1px solid var(--brand);
+}
+
+html[data-style="editorial"] .card {
+  border: 0;
+  border-radius: 0;
+  padding: 0 0 22px;
+  border-bottom: 1px solid #d8d8d8;
+}
+
+/* bold：製造・建設など、力強さと差別化を前面に出す。 */
+html[data-style="bold"] .site-header {
+  box-shadow: inset 0 -6px 0 var(--accent);
+}
+
+html[data-style="bold"]:not([data-hero-layout="statement"]) .hero {
+  background: linear-gradient(118deg, color-mix(in srgb, var(--brand) 14%, #ffffff) 0 64%, var(--accent) 64% 100%);
+  padding: clamp(64px, 8vw, 104px) 0;
+}
+
+html[data-style="bold"] .hero h1 {
+  font-size: clamp(2rem, 5.5vw, 4rem);
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+
+html[data-style="bold"] .btn {
+  border-radius: 0;
+  box-shadow: 6px 6px 0 color-mix(in srgb, var(--brand) 70%, #000000);
+}
+
+html[data-style="bold"] .section-title {
+  border-left-width: 10px;
+  text-transform: none;
+}
+
+html[data-style="bold"] .card {
+  border-radius: 0;
+  border: 2px solid #1a1a1a;
+  border-top: 8px solid var(--accent);
 }

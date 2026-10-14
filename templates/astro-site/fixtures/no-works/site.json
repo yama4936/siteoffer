@@ -6,7 +6,13 @@
     "title": "ためし珈琲焙煎所（架空）| 自家焙煎の豆を少量ずつ",
     "description": "架空の珈琲焙煎所のサイト（テンプレート確認用の例）。実績を載せない構成。"
   },
-  "theme": { "brand": "#3b2a20", "accent": "#f2c14e" },
+  "theme": {
+    "brand": "#3b2a20",
+    "accent": "#f2c14e",
+    "style": "editorial",
+    "heroLayout": "centered",
+    "sectionRhythm": "continuous"
+  },
   "hero": {
     "catchcopy": "毎週焼きたての豆を、ご注文の分だけ。",
     "lead": "業務用・ギフト用のご相談はメールで承ります。"

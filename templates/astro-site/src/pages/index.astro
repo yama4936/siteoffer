@@ -5,6 +5,7 @@
  */
 import "../styles/site.css";
 import { loadResolvedSite } from "../../lib/load.ts";
+import { hasMarker } from "../../lib/markers.ts";
 import { demoNoticeText, textColorOn, visibleSections } from "../../lib/resolve.ts";
 import ContactLinks from "../components/ContactLinks.astro";
 import Img from "../components/Img.astro";
@@ -12,17 +13,32 @@ import T from "../components/T.astro";
 
 const { mode, input } = loadResolvedSite();
 const isDemo = mode === "demo";
-const sections = visibleSections(input);
 const notice = demoNoticeText(input);
 const title = input.meta.title ?? `${input.company.name} | ${input.hero.catchcopy}`;
-const plain = (s: string) => s.replace(/\{\{\s*要確認\s*[:：]?([^}]*)\}\}/g, "（要確認：$1）");
+const plain = (s: string) => (hasMarker(s) ? "" : s.trim());
+const serviceItems = input.services?.items.filter((item) => plain(item.title) && plain(item.description)) ?? [];
+const workItems = input.works?.items.filter((item) => plain(item.title)) ?? [];
+const companyRows = input.companyInfo?.rows.filter((row) => plain(row.label) && plain(row.value)) ?? [];
+const sections = visibleSections(input).filter((section) => {
+  if (section.type === "services") return serviceItems.length > 0;
+  if (section.type === "works") return workItems.length > 0;
+  if (section.type === "company") return companyRows.length > 0;
+  return true;
+});
 const { brand, accent } = input.theme;
 const themeStyle = `--brand:${brand};--brand-text:${textColorOn(brand)};--accent:${accent};--accent-text:${textColorOn(accent)};`;
 const year = new Date().getFullYear();
 const copyright = input.footer?.copyright ?? input.company.name;
 ---
 <!doctype html>
-<html lang={input.lang} style={themeStyle} data-mode={mode}>
+<html
+  lang={input.lang}
+  style={themeStyle}
+  data-mode={mode}
+  data-style={input.theme.style}
+  data-hero-layout={input.theme.heroLayout}
+  data-section-rhythm={input.theme.sectionRhythm}
+>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -62,7 +78,7 @@ const copyright = input.footer?.copyright ?? input.company.name;
           <div class="hero-text">
             <p class="hero-company"><T text={input.company.name} /></p>
             <h1 id="hero-title"><T text={input.hero.catchcopy} /></h1>
-            {input.hero.lead && <p class="hero-lead"><T text={input.hero.lead} /></p>}
+            {input.hero.lead && plain(input.hero.lead) && <p class="hero-lead"><T text={input.hero.lead} /></p>}
             <ContactLinks contact={input.contact} primaryOnly />
           </div>
           {input.hero.image && (
@@ -82,7 +98,7 @@ const copyright = input.footer?.copyright ?? input.company.name;
               <>
                 {input.services.intro && <p class="section-intro"><T text={input.services.intro} /></p>}
                 <ul class="cards">
-                  {input.services.items.map((item) => (
+                  {serviceItems.map((item) => (
                     <li class="card">
                       {item.image && <Img image={item.image} class="card-img" />}
                       <h3><T text={item.title} /></h3>
@@ -97,7 +113,7 @@ const copyright = input.footer?.copyright ?? input.company.name;
               <>
                 {input.companyInfo.intro && <p class="section-intro"><T text={input.companyInfo.intro} /></p>}
                 <dl class="info-table">
-                  {input.companyInfo.rows.map((row) => (
+                  {companyRows.map((row) => (
                     <div class="info-row">
                       <dt><T text={row.label} /></dt>
                       <dd><T text={row.value} /></dd>
@@ -111,7 +127,7 @@ const copyright = input.footer?.copyright ?? input.company.name;
               <>
                 {input.works.intro && <p class="section-intro"><T text={input.works.intro} /></p>}
                 <ul class="cards">
-                  {input.works.items.map((item) => (
+                  {workItems.map((item) => (
                     <li class="card">
                       {item.image && <Img image={item.image} class="card-img" />}
                       {item.period && <p class="card-meta"><T text={item.period} /></p>}

@@ -63,6 +63,9 @@ describe("ビルド", () => {
     expect(page).toContain(`data-demo-notice="footer">${notice}`);
     expect(page).toMatch(/<meta name="robots" content="noindex/);
     expect(page).toContain('name="viewport"');
+    expect(page).toContain('data-style="warm"');
+    expect(page).toContain('data-hero-layout="split"');
+    expect(page).toContain('data-section-rhythm="alternating"');
     // 外部の読み込み・フォームがない
     expect(page).not.toMatch(/(src|href)="(https?:)?\/\//);
     expect(page).not.toContain("<form");
@@ -85,23 +88,24 @@ describe("ビルド", () => {
     expect(report.issues).toEqual([]);
   });
 
-  it("要確認の残る例は demo では目立つ表示で残り、検査は警告にとどめる", async () => {
+  it("要確認の残る例は demo の営業用画面から隠し、運営向けのビルド結果に残す", async () => {
     expectOk(needsConfirm);
     expect(needsConfirm.markers).toHaveLength(5);
     const page = await html(needsConfirm);
-    expect(page).toContain('<mark class="needs-confirm" data-needs-confirm="本社所在地">要確認：本社所在地</mark>');
+    expect(page).not.toContain("要確認");
+    expect(page).not.toContain("data-needs-confirm");
     expect(page).not.toContain("{{要確認");
+    expect(page).not.toContain("試作1個から量産前の数百個まで対応します。");
+    expect(page).not.toContain('id="works"');
     // 電話番号が未確認なら tel リンクにしない
     expect(page).not.toContain('href="tel:');
     const report = await checkDist(needsConfirm.outDir, { mode: "demo" });
     expect(report.ok).toBe(true);
-    expect(report.issues.map((i) => [i.kind, i.severity])).toEqual([["unresolved-marker", "warning"]]);
-    // 同じ dist を delivery として検査するとエラー（デモ表示・noindex・要確認の残存）
+    expect(report.issues).toEqual([]);
+    // 同じ dist を delivery として検査するとエラー（デモ表示・noindex）
     const asDelivery = await checkDist(needsConfirm.outDir, { mode: "delivery" });
     expect(asDelivery.ok).toBe(false);
-    expect(Object.keys(asDelivery.counts).sort()).toEqual(
-      ["demo-notice-unexpected", "noindex-unexpected", "unresolved-marker"].sort(),
-    );
+    expect(Object.keys(asDelivery.counts).sort()).toEqual(["demo-notice-unexpected", "noindex-unexpected"].sort());
   });
 
   it("要確認の残る例を delivery でビルドすると失敗する（引数・環境変数のどちらでも）", async () => {

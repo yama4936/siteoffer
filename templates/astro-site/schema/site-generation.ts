@@ -12,7 +12,16 @@
  * （ビルド用コンテナにテンプレートだけを入れられるようにするため）。
  */
 import { z } from "zod";
-import { HexColorSchema, SectionTypeSchema, type SiteInputRaw, SiteInputSchema, type SiteMode } from "./site-input.ts";
+import {
+  HeroLayoutSchema,
+  HexColorSchema,
+  SectionRhythmSchema,
+  SectionTypeSchema,
+  type SiteInputRaw,
+  SiteInputSchema,
+  type SiteMode,
+  VisualStyleSchema,
+} from "./site-input.ts";
 
 const text = z.string().min(1);
 const nullableText = text.nullable();
@@ -30,6 +39,9 @@ const SiteGenerationShape = z.strictObject({
   theme: z.strictObject({
     brand: HexColorSchema,
     accent: HexColorSchema,
+    style: VisualStyleSchema,
+    heroLayout: HeroLayoutSchema,
+    sectionRhythm: SectionRhythmSchema,
   }),
   hero: z.strictObject({
     catchcopy: text,
@@ -108,7 +120,13 @@ export function siteGenerationToSiteInput(out: SiteGenerationOutput, options: To
     schemaVersion: 1,
     company: { name: out.company.name, shortName: opt(out.company.shortName) },
     meta: { title: opt(out.meta.title), description: out.meta.description },
-    theme: { brand: out.theme.brand, accent: out.theme.accent },
+    theme: {
+      brand: out.theme.brand,
+      accent: out.theme.accent,
+      style: out.theme.style,
+      heroLayout: out.theme.heroLayout,
+      sectionRhythm: out.theme.sectionRhythm,
+    },
     hero: { catchcopy: out.hero.catchcopy, lead: opt(out.hero.lead) },
     sections: out.sections.map((s) => ({ type: s.type, visible: s.visible, heading: opt(s.heading) })),
     services: out.services
@@ -168,7 +186,13 @@ export function siteInputToSiteGeneration(raw: unknown): ToGenerationResult {
     schemaVersion: 1,
     company: { name: v.company.name, shortName: v.company.shortName ?? null },
     meta: { title: v.meta.title ?? null, description: v.meta.description },
-    theme: { brand: v.theme.brand, accent: v.theme.accent },
+    theme: {
+      brand: v.theme.brand,
+      accent: v.theme.accent,
+      style: v.theme.style,
+      heroLayout: v.theme.heroLayout,
+      sectionRhythm: v.theme.sectionRhythm,
+    },
     hero: { catchcopy: v.hero.catchcopy, lead: v.hero.lead ?? null },
     sections: v.sections.map((s) => ({ type: s.type, visible: s.visible, heading: s.heading ?? null })),
     services: v.services
