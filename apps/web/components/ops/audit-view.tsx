@@ -1,4 +1,5 @@
 import type { findings as findingsTable, siteAudits } from "@siteoffer/db";
+import { FindingSections } from "@/components/audit/finding-sections";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fmtDate } from "@/lib/ops/format";
@@ -133,45 +134,51 @@ export function AuditView({ audit, findings }: { audit: Audit; findings: Finding
         <Json value={audit.summary} />
       </details>
       <h3 className="pt-2 font-semibold text-base">項目ごとの根拠（{findings.length}件）</h3>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>項目</TableHead>
-            <TableHead>結果</TableHead>
-            <TableHead>レベル</TableHead>
-            <TableHead>理由</TableHead>
-            <TableHead>観測事実（URL・日時・根拠）</TableHead>
-            <TableHead>改善案</TableHead>
-            <TableHead>推測</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {findings.map((f) => (
-            <TableRow key={f.id}>
-              <TableCell className="whitespace-nowrap font-mono text-xs">
-                {f.itemCode}
-                {f.critical ? <span className="font-sans text-destructive">（致命）</span> : null}
-              </TableCell>
-              <TableCell>
-                <StatusBadge
-                  value={f.status}
-                  labels={FINDING_STATUS}
-                  tone={f.status === "scored" ? "secondary" : f.status === "unevaluable" ? "warning" : "outline"}
-                />
-              </TableCell>
-              <TableCell className="tabular-nums">{f.score ?? "—"}</TableCell>
-              <TableCell className="min-w-48">{f.reason ?? "—"}</TableCell>
-              <TableCell className="min-w-56 max-w-96">
-                <Json value={f.observations} />
-              </TableCell>
-              <TableCell className="min-w-48">{f.improvementHint ?? "—"}</TableCell>
-              <TableCell>
-                <Badge variant={f.inference ? "warning" : "outline"}>{f.inference ? "推測" : "観測"}</Badge>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <FindingSections findings={findings} renderList={(items) => <FindingTable findings={items} />} />
     </div>
+  );
+}
+
+function FindingTable({ findings }: { findings: Finding[] }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>項目</TableHead>
+          <TableHead>結果</TableHead>
+          <TableHead>レベル</TableHead>
+          <TableHead>理由</TableHead>
+          <TableHead>観測事実（URL・日時・根拠）</TableHead>
+          <TableHead>改善案</TableHead>
+          <TableHead>推測</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {findings.map((f) => (
+          <TableRow key={f.id}>
+            <TableCell className="whitespace-nowrap font-mono text-xs">
+              {f.itemCode}
+              {f.critical ? <span className="font-sans text-destructive">（致命）</span> : null}
+            </TableCell>
+            <TableCell>
+              <StatusBadge
+                value={f.status}
+                labels={FINDING_STATUS}
+                tone={f.status === "scored" ? "secondary" : f.status === "unevaluable" ? "warning" : "outline"}
+              />
+            </TableCell>
+            <TableCell className="tabular-nums">{f.score ?? "—"}</TableCell>
+            <TableCell className="min-w-48">{f.reason ?? "—"}</TableCell>
+            <TableCell className="min-w-56 max-w-96">
+              <Json value={f.observations} />
+            </TableCell>
+            <TableCell className="min-w-48">{f.improvementHint ?? "—"}</TableCell>
+            <TableCell>
+              <Badge variant={f.inference ? "warning" : "outline"}>{f.inference ? "推測" : "観測"}</Badge>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }

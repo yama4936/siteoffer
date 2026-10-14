@@ -2,6 +2,7 @@
 import type { CallScript, ProposalText } from "@siteoffer/schemas";
 import { ExternalLink as ExternalLinkIcon, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
+import { FindingSections } from "@/components/audit/finding-sections";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -47,8 +48,12 @@ export function ExternalLink({ href, children }: { href: string; children?: Reac
   );
 }
 
+/** 診断の項目。改善が必要なものだけを開いて見せ、問題なし・評価できずは閉じておく */
 export function FindingsList({ findings }: { findings: FindingView[] }) {
-  if (findings.length === 0) return <p className="text-muted-foreground text-sm">診断項目の結果はまだありません。</p>;
+  return <FindingSections findings={findings} renderList={(items) => <FindingItems findings={items} />} />;
+}
+
+function FindingItems({ findings }: { findings: FindingView[] }) {
   return (
     <ul className="grid gap-3">
       {findings.map((f) => (
