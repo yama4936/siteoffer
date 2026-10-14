@@ -1,14 +1,19 @@
 import { EXISTING_DOMAIN_REVIEW_NOTICE, NEW_DOMAIN_AVAILABILITY_NOTICE } from "@siteoffer/core";
+import { ChevronRight, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActivityForm, ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
+import { BackLink, SectionCard } from "@/components/sales/section-card";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
+import { AssignmentStatusBadge, ContractStatusBadge } from "@/components/sales/status-badge";
 import { ExternalLink } from "@/components/sales/views";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { DescriptionList, EmptyState, Muted, PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
 import {
-  ASSIGNMENT_STATUS_LABELS,
   activityKindLabel,
-  CONTRACT_STATUS_LABELS,
   DOMAIN_INTENTS,
   DOMAIN_MANAGERS,
   formatDate,
@@ -43,53 +48,64 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
   const firstSite = d.sites[0];
 
   return (
-    <main>
-      <p>
-        <Link href="/sales/assignments">← 担当案件へ</Link>
-      </p>
-      <h1>{d.company.name}</h1>
-      <dl className="kv">
-        <dt>担当の状態</dt>
-        <dd>{ASSIGNMENT_STATUS_LABELS[a.status as keyof typeof ASSIGNMENT_STATUS_LABELS] ?? a.status}</dd>
-        <dt>確保日時</dt>
-        <dd>{formatDateTime(a.claimedAt)}</dd>
-        <dt>次回対応日</dt>
-        <dd>{formatDateTime(a.nextActionAt)}</dd>
-        <dt>担当の期限</dt>
-        <dd>{formatDateTime(a.expiresAt)}</dd>
-        <dt>代表電話</dt>
-        <dd>{d.company.representativePhone ?? "不明"}</dd>
-        <dt>現在のサイト</dt>
-        <dd>{firstSite ? <ExternalLink href={firstSite.url} /> : "不明"}</dd>
-        {d.company.suppression !== "none" && (
-          <>
-            <dt>営業抑止</dt>
-            <dd>
-              {SUPPRESSION_LABELS[d.company.suppression] ?? d.company.suppression}
-              {d.company.recontactAfter && `（再連絡の目安：${formatDate(d.company.recontactAfter)}）`}
-            </dd>
-          </>
-        )}
-        {a.releaseReason && (
-          <>
-            <dt>終了の理由</dt>
-            <dd>{a.releaseReason}</dd>
-          </>
-        )}
-      </dl>
-      <p>
-        <Link href={`/sales/companies/${d.company.id}`}>企業詳細（診断根拠・改善デモ・電話台本）</Link>
-      </p>
+    <>
+      <BackLink href="/sales/assignments">担当案件へ</BackLink>
+      <PageHeader
+        title={d.company.name}
+        actions={
+          <Link
+            href={`/sales/companies/${d.company.id}`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            企業詳細（診断根拠・改善デモ・電話台本）
+            <ChevronRight />
+          </Link>
+        }
+      />
+      <SectionCard title="担当の概要">
+        <DescriptionList>
+          <dt>担当の状態</dt>
+          <dd>
+            <AssignmentStatusBadge status={a.status} />
+          </dd>
+          <dt>確保日時</dt>
+          <dd>{formatDateTime(a.claimedAt)}</dd>
+          <dt>次回対応日</dt>
+          <dd>{formatDateTime(a.nextActionAt)}</dd>
+          <dt>担当の期限</dt>
+          <dd>{formatDateTime(a.expiresAt)}</dd>
+          <dt>代表電話</dt>
+          <dd className="tabular-nums">{d.company.representativePhone ?? "不明"}</dd>
+          <dt>現在のサイト</dt>
+          <dd>{firstSite ? <ExternalLink href={firstSite.url} /> : "不明"}</dd>
+          {d.company.suppression !== "none" && (
+            <>
+              <dt>営業抑止</dt>
+              <dd>
+                <Badge variant="destructive">
+                  {SUPPRESSION_LABELS[d.company.suppression] ?? d.company.suppression}
+                </Badge>
+                {d.company.recontactAfter && `（再連絡の目安：${formatDate(d.company.recontactAfter)}）`}
+              </dd>
+            </>
+          )}
+          {a.releaseReason && (
+            <>
+              <dt>終了の理由</dt>
+              <dd>{a.releaseReason}</dd>
+            </>
+          )}
+        </DescriptionList>
+      </SectionCard>
 
       {a.active && (
-        <section>
-          <h2>提案を共有</h2>
+        <SectionCard title="提案を共有">
           {!d.proposalVersionId ? (
-            <p className="sub">運営のレビューを終えた改善提案はまだありません。</p>
+            <Muted>運営のレビューを終えた改善提案はまだありません。</Muted>
           ) : !d.proposalHasDemo ? (
-            <p className="sub">改善デモはまだありません。</p>
+            <Muted>改善デモはまだありません。</Muted>
           ) : d.company.suppression !== "none" ? (
-            <p className="sub">営業が止まっている企業のため、提案は共有できません。</p>
+            <Muted>営業が止まっている企業のため、提案は共有できません。</Muted>
           ) : (
             <ProposalSharePanel
               actor={user.actor}
@@ -98,59 +114,66 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
               revokeAction={revokeShareAction}
             />
           )}
-        </section>
+        </SectionCard>
       )}
 
-      <section>
-        <h2>契約確認の状況</h2>
+      <SectionCard title="契約確認の状況">
         {d.contracts.length === 0 ? (
-          <p>成約報告はまだありません。</p>
+          <Muted>成約報告はまだありません。</Muted>
         ) : (
-          <ul className="cards">
+          <ul className="grid gap-3">
             {d.contracts.map((c) => (
-              <li key={c.id}>
-                <strong>{CONTRACT_STATUS_LABELS[c.status] ?? c.status}</strong>
-                <div className="sub">報告日時：{formatDateTime(c.reportedAt)}</div>
-                {c.completedAt && <div className="sub">契約完了：{formatDateTime(c.completedAt)}</div>}
+              <li key={c.id} className="space-y-1 rounded-lg border p-4 text-sm">
+                <ContractStatusBadge status={c.status} />
+                <div className="text-muted-foreground text-xs">報告日時：{formatDateTime(c.reportedAt)}</div>
+                {c.completedAt && (
+                  <div className="text-muted-foreground text-xs">契約完了：{formatDateTime(c.completedAt)}</div>
+                )}
                 {c.documentRef && <div>契約資料：{c.documentRef}</div>}
-                {c.reportNote && <div>報告メモ：{c.reportNote}</div>}
+                {c.reportNote && <div className="whitespace-pre-wrap">報告メモ：{c.reportNote}</div>}
                 {c.closeReason && <div>運営からの理由：{c.closeReason}</div>}
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </SectionCard>
 
       {a.active && (
-        <section>
-          <h2>活動を記録する</h2>
+        <SectionCard title="活動を記録する">
           <ActivityForm action={recordActivityAction} assignmentId={a.id} />
-        </section>
+        </SectionCard>
       )}
 
-      <section>
-        <h2>活動履歴</h2>
+      <SectionCard title="活動履歴">
         {d.activities.length === 0 ? (
-          <p>活動の記録はまだありません。</p>
+          <EmptyState>活動の記録はまだありません。</EmptyState>
         ) : (
-          <ul className="cards">
+          <ol className="relative space-y-4 border-l pl-5">
             {d.activities.map((x) => (
-              <li key={x.id}>
-                <strong>{activityKindLabel(x.kind)}</strong> <span className="sub">{formatDateTime(x.occurredAt)}</span>
-                {x.consultOps && <span className="badge badge-guess">運営に相談</span>}
-                {x.note && <p>{x.note}</p>}
-                {x.nextActionAt && <div className="sub">次回対応日：{formatDateTime(x.nextActionAt)}</div>}
+              <li key={x.id} className="relative space-y-1 text-sm">
+                <span
+                  aria-hidden="true"
+                  className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-card bg-primary"
+                />
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <strong className="font-semibold">{activityKindLabel(x.kind)}</strong>{" "}
+                  <span className="text-muted-foreground text-xs">{formatDateTime(x.occurredAt)}</span>
+                  {x.consultOps && <Badge variant="warning">運営に相談</Badge>}
+                </div>
+                {x.note && <p className="whitespace-pre-wrap leading-relaxed">{x.note}</p>}
+                {x.nextActionAt && (
+                  <div className="text-muted-foreground text-xs">次回対応日：{formatDateTime(x.nextActionAt)}</div>
+                )}
               </li>
             ))}
-          </ul>
+          </ol>
         )}
-      </section>
+      </SectionCard>
 
-      <section>
-        <h2>ドメイン希望の聞き取り</h2>
+      <SectionCard title="ドメイン希望の聞き取り">
         {pref && (
-          <div className="stack">
-            <dl className="kv">
+          <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+            <DescriptionList>
               <dt>希望</dt>
               <dd>{labelOf(DOMAIN_INTENTS, pref.intent)}</dd>
               <dt>新規ドメイン候補</dt>
@@ -161,16 +184,20 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
               <dd>{labelOf(TRI_STATES, pref.usesEmail)}</dd>
               <dt>運営の確認</dt>
               <dd>
-                {pref.confirmedAt
-                  ? `確認済み（${formatDateTime(pref.confirmedAt)}）`
-                  : pref.needsOpsReview
-                    ? "確認待ち"
-                    : "不要"}
+                {pref.confirmedAt ? (
+                  <Badge variant="success">確認済み（{formatDateTime(pref.confirmedAt)}）</Badge>
+                ) : pref.needsOpsReview ? (
+                  <Badge variant="warning">確認待ち</Badge>
+                ) : (
+                  <Badge variant="secondary">不要</Badge>
+                )}
               </dd>
               <dt>最終更新</dt>
               <dd>{formatDateTime(pref.updatedAt)}</dd>
-            </dl>
-            {pref.newDomainCandidates.length > 0 && <p className="hint">{NEW_DOMAIN_AVAILABILITY_NOTICE}</p>}
+            </DescriptionList>
+            {pref.newDomainCandidates.length > 0 && (
+              <p className="text-muted-foreground text-xs">{NEW_DOMAIN_AVAILABILITY_NOTICE}</p>
+            )}
           </div>
         )}
         {a.active ? (
@@ -191,30 +218,38 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
             reviewNotice={EXISTING_DOMAIN_REVIEW_NOTICE}
           />
         ) : (
-          !pref && <p>記録はありません。</p>
+          !pref && <Muted>記録はありません。</Muted>
         )}
-      </section>
+      </SectionCard>
 
       {d.showReport && (
-        <section>
-          <h2>成約報告</h2>
-          {d.terms.length === 0 && <p className="warn">販売条件・報酬条件：未設定（運営に確認してください）</p>}
+        <SectionCard title="成約報告">
+          {d.terms.length === 0 && (
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertDescription>販売条件・報酬条件：未設定（運営に確認してください）</AlertDescription>
+            </Alert>
+          )}
           <ContractReportForm
             action={reportDealAction}
             assignmentId={a.id}
             proposalVersionId={d.proposalVersionId}
             terms={d.terms.map((t) => ({ id: t.id, label: `${t.name}（${formatYen(t.price)}）` }))}
           />
-        </section>
+        </SectionCard>
       )}
 
       {a.active && a.status !== "contract_pending" && (
-        <section>
-          <h2>担当を手放す</h2>
-          <p className="hint">手放すと他の営業ユーザーが確保できるようになります。営業拒否の記録は消えません。</p>
+        <SectionCard title="担当を手放す" className="border-destructive/30">
+          <Alert variant="info">
+            <Info />
+            <AlertDescription>
+              手放すと他の営業ユーザーが確保できるようになります。営業拒否の記録は消えません。
+            </AlertDescription>
+          </Alert>
           <ReleaseForm action={releaseAction} assignmentId={a.id} />
-        </section>
+        </SectionCard>
       )}
-    </main>
+    </>
   );
 }

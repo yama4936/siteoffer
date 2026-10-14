@@ -1,6 +1,8 @@
+import { ChevronRight, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ClaimButton } from "@/components/sales/forms";
+import { BackLink, SectionCard } from "@/components/sales/section-card";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
 import {
   CallScriptView,
@@ -10,6 +12,11 @@ import {
   SharedStateBadges,
   TermsTable,
 } from "@/components/sales/views";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { DescriptionList, Muted, PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/sales/labels";
 import { getCompanyDetail } from "@/lib/sales/queries";
@@ -28,37 +35,43 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   const c = d.company;
 
   return (
-    <main>
-      <p>
-        <Link href="/sales/companies">← 企業一覧へ</Link>
-      </p>
-      <h1>{c.name}</h1>
-      <p>
-        <SharedStateBadges assignment={d.assignment} suppression={c.suppression} />
-      </p>
-      {c.suppression === "not_now" && c.recontactAfter && (
-        <p className="sub">企業が示した再連絡の目安：{formatDate(c.recontactAfter)}（担当の再開は運営の確認後）</p>
-      )}
+    <>
+      <BackLink href="/sales/companies">企業一覧へ</BackLink>
+      <PageHeader
+        title={c.name}
+        description={
+          <div className="space-y-2">
+            <SharedStateBadges assignment={d.assignment} suppression={c.suppression} />
+            {c.suppression === "not_now" && c.recontactAfter && (
+              <p>企業が示した再連絡の目安：{formatDate(c.recontactAfter)}（担当の再開は運営の確認後）</p>
+            )}
+          </div>
+        }
+      />
 
-      <section>
-        {d.showClaim ? (
-          <ClaimButton action={claimAction} companyId={c.id} />
-        ) : d.assignment === "mine" && d.myAssignmentId ? (
-          <Link href={`/sales/assignments/${d.myAssignmentId}`}>担当案件を開く（活動記録・成約報告）</Link>
-        ) : (
-          <p className="sub">現在この企業の担当は確保できません。</p>
-        )}
-      </section>
+      <Card className="mb-6 py-4">
+        <CardContent className="px-4">
+          {d.showClaim ? (
+            <ClaimButton action={claimAction} companyId={c.id} />
+          ) : d.assignment === "mine" && d.myAssignmentId ? (
+            <Link href={`/sales/assignments/${d.myAssignmentId}`} className={buttonVariants({ variant: "default" })}>
+              担当案件を開く（活動記録・成約報告）
+              <ChevronRight />
+            </Link>
+          ) : (
+            <Muted>現在この企業の担当は確保できません。</Muted>
+          )}
+        </CardContent>
+      </Card>
 
-      <section>
-        <h2>企業情報</h2>
-        <dl className="kv">
+      <SectionCard title="企業情報">
+        <DescriptionList>
           <dt>所在地</dt>
           <dd>{c.address ?? ([c.prefecture, c.city].filter(Boolean).join(" ") || "不明")}</dd>
           <dt>業種</dt>
           <dd>{c.industry ?? "不明"}</dd>
           <dt>代表電話</dt>
-          <dd>{c.representativePhone ?? "不明"}</dd>
+          <dd className="tabular-nums">{c.representativePhone ?? "不明"}</dd>
           <dt>現在のサイト</dt>
           <dd>
             {d.sites.length === 0
@@ -69,16 +82,15 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                   </div>
                 ))}
           </dd>
-        </dl>
-      </section>
+        </DescriptionList>
+      </SectionCard>
 
-      <section>
-        <h2>診断の根拠</h2>
+      <SectionCard title="診断の根拠">
         {!d.audit ? (
-          <p>診断結果はまだありません。</p>
+          <Muted>診断結果はまだありません。</Muted>
         ) : (
           <>
-            <dl className="kv">
+            <DescriptionList>
               <dt>診断したURL</dt>
               <dd>
                 <ExternalLink href={d.audit.finalUrl ?? d.audit.targetUrl} />
@@ -86,62 +98,80 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
               <dt>診断日時</dt>
               <dd>{formatDateTime(d.audit.evaluatedAt)}</dd>
               <dt>総合点</dt>
-              <dd>
+              <dd className="font-semibold tabular-nums">
                 {d.audit.totalScore === null
                   ? "未確定（評価できない項目が多いため）"
                   : `${d.audit.totalScore}${d.audit.scoreConfirmed === false ? "（未確定）" : ""}`}
               </dd>
-            </dl>
+            </DescriptionList>
             {d.audit.status === "unevaluable" && (
-              <p className="warn">このサイトは評価できませんでした：{d.audit.unevaluableReason ?? "理由不明"}</p>
+              <Alert variant="warning">
+                <TriangleAlert />
+                <AlertDescription>
+                  このサイトは評価できませんでした：{d.audit.unevaluableReason ?? "理由不明"}
+                </AlertDescription>
+              </Alert>
             )}
-            <p className="hint">
-              「観測事実に基づく」はページ上で確認した内容です。「推測を含む」は観測から推し量った内容で、企業に伝えるときは断定しないでください。
-            </p>
+            <Alert variant="info">
+              <Info />
+              <AlertDescription>
+                「観測事実に基づく」はページ上で確認した内容です。「推測を含む」は観測から推し量った内容で、企業に伝えるときは断定しないでください。
+              </AlertDescription>
+            </Alert>
             <FindingsList findings={d.audit.findings} />
           </>
         )}
-      </section>
+      </SectionCard>
 
-      <section>
-        <h2>改善提案とデモ</h2>
+      <SectionCard
+        title="改善提案とデモ"
+        actions={
+          d.proposal ? <Badge variant="secondary">提案 第{d.proposal.version}版（運営レビュー済み）</Badge> : undefined
+        }
+      >
         {!d.proposal ? (
-          <p>運営のレビューを終えた改善提案はまだありません。</p>
+          <Muted>運営のレビューを終えた改善提案はまだありません。</Muted>
         ) : (
-          <div className="stack">
-            <p className="sub">提案 第{d.proposal.version}版（運営レビュー済み）</p>
+          <div className="space-y-5">
             {!d.proposal.hasDemo ? (
-              <p className="sub">改善デモはまだありません。</p>
+              <Muted className="block">改善デモはまだありません。</Muted>
             ) : d.assignment === "mine" && c.suppression === "none" ? (
-              <>
-                <h3>提案を共有</h3>
+              <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+                <h3 className="font-semibold text-base">提案を共有</h3>
                 <ProposalSharePanel
                   actor={user.actor}
                   proposalVersionId={d.proposal.versionId}
                   issueAction={issueShareAction}
                   revokeAction={revokeShareAction}
                 />
-              </>
+              </div>
             ) : (
-              <p className="sub">
+              <Muted className="block">
                 改善デモがあります。企業への共有（期限付きリンクの発行）は、この企業の担当を確保してから行えます。
-              </p>
+              </Muted>
             )}
             {d.proposal.proposalText && <ProposalSummary text={d.proposal.proposalText} />}
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      <section>
-        <h2>販売条件・報酬条件</h2>
+      <SectionCard title="販売条件・報酬条件">
         <TermsTable terms={d.terms} />
-      </section>
+      </SectionCard>
 
-      <section>
-        <h2>電話台本</h2>
-        {d.proposal?.callScript ? <CallScriptView script={d.proposal.callScript} /> : <p>電話台本はまだありません。</p>}
-        <p className="hint">成約や効果を約束する言い方はしないでください。改善提案は非公式のものです。</p>
-      </section>
-    </main>
+      <SectionCard title="電話台本">
+        {d.proposal?.callScript ? (
+          <CallScriptView script={d.proposal.callScript} />
+        ) : (
+          <Muted className="block">電話台本はまだありません。</Muted>
+        )}
+        <Alert variant="warning">
+          <TriangleAlert />
+          <AlertDescription>
+            成約や効果を約束する言い方はしないでください。改善提案は非公式のものです。
+          </AlertDescription>
+        </Alert>
+      </SectionCard>
+    </>
   );
 }

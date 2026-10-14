@@ -1,5 +1,14 @@
+import { Filter, Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
+import { StatusBadge } from "@/components/ops/ui-parts-1";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Muted, PageHeader, Section } from "@/components/ui/page";
+import { NativeSelect } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { DISCOVERY_PROVIDERS } from "@/lib/ops/commands";
 import {
@@ -44,190 +53,250 @@ export default async function DiscoveryPage({
   const here = `/ops/discovery${qs ? `?${qs}` : ""}`;
 
   return (
-    <main>
-      <h1>1. 収集条件・ジョブ・候補</h1>
+    <>
+      <PageHeader title="1. 収集条件・ジョブ・候補" />
       <Flash searchParams={sp} />
 
-      <section>
-        <h2>収集ジョブの登録</h2>
-        <p className="muted">
-          条件を保存してジョブを登録します。実行はワーカーが行います。業種分類は未決のため自由記述です。
-          所在地はキーワードではなく出典のある住所で判定されます。
-        </p>
-        <form action={createDiscoveryJobAction} className="stack">
-          <ReturnTo path="/ops/discovery" />
-          <label>
-            取得元
-            <select name="provider" defaultValue="fixture">
-              {DISCOVERY_PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {p === "fixture" ? "fixture（架空企業・開発用）" : `${p}（国税庁法人番号API）`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            都道府県
-            <input name="prefecture" placeholder="愛知県" />
-          </label>
-          <label>
-            市区町村（前方一致。指定するときは都道府県も必須）
-            <input name="city" placeholder="名古屋市" />
-          </label>
-          <label>
-            市区町村コード（5桁・任意）
-            <input name="cityCode" inputMode="numeric" pattern="\d{5}" />
-          </label>
-          <label>
-            業種
-            <input name="industry" placeholder="建設" />
-          </label>
-          <label>
-            企業名に含まれる語（空白・読点区切り。所在地の判定には使いません）
-            <input name="keywords" />
-          </label>
-          <label>
-            上限件数（1〜1000、既定50）
-            <input name="limit" type="number" min={1} max={1000} />
-          </label>
-          <button type="submit">ジョブを登録</button>
-        </form>
-      </section>
+      <Card className="mb-8 max-w-3xl">
+        <CardHeader>
+          <CardTitle>
+            <h2>収集ジョブの登録</h2>
+          </CardTitle>
+          <CardDescription>
+            条件を保存してジョブを登録します。実行はワーカーが行います。業種分類は未決のため自由記述です。
+            所在地はキーワードではなく出典のある住所で判定されます。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form action={createDiscoveryJobAction} className="grid gap-4 sm:grid-cols-2">
+            <ReturnTo path="/ops/discovery" />
+            <Label className="grid gap-1.5 sm:col-span-2">
+              取得元
+              <NativeSelect name="provider" defaultValue="fixture" className="font-normal">
+                {DISCOVERY_PROVIDERS.map((p) => (
+                  <option key={p} value={p}>
+                    {p === "fixture" ? "fixture（架空企業・開発用）" : `${p}（国税庁法人番号API）`}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Label>
+            <Label className="grid gap-1.5">
+              都道府県
+              <Input name="prefecture" placeholder="愛知県" className="font-normal" />
+            </Label>
+            <Label className="grid gap-1.5 leading-snug">
+              市区町村（前方一致。指定するときは都道府県も必須）
+              <Input name="city" placeholder="名古屋市" className="font-normal" />
+            </Label>
+            <Label className="grid gap-1.5">
+              市区町村コード（5桁・任意）
+              <Input name="cityCode" inputMode="numeric" pattern="\d{5}" className="font-normal" />
+            </Label>
+            <Label className="grid gap-1.5">
+              業種
+              <Input name="industry" placeholder="建設" className="font-normal" />
+            </Label>
+            <Label className="grid gap-1.5 leading-snug sm:col-span-2">
+              企業名に含まれる語（空白・読点区切り。所在地の判定には使いません）
+              <Input name="keywords" className="font-normal" />
+            </Label>
+            <Label className="grid gap-1.5">
+              上限件数（1〜1000、既定50）
+              <Input name="limit" type="number" min={1} max={1000} className="font-normal" />
+            </Label>
+            <div className="sm:col-span-2">
+              <Button type="submit">
+                <Plus />
+                ジョブを登録
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
-      <section>
-        <h2>収集ジョブ</h2>
-        <p className="muted">
+      <Section
+        title="収集ジョブ"
+        actions={
+          <a href={here} className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <RefreshCw />
+            再読み込みして最新の状態を表示
+          </a>
+        }
+      >
+        <p className="text-muted-foreground text-sm">
           登録したジョブ（待機）はワーカーが拾って実行します（数秒〜）。実行後は状態が「成功」などに変わり、
           収集した企業が下の候補一覧に増えます。診断・提案の生成もワーカーが続けて行い、企業の状態が進みます。
           {jobs.value.some((j) => j.status === "queued" || j.status === "running") ? (
-            <strong className="warn"> 処理中のジョブがあります。</strong>
-          ) : null}{" "}
-          <a href={here}>再読み込みして最新の状態を表示</a>
+            <strong className="font-medium text-warning-foreground"> 処理中のジョブがあります。</strong>
+          ) : null}
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>取得元</th>
-              <th>条件</th>
-              <th>状態</th>
-              <th>件数（取得/新規/更新/スキップ/失敗）</th>
-              <th>試行</th>
-              <th>失敗理由</th>
-              <th>登録・終了</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>ID</TableHead>
+              <TableHead>取得元</TableHead>
+              <TableHead>条件</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>件数（取得/新規/更新/スキップ/失敗）</TableHead>
+              <TableHead>試行</TableHead>
+              <TableHead>失敗理由</TableHead>
+              <TableHead>登録・終了</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {jobs.value.map((j) => (
-              <tr key={j.id}>
-                <td>
+              <TableRow key={j.id}>
+                <TableCell className="font-mono text-xs">
                   <Link href={`/ops/discovery/${j.id}`}>{shortId(j.id)}</Link>
-                </td>
-                <td>{j.provider}</td>
-                <td>
-                  <code>{JSON.stringify(j.criteria)}</code>
-                </td>
-                <td>{label(JOB_STATUS_LABEL, j.status)}</td>
-                <td>
+                </TableCell>
+                <TableCell>{j.provider}</TableCell>
+                <TableCell className="min-w-48 max-w-80">
+                  <code className="break-all rounded bg-muted px-1 py-0.5 text-xs">{JSON.stringify(j.criteria)}</code>
+                </TableCell>
+                <TableCell>
+                  <StatusBadge value={j.status} labels={JOB_STATUS_LABEL} />
+                </TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">
                   {j.foundCount}/{j.createdCount}/{j.updatedCount}/{j.skippedCount}/{j.failedCount}
-                </td>
-                <td>{j.attempts}</td>
-                <td>
-                  {j.error ? <span className="warn">{j.error}</span> : null}
+                </TableCell>
+                <TableCell className="tabular-nums">{j.attempts}</TableCell>
+                <TableCell className="min-w-40">
+                  {j.error ? <span className="text-destructive">{j.error}</span> : null}
                   {Array.isArray(j.failures) && j.failures.length > 0 ? (
-                    <span> 候補の失敗・スキップ {j.failures.length}件</span>
+                    <span className="text-muted-foreground"> 候補の失敗・スキップ {j.failures.length}件</span>
                   ) : null}
-                </td>
-                <td>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">
                   {fmtDate(j.createdAt)}
                   <br />
                   {fmtDate(j.finishedAt)}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {jobs.value.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="muted">
+              <TableRow>
+                <TableCell colSpan={8} className="py-6 text-center text-muted-foreground">
                   ジョブはまだありません
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : null}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>企業候補</h2>
-        <form className="inline" method="get" action="/ops/discovery">
-          <input name="q" placeholder="企業名・法人番号" defaultValue={filter.q ?? ""} />
-          <input name="prefecture" placeholder="都道府県" defaultValue={filter.prefecture ?? ""} />
-          <select name="official" defaultValue={filter.officialSiteStatus ?? ""}>
+      <Section title="企業候補">
+        <form className="flex flex-wrap items-center gap-2" method="get" action="/ops/discovery">
+          <Input
+            name="q"
+            placeholder="企業名・法人番号"
+            defaultValue={filter.q ?? ""}
+            aria-label="企業名・法人番号"
+            className="w-full sm:w-56"
+          />
+          <Input
+            name="prefecture"
+            placeholder="都道府県"
+            defaultValue={filter.prefecture ?? ""}
+            aria-label="都道府県"
+            className="w-full sm:w-36"
+          />
+          <NativeSelect
+            name="official"
+            defaultValue={filter.officialSiteStatus ?? ""}
+            aria-label="公式サイト"
+            className="w-auto"
+          >
             <option value="">公式サイト：すべて</option>
             {Object.entries(OFFICIAL_SITE_LABEL).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
               </option>
             ))}
-          </select>
-          <select name="pipeline" defaultValue={filter.pipelineStatus ?? ""}>
+          </NativeSelect>
+          <NativeSelect
+            name="pipeline"
+            defaultValue={filter.pipelineStatus ?? ""}
+            aria-label="準備段階"
+            className="w-auto"
+          >
             <option value="">準備段階：すべて</option>
             {Object.entries(PIPELINE_LABEL).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
               </option>
             ))}
-          </select>
-          <select name="suppressed" defaultValue={first(sp, "suppressed") ?? ""}>
+          </NativeSelect>
+          <NativeSelect
+            name="suppressed"
+            defaultValue={first(sp, "suppressed") ?? ""}
+            aria-label="抑止"
+            className="w-auto"
+          >
             <option value="">抑止：すべて</option>
             <option value="no">抑止なし</option>
             <option value="yes">抑止あり</option>
-          </select>
-          <button type="submit">絞り込み</button>
+          </NativeSelect>
+          <Button type="submit" variant="secondary">
+            <Filter />
+            絞り込み
+          </Button>
         </form>
-        <table>
-          <thead>
-            <tr>
-              <th>企業名</th>
-              <th>法人番号</th>
-              <th>所在地</th>
-              <th>業種</th>
-              <th>公式サイト</th>
-              <th>準備段階</th>
-              <th>営業抑止</th>
-              <th>更新</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>企業名</TableHead>
+              <TableHead>法人番号</TableHead>
+              <TableHead>所在地</TableHead>
+              <TableHead>業種</TableHead>
+              <TableHead>公式サイト</TableHead>
+              <TableHead>準備段階</TableHead>
+              <TableHead>営業抑止</TableHead>
+              <TableHead>更新</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {cs.value.map((c) => (
-              <tr key={c.id}>
-                <td>
+              <TableRow key={c.id}>
+                <TableCell className="min-w-40 font-medium">
                   <Link href={`/ops/companies/${c.id}?returnTo=${encodeURIComponent(here)}`}>{c.name}</Link>
-                </td>
-                <td>{c.corporateNumber ?? "不明"}</td>
-                <td>
+                </TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{c.corporateNumber ?? "不明"}</TableCell>
+                <TableCell className="min-w-32">
                   {[c.prefecture, c.city].filter(Boolean).join(" ") || "不明"}
-                  {c.addressSourceUrl ? null : c.prefecture ? <span className="muted">（出典なし）</span> : null}
-                </td>
-                <td>{c.industry ?? "不明"}</td>
-                <td className={c.officialSiteStatus === "needs_review" ? "warn" : undefined}>
-                  {label(OFFICIAL_SITE_LABEL, c.officialSiteStatus)}
-                </td>
-                <td>{label(PIPELINE_LABEL, c.pipelineStatus)}</td>
-                <td>{label(SUPPRESSION_LABEL, c.suppression)}</td>
-                <td>{fmtDate(c.updatedAt)}</td>
-              </tr>
+                  {c.addressSourceUrl ? null : c.prefecture ? (
+                    <span className="text-muted-foreground text-xs">（出典なし）</span>
+                  ) : null}
+                </TableCell>
+                <TableCell>{c.industry ?? "不明"}</TableCell>
+                <TableCell>
+                  <StatusBadge value={c.officialSiteStatus} labels={OFFICIAL_SITE_LABEL} />
+                </TableCell>
+                <TableCell>
+                  <StatusBadge value={c.pipelineStatus} labels={PIPELINE_LABEL} />
+                </TableCell>
+                <TableCell>
+                  {c.suppression === "none" ? (
+                    <span className="text-muted-foreground">{label(SUPPRESSION_LABEL, c.suppression)}</span>
+                  ) : (
+                    <StatusBadge value={c.suppression} labels={SUPPRESSION_LABEL} tone="warning" />
+                  )}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(c.updatedAt)}</TableCell>
+              </TableRow>
             ))}
             {cs.value.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="muted">
+              <TableRow>
+                <TableCell colSpan={8} className="py-6 text-center text-muted-foreground">
                   該当する候補はありません
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : null}
-          </tbody>
-        </table>
-        <p className="muted">最大200件まで表示します。</p>
-      </section>
-    </main>
+          </TableBody>
+        </Table>
+        <p>
+          <Muted>最大200件まで表示します。</Muted>
+        </p>
+      </Section>
+    </>
   );
 }

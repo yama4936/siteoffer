@@ -1,8 +1,18 @@
 // 営業画面の表示部品（サーバーコンポーネント）。状態の判定はしない
 import type { CallScript, ProposalText } from "@siteoffer/schemas";
+import { ExternalLink as ExternalLinkIcon, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FINDING_STATUS_LABELS, formatYen, SUPPRESSION_LABELS } from "@/lib/sales/labels";
 import type { FindingView, SharedAssignmentState, TermsView } from "@/lib/sales/queries";
+import { cn } from "@/lib/utils";
+
+/** 小見出し（項目名）の小さな文字 */
+function SubLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cn("font-medium text-muted-foreground text-xs", className)}>{children}</span>;
+}
 
 export function SharedStateBadges({
   assignment,
@@ -12,52 +22,65 @@ export function SharedStateBadges({
   suppression: string;
 }) {
   return (
-    <span className="badges">
-      {assignment === "mine" && <span className="badge badge-mine">自分が担当中</span>}
-      {assignment === "other" && <span className="badge badge-other">他の営業が担当中</span>}
-      {assignment === "none" && suppression === "none" && <span className="badge badge-free">担当者なし</span>}
-      {suppression !== "none" && (
-        <span className="badge badge-stop">{SUPPRESSION_LABELS[suppression] ?? suppression}</span>
-      )}
+    <span className="inline-flex flex-wrap items-center gap-1.5 align-middle">
+      {assignment === "mine" && <Badge variant="info">自分が担当中</Badge>}
+      {assignment === "other" && <Badge variant="secondary">他の営業が担当中</Badge>}
+      {assignment === "none" && suppression === "none" && <Badge variant="success">担当者なし</Badge>}
+      {suppression !== "none" && <Badge variant="destructive">{SUPPRESSION_LABELS[suppression] ?? suppression}</Badge>}
     </span>
   );
 }
 
 /** 外部サイトへのリンク。http(s) 以外は文字列として表示する */
 export function ExternalLink({ href, children }: { href: string; children?: ReactNode }) {
-  if (!/^https?:\/\//i.test(href)) return <span>{children ?? href}</span>;
+  if (!/^https?:\/\//i.test(href)) return <span className="break-all">{children ?? href}</span>;
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer nofollow">
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      className="inline-flex items-center gap-1 break-all text-primary underline-offset-4 hover:underline"
+    >
       {children ?? href}
+      <ExternalLinkIcon aria-hidden="true" className="size-3.5 shrink-0" />
     </a>
   );
 }
 
 export function FindingsList({ findings }: { findings: FindingView[] }) {
-  if (findings.length === 0) return <p>診断項目の結果はまだありません。</p>;
+  if (findings.length === 0) return <p className="text-muted-foreground text-sm">診断項目の結果はまだありません。</p>;
   return (
-    <ul className="findings">
+    <ul className="grid gap-3">
       {findings.map((f) => (
-        <li key={f.itemCode} className={f.critical ? "critical" : undefined}>
-          <div className="finding-head">
-            <strong>{f.itemCode}</strong> <span>{FINDING_STATUS_LABELS[f.status] ?? f.status}</span>
-            {f.score !== null && <span>レベル {f.score}/3</span>}
-            {f.critical && <span className="badge badge-stop">重要</span>}
+        <li
+          key={f.itemCode}
+          className={cn(
+            "space-y-2 rounded-lg border bg-card p-4 text-sm shadow-xs",
+            f.critical && "border-l-4 border-l-destructive",
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <strong className="font-semibold">{f.itemCode}</strong>{" "}
+            <span>{FINDING_STATUS_LABELS[f.status] ?? f.status}</span>
+            {f.score !== null && <span className="text-muted-foreground tabular-nums">レベル {f.score}/3</span>}
+            {f.critical && <Badge variant="destructive">重要</Badge>}
             {f.inference ? (
-              <span className="badge badge-guess">推測を含む</span>
+              <Badge variant="warning">推測を含む</Badge>
             ) : (
-              <span className="badge badge-fact">観測事実に基づく</span>
+              <Badge variant="success">観測事実に基づく</Badge>
             )}
           </div>
-          {f.reason && <p>{f.reason}</p>}
+          {f.reason && <p className="leading-relaxed">{f.reason}</p>}
           {f.observations.length > 0 && (
-            <div>
-              <p className="sub">観測した事実</p>
-              <ul>
+            <div className="space-y-1">
+              <p>
+                <SubLabel>観測した事実</SubLabel>
+              </p>
+              <ul className="list-disc space-y-1 pl-5">
                 {f.observations.map((o) => (
                   <li key={`${o.fact}-${o.url ?? ""}-${o.evidence ?? ""}`}>
                     {o.fact}
-                    {o.evidence && <span className="sub">（{o.evidence}）</span>}
+                    {o.evidence && <span className="text-muted-foreground">（{o.evidence}）</span>}
                     {o.url && (
                       <>
                         {" "}
@@ -70,8 +93,8 @@ export function FindingsList({ findings }: { findings: FindingView[] }) {
             </div>
           )}
           {f.improvementHint && (
-            <p>
-              <span className="sub">改善の方向（提案）：</span>
+            <p className="leading-relaxed">
+              <SubLabel>改善の方向（提案）：</SubLabel>
               {f.improvementHint}
             </p>
           )}
@@ -83,28 +106,30 @@ export function FindingsList({ findings }: { findings: FindingView[] }) {
 
 export function ProposalSummary({ text }: { text: ProposalText }) {
   return (
-    <div className="stack">
-      <p>{text.summary}</p>
-      <ol>
+    <div className="space-y-4 text-sm">
+      <p className="leading-relaxed">{text.summary}</p>
+      <ol className="grid list-decimal gap-3 pl-5">
         {text.measures.map((m) => (
-          <li key={m.title}>
-            <strong>{m.title}</strong>
-            <p>
-              <span className="sub">現状：</span>
+          <li key={m.title} className="space-y-1">
+            <strong className="font-semibold">{m.title}</strong>
+            <p className="leading-relaxed">
+              <SubLabel>現状：</SubLabel>
               {m.current}
             </p>
-            <p>
-              <span className="sub">改善案：</span>
+            <p className="leading-relaxed">
+              <SubLabel>改善案：</SubLabel>
               {m.improvement}
             </p>
-            <p className="sub">根拠：{m.evidenceRefs.join("、")}</p>
+            <p className="text-muted-foreground text-xs">根拠：{m.evidenceRefs.join("、")}</p>
           </li>
         ))}
       </ol>
       {text.limitations.length > 0 && (
-        <div>
-          <p className="sub">未確認事項・提案の限界</p>
-          <ul>
+        <div className="space-y-1">
+          <p>
+            <SubLabel>未確認事項・提案の限界</SubLabel>
+          </p>
+          <ul className="list-disc space-y-1 pl-5">
             {text.limitations.map((l) => (
               <li key={l}>{l}</li>
             ))}
@@ -117,38 +142,43 @@ export function ProposalSummary({ text }: { text: ProposalText }) {
 
 export function CallScriptView({ script }: { script: CallScript }) {
   return (
-    <div className="stack script">
-      <p>
-        <span className="sub">名乗りと用件：</span>
+    <div className="space-y-4 text-sm">
+      <p className="leading-relaxed">
+        <SubLabel>名乗りと用件：</SubLabel>
         {script.opening}
       </p>
       {script.sections.map((s) => (
-        <div key={s.title}>
-          <p className="sub">{s.title}</p>
-          <ul>
+        <div key={s.title} className="space-y-1">
+          <p>
+            <SubLabel>{s.title}</SubLabel>
+          </p>
+          <ul className="list-disc space-y-1 pl-5">
             {s.lines.map((l) => (
               <li key={l}>{l}</li>
             ))}
           </ul>
         </div>
       ))}
-      <p>
-        <span className="sub">断られた場合：</span>
+      <p className="leading-relaxed">
+        <SubLabel>断られた場合：</SubLabel>
         {script.onDecline}
       </p>
-      <p>
-        <span className="sub">締め：</span>
+      <p className="leading-relaxed">
+        <SubLabel>締め：</SubLabel>
         {script.closing}
       </p>
       {script.doNotSay.length > 0 && (
-        <div className="warn">
-          <p>言ってはいけないこと</p>
-          <ul>
-            {script.doNotSay.map((l) => (
-              <li key={l}>{l}</li>
-            ))}
-          </ul>
-        </div>
+        <Alert variant="warning">
+          <TriangleAlert />
+          <AlertTitle>言ってはいけないこと</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-1 pl-5">
+              {script.doNotSay.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       )}
     </div>
   );
@@ -161,34 +191,44 @@ function rewardText(t: TermsView): string {
 }
 
 export function TermsTable({ terms }: { terms: TermsView[] }) {
-  if (terms.length === 0) return <p className="warn">販売条件・報酬条件：未設定</p>;
+  if (terms.length === 0)
+    return (
+      <Alert variant="warning">
+        <TriangleAlert />
+        <AlertDescription>販売条件・報酬条件：未設定</AlertDescription>
+      </Alert>
+    );
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>商品</th>
-            <th>販売価格</th>
-            <th>継続費用（月額）</th>
-            <th>報酬条件</th>
-          </tr>
-        </thead>
-        <tbody>
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>商品</TableHead>
+            <TableHead>販売価格</TableHead>
+            <TableHead>継続費用（月額）</TableHead>
+            <TableHead>報酬条件</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {terms.map((t) => (
-            <tr key={t.id}>
-              <td>
-                {t.name}
-                <span className="sub">（版 {t.version}）</span>
-                {!t.ready && <span className="badge badge-stop">条件未設定</span>}
-              </td>
-              <td>{formatYen(t.price)}</td>
-              <td>{t.monthlyFee === null ? "なし・未設定" : formatYen(t.monthlyFee)}</td>
-              <td>{rewardText(t)}</td>
-            </tr>
+            <TableRow key={t.id}>
+              <TableCell>
+                <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+                  <span className="font-medium">{t.name}</span>
+                  <span className="text-muted-foreground text-xs">（版 {t.version}）</span>
+                  {!t.ready && <Badge variant="destructive">条件未設定</Badge>}
+                </div>
+              </TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums">{formatYen(t.price)}</TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums">
+                {t.monthlyFee === null ? "なし・未設定" : formatYen(t.monthlyFee)}
+              </TableCell>
+              <TableCell>{rewardText(t)}</TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
-      <p className="sub">
+        </TableBody>
+      </Table>
+      <p className="text-muted-foreground text-xs">
         報酬は運営が契約資料を確認して契約完了にした時点で発生します。価格・報酬条件は運営が設定します。
       </p>
     </div>

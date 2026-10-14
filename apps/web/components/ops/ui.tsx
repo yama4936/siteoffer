@@ -1,63 +1,89 @@
-import Link from "next/link";
+import {
+  ClipboardCheck,
+  FileSignature,
+  LayoutDashboard,
+  LogOut,
+  PackageCheck,
+  Search,
+  Settings,
+  Users,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
+import { Brand } from "@/components/shell/brand";
+import { NavLink } from "@/components/shell/nav-link";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
-/** 運営画面の共通部品（素朴な見た目。外部CSSは使わない） */
+/** 運営画面の共通部品（Tailwind ＋ shadcn/ui） */
 
 export const NAV_ITEMS = [
-  { href: "/ops", label: "概要" },
-  { href: "/ops/discovery", label: "1. 収集・候補" },
-  { href: "/ops/review", label: "2. 診断・レビュー・営業可能化" },
-  { href: "/ops/assignments", label: "3. 担当・営業拒否・引き継ぎ" },
-  { href: "/ops/contracts", label: "4. 商品条件・契約・入金・報酬" },
-  { href: "/ops/delivery", label: "5. 制作・ドメイン希望" },
-  { href: "/ops/settings", label: "6. 設定・操作履歴" },
+  { href: "/ops", label: "概要", icon: LayoutDashboard, exact: true },
+  { href: "/ops/discovery", label: "収集・候補", icon: Search },
+  { href: "/ops/review", label: "診断・レビュー・営業可能化", icon: ClipboardCheck },
+  { href: "/ops/assignments", label: "担当・営業拒否・引き継ぎ", icon: Users },
+  { href: "/ops/contracts", label: "商品条件・契約・入金・報酬", icon: FileSignature },
+  { href: "/ops/delivery", label: "制作・ドメイン希望", icon: PackageCheck },
+  { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
 ] as const;
 
-export const OPS_CSS = `
-.ops { font-family: system-ui, sans-serif; font-size: 14px; color: #222; max-width: 1200px; margin: 0 auto; padding: 8px 16px 48px; }
-.ops header { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; border-bottom: 1px solid #ccc; padding-bottom: 8px; margin-bottom: 12px; }
-.ops header nav { display: flex; flex-wrap: wrap; gap: 4px 12px; }
-.ops a { color: #0645ad; }
-.ops table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
-.ops th, .ops td { border: 1px solid #ddd; padding: 4px 6px; text-align: left; vertical-align: top; }
-.ops th { background: #f3f3f3; font-weight: 600; }
-.ops form.inline { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
-.ops form.stack { display: grid; gap: 6px; max-width: 560px; margin: 8px 0 16px; }
-.ops form.stack label { display: grid; gap: 2px; }
-.ops input, .ops select, .ops textarea, .ops button { font: inherit; padding: 2px 6px; }
-.ops button { cursor: pointer; }
-.ops .flash { padding: 6px 10px; margin: 8px 0; border: 1px solid; }
-.ops .flash.ok { background: #eef8ee; border-color: #7a7; }
-.ops .flash.err { background: #fbeeee; border-color: #c77; }
-.ops .muted { color: #666; }
-.ops .warn { color: #a40; }
-.ops pre { white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 12px; max-height: 240px; overflow: auto; background: #fafafa; }
-.ops section { margin: 16px 0 24px; }
-.ops details { margin: 4px 0; }
-`;
+const linkBase =
+  "flex items-center gap-2.5 whitespace-nowrap rounded-md px-3 py-2 text-sm no-underline transition-colors hover:no-underline [&_svg]:size-4 [&_svg]:shrink-0";
 
 export function OpsShell({ userName, children }: { userName: string; children: ReactNode }) {
   return (
-    <div className="ops">
-      <style>{OPS_CSS}</style>
-      <header>
-        <strong>SiteOffer 運営</strong>
-        <nav>
-          {NAV_ITEMS.map((i) => (
-            <Link key={i.href} href={i.href}>
-              {i.label}
-            </Link>
+    <div className="min-h-dvh lg:grid lg:grid-cols-[16rem_1fr]">
+      <aside className="sticky top-0 z-20 bg-sidebar text-sidebar-foreground lg:h-dvh lg:overflow-y-auto">
+        <div className="flex items-center justify-between gap-2 px-4 py-3 lg:py-5">
+          <Brand label="運営" />
+          <form action={logoutAction} className="lg:hidden">
+            <Button
+              type="submit"
+              variant="ghost"
+              size="sm"
+              className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <LogOut />
+              ログアウト
+            </Button>
+          </form>
+        </div>
+        <nav aria-label="運営メニュー" className="flex gap-1 overflow-x-auto px-2 pb-2 lg:flex-col lg:px-3">
+          {NAV_ITEMS.map((item, i) => (
+            <NavLink
+              key={item.href}
+              href={item.href}
+              exact={"exact" in item && item.exact}
+              className={`${linkBase} text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground`}
+              activeClassName="bg-sidebar-accent font-medium text-sidebar-foreground"
+            >
+              <item.icon aria-hidden="true" />
+              <span>
+                {i > 0 ? <span className="mr-1 tabular-nums opacity-60">{i}.</span> : null}
+                {item.label}
+              </span>
+            </NavLink>
           ))}
         </nav>
-        <span className="muted">
-          {userName}（運営）
-          <form action={logoutAction} className="inline" style={{ marginLeft: 8 }}>
-            <button type="submit">ログアウト</button>
+        <div className="hidden border-sidebar-accent border-t px-4 py-4 lg:block">
+          <div className="mb-2 text-sidebar-muted text-xs">ログイン中</div>
+          <div className="mb-3 truncate text-sm">{userName}（運営）</div>
+          <form action={logoutAction}>
+            <Button
+              type="submit"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <LogOut />
+              ログアウト
+            </Button>
           </form>
-        </span>
-      </header>
-      {children}
+        </div>
+      </aside>
+      <main className="min-w-0 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
+        <div className="mx-auto max-w-7xl">{children}</div>
+      </main>
     </div>
   );
 }
@@ -75,11 +101,15 @@ export function Flash({ searchParams }: { searchParams: SearchParams }) {
   const error = first(searchParams, "error");
   return (
     <>
-      {msg ? <p className="flash ok">{msg}</p> : null}
+      {msg ? (
+        <Alert variant="success" className="mb-4">
+          <AlertDescription>{msg}</AlertDescription>
+        </Alert>
+      ) : null}
       {error ? (
-        <p className="flash err" role="alert">
-          {error}
-        </p>
+        <Alert variant="destructive" role="alert" className="mb-4">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : null}
     </>
   );
@@ -91,10 +121,18 @@ export function ReturnTo({ path }: { path: string }) {
 }
 
 export function Json({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return <span className="muted">—</span>;
-  return <pre>{JSON.stringify(value, null, 2)}</pre>;
+  if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>;
+  return (
+    <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
 }
 
 export function Forbidden() {
-  return <p className="flash err">運営だけが閲覧できます。</p>;
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>運営だけが閲覧できます。</AlertDescription>
+    </Alert>
+  );
 }

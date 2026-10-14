@@ -1,5 +1,12 @@
 import Link from "next/link";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
+import { inlineFormClass, StatusBadge } from "@/components/ops/ui-parts-1";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { PageHeader, Section } from "@/components/ui/page";
+import { NativeSelect } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { ACTIVITY_LABEL, ASSIGNMENT_STATUS_LABEL, fmtDate, label, SUPPRESSION_LABEL } from "@/lib/ops/format";
 import {
@@ -39,80 +46,101 @@ export default async function AssignmentsPage({
   );
 
   return (
-    <main>
-      <h1>3. 担当状況・営業拒否・引き継ぎ</h1>
+    <>
+      <PageHeader title="3. 担当状況・営業拒否・引き継ぎ" />
       <Flash searchParams={sp} />
 
-      <section>
-        <h2>担当の一覧{includeClosed ? "（終了を含む）" : "（有効な担当）"}</h2>
-        <p>
-          {includeClosed ? (
-            <Link href="/ops/assignments">有効な担当だけ表示</Link>
+      <Section
+        title={`担当の一覧${includeClosed ? "（終了を含む）" : "（有効な担当）"}`}
+        description="運営確認待ち（商談中の期限超過など）は即座に別の営業ユーザーへ渡さず、延長・付け替え・解除を運営が判断します（12.2）。"
+        actions={
+          includeClosed ? (
+            <Link href="/ops/assignments" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              有効な担当だけ表示
+            </Link>
           ) : (
-            <Link href="/ops/assignments?all=1">終了した担当も表示</Link>
-          )}
-        </p>
-        <p className="muted">
-          運営確認待ち（商談中の期限超過など）は即座に別の営業ユーザーへ渡さず、延長・付け替え・解除を運営が判断します（12.2）。
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>企業</th>
-              <th>営業ユーザー</th>
-              <th>状態</th>
-              <th>確保・期限・次回対応</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+            <Link href="/ops/assignments?all=1" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              終了した担当も表示
+            </Link>
+          )
+        }
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>企業</TableHead>
+              <TableHead>営業ユーザー</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>確保・期限・次回対応</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map(({ a, companyName, suppression, userName, userStatus }) => {
               const active = !["completed", "released", "lost"].includes(a.status);
               return (
-                <tr key={a.id}>
-                  <td>
-                    <Link href={`/ops/companies/${a.companyId}`}>{companyName}</Link>
+                <TableRow key={a.id} className={a.status === "awaiting_ops" ? "bg-warning/5" : undefined}>
+                  <TableCell className="min-w-40">
+                    <Link href={`/ops/companies/${a.companyId}`} className="font-medium">
+                      {companyName}
+                    </Link>
                     {suppression !== "none" ? (
-                      <div className="warn">抑止：{label(SUPPRESSION_LABEL, suppression)}</div>
+                      <div className="mt-1">
+                        <Badge variant="warning">抑止：{label(SUPPRESSION_LABEL, suppression)}</Badge>
+                      </div>
                     ) : null}
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell className="min-w-28">
                     {userName}
-                    {userStatus === "suspended" ? <span className="warn">（利用停止中）</span> : null}
-                  </td>
-                  <td className={a.status === "awaiting_ops" ? "warn" : undefined}>
-                    {label(ASSIGNMENT_STATUS_LABEL, a.status)}
-                    {a.releaseReason ? <div className="muted">{a.releaseReason}</div> : null}
-                  </td>
-                  <td>
+                    {userStatus === "suspended" ? (
+                      <Badge variant="destructive" className="ml-1">
+                        （利用停止中）
+                      </Badge>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="min-w-32">
+                    <StatusBadge value={a.status} labels={ASSIGNMENT_STATUS_LABEL} />
+                    {a.releaseReason ? (
+                      <div className="mt-1 text-muted-foreground text-xs">{a.releaseReason}</div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     確保 {fmtDate(a.claimedAt)}
                     <br />
                     期限 {fmtDate(a.expiresAt)}
                     <br />
                     次回 {fmtDate(a.nextActionAt)}
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell className="min-w-96">
                     {active ? (
-                      <>
-                        <form action={extendAssignmentAction} className="inline">
+                      <div className="grid gap-2">
+                        <form action={extendAssignmentAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="assignmentId" value={a.id} />
-                          <input type="datetime-local" name="expiresAt" required aria-label="新しい期限（日本時間）" />
-                          <select name="resumeStatus" defaultValue="">
+                          <Input
+                            type="datetime-local"
+                            name="expiresAt"
+                            required
+                            aria-label="新しい期限（日本時間）"
+                            className="h-8 w-auto"
+                          />
+                          <NativeSelect name="resumeStatus" defaultValue="" className="h-8 w-auto">
                             <option value="">
                               {a.status === "awaiting_ops" ? "状態：商談中に戻す（既定）" : "状態：変えない"}
                             </option>
                             <option value="claimed">確保（未着手）</option>
                             <option value="working">営業中</option>
                             <option value="negotiating">商談中</option>
-                          </select>
-                          <input name="reason" placeholder="理由（任意）" />
-                          <button type="submit">延長</button>
+                          </NativeSelect>
+                          <Input name="reason" placeholder="理由（任意）" className="h-8 w-auto flex-1 basis-32" />
+                          <Button type="submit" size="xs">
+                            延長
+                          </Button>
                         </form>
-                        <form action={reassignAssignmentAction} className="inline">
+                        <form action={reassignAssignmentAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="assignmentId" value={a.id} />
-                          <select name="toUserId" required defaultValue="">
+                          <NativeSelect name="toUserId" required defaultValue="" className="h-8 w-auto">
                             <option value="" disabled>
                               付け替え先
                             </option>
@@ -123,103 +151,136 @@ export default async function AssignmentsPage({
                                   {u.displayName}
                                 </option>
                               ))}
-                          </select>
-                          <input name="reason" placeholder="理由（必須）" required />
-                          <button type="submit">付け替え</button>
+                          </NativeSelect>
+                          <Input
+                            name="reason"
+                            placeholder="理由（必須）"
+                            required
+                            className="h-8 w-auto flex-1 basis-32"
+                          />
+                          <Button type="submit" variant="secondary" size="xs">
+                            付け替え
+                          </Button>
                         </form>
-                        <form action={releaseAssignmentAction} className="inline">
+                        <form action={releaseAssignmentAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="assignmentId" value={a.id} />
-                          <input name="reason" placeholder="解除の理由（必須）" required />
-                          <button type="submit">解除</button>
+                          <Input
+                            name="reason"
+                            placeholder="解除の理由（必須）"
+                            required
+                            className="h-8 w-auto flex-1 basis-32"
+                          />
+                          <Button type="submit" variant="destructive" size="xs">
+                            解除
+                          </Button>
                         </form>
-                      </>
+                      </div>
                     ) : null}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
             {rows.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="muted">
+              <TableRow>
+                <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
                   担当はありません
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : null}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>運営への相談（{consultations.value.length}件）</h2>
-        <p className="muted">対応済みの管理は未実装です（core・スキーマに列がありません）。</p>
-        <table>
-          <thead>
-            <tr>
-              <th>日時</th>
-              <th>企業</th>
-              <th>営業ユーザー</th>
-              <th>活動</th>
-              <th>メモ</th>
-              <th>次回対応</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section
+        title={`運営への相談（${consultations.value.length}件）`}
+        description="対応済みの管理は未実装です（core・スキーマに列がありません）。"
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>日時</TableHead>
+              <TableHead>企業</TableHead>
+              <TableHead>営業ユーザー</TableHead>
+              <TableHead>活動</TableHead>
+              <TableHead>メモ</TableHead>
+              <TableHead>次回対応</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {consultations.value.map(({ activity, companyName, userName }) => (
-              <tr key={activity.id}>
-                <td>{fmtDate(activity.occurredAt)}</td>
-                <td>
+              <TableRow key={activity.id}>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(activity.occurredAt)}</TableCell>
+                <TableCell className="min-w-40">
                   <Link href={`/ops/companies/${activity.companyId}`}>{companyName}</Link>
-                </td>
-                <td>{userName}</td>
-                <td>{label(ACTIVITY_LABEL, activity.kind)}</td>
-                <td>{activity.note ?? "—"}</td>
-                <td>{fmtDate(activity.nextActionAt)}</td>
-              </tr>
+                </TableCell>
+                <TableCell>{userName}</TableCell>
+                <TableCell>
+                  <Badge variant="secondary">{label(ACTIVITY_LABEL, activity.kind)}</Badge>
+                </TableCell>
+                <TableCell className="min-w-48">{activity.note ?? "—"}</TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                  {fmtDate(activity.nextActionAt)}
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>営業抑止のある企業（{suppressed.value.length}件）</h2>
-        <p className="muted">
-          抑止は企業共通で、担当解除や再収集では消えません。「今は不要」の再連絡目安を過ぎても自動では解除しません。
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>企業</th>
-              <th>抑止</th>
-              <th>理由</th>
-              <th>再連絡の目安</th>
-              <th>記録日時</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section
+        title={`営業抑止のある企業（${suppressed.value.length}件）`}
+        description="抑止は企業共通で、担当解除や再収集では消えません。「今は不要」の再連絡目安を過ぎても自動では解除しません。"
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>企業</TableHead>
+              <TableHead>抑止</TableHead>
+              <TableHead>理由</TableHead>
+              <TableHead>再連絡の目安</TableHead>
+              <TableHead>記録日時</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {suppressed.value.map((c) => (
-              <tr key={c.id}>
-                <td>
+              <TableRow key={c.id}>
+                <TableCell className="min-w-40 font-medium">
                   <Link href={`/ops/companies/${c.id}`}>{c.name}</Link>
-                </td>
-                <td>{label(SUPPRESSION_LABEL, c.suppression)}</td>
-                <td>{c.suppressionReason ?? "—"}</td>
-                <td>{fmtDate(c.recontactAfter)}</td>
-                <td>{fmtDate(c.suppressionUpdatedAt)}</td>
-                <td>
-                  <form action={liftSuppressionAction} className="inline">
+                </TableCell>
+                <TableCell>
+                  <StatusBadge
+                    value={c.suppression}
+                    labels={SUPPRESSION_LABEL}
+                    tone={c.suppression === "do_not_contact" ? "destructive" : "warning"}
+                  />
+                </TableCell>
+                <TableCell className="min-w-40">{c.suppressionReason ?? "—"}</TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(c.recontactAfter)}</TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                  {fmtDate(c.suppressionUpdatedAt)}
+                </TableCell>
+                <TableCell className="min-w-72">
+                  <form action={liftSuppressionAction} className={inlineFormClass}>
                     <ReturnTo path={here} />
                     <input type="hidden" name="companyId" value={c.id} />
-                    <input name="reason" placeholder="解除の理由（必須）" required />
-                    <button type="submit">抑止を解除</button>
+                    <Input
+                      name="reason"
+                      placeholder="解除の理由（必須）"
+                      required
+                      className="h-8 w-auto flex-1 basis-40"
+                    />
+                    <Button type="submit" variant="outline" size="xs">
+                      抑止を解除
+                    </Button>
                   </form>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
-    </main>
+          </TableBody>
+        </Table>
+      </Section>
+    </>
   );
 }

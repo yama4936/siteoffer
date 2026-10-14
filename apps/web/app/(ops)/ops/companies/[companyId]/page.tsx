@@ -1,8 +1,27 @@
 import { isTermsReadyForSales } from "@siteoffer/core";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AuditView } from "@/components/ops/audit-view";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
+import {
+  detailsClass,
+  EmptyRow,
+  inlineFormClass,
+  StatusBadge,
+  SubHeading,
+  stackFormClass,
+  summaryClass,
+} from "@/components/ops/ui-parts-2";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/label";
+import { DescriptionList, EmptyState, PageHeader, Section } from "@/components/ui/page";
+import { NativeSelect } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { sellableIssueText } from "@/lib/ops/commands";
 import { isUuid, safeReturnTo } from "@/lib/ops/form";
@@ -61,397 +80,492 @@ export default async function CompanyPage({
   const readyTerms = terms.value.filter((t) => isTermsReadyForSales(t));
 
   return (
-    <main>
-      <p>
-        <Link href={back}>← 一覧へ戻る</Link>
-      </p>
-      <h1>{c.name}</h1>
+    <>
+      <PageHeaderBlock
+        back={back}
+        name={c.name}
+        pipelineStatus={c.pipelineStatus}
+        officialSiteStatus={c.officialSiteStatus}
+        suppression={c.suppression}
+      />
       <Flash searchParams={sp} />
 
-      <section>
-        <h2>基本情報</h2>
-        <table>
-          <tbody>
-            <tr>
-              <th>法人番号</th>
-              <td>{c.corporateNumber ?? "不明"}</td>
-              <th>準備段階</th>
-              <td>{label(PIPELINE_LABEL, c.pipelineStatus)}</td>
-            </tr>
-            <tr>
-              <th>所在地</th>
-              <td>
+      <div className="mb-8 grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>
+              <h2>基本情報</h2>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <DescriptionList>
+              <dt>法人番号</dt>
+              <dd>{c.corporateNumber ?? "不明"}</dd>
+              <dt>準備段階</dt>
+              <dd>
+                <StatusBadge map={PIPELINE_LABEL} status={c.pipelineStatus} />
+              </dd>
+              <dt>所在地</dt>
+              <dd>
                 {[c.prefecture, c.city, c.address].filter(Boolean).join(" ") || "不明"}
                 <br />
-                <span className="muted">出典：{c.addressSourceUrl ?? "なし"}</span>
-              </td>
-              <th>公式サイト</th>
-              <td>{label(OFFICIAL_SITE_LABEL, c.officialSiteStatus)}</td>
-            </tr>
-            <tr>
-              <th>業種</th>
-              <td>{c.industry ?? "不明"}</td>
-              <th>営業抑止</th>
-              <td>
+                <span className="break-all text-muted-foreground text-xs">出典：{c.addressSourceUrl ?? "なし"}</span>
+              </dd>
+              <dt>公式サイト</dt>
+              <dd>
+                <StatusBadge map={OFFICIAL_SITE_LABEL} status={c.officialSiteStatus} />
+              </dd>
+              <dt>業種</dt>
+              <dd>{c.industry ?? "不明"}</dd>
+              <dt>営業抑止</dt>
+              <dd>
                 {label(SUPPRESSION_LABEL, c.suppression)}
                 {c.suppressionReason ? `（${c.suppressionReason}）` : ""}
-              </td>
-            </tr>
-            <tr>
-              <th>代表窓口</th>
-              <td>{c.representativePhone ?? "不明"}</td>
-              <th>更新</th>
-              <td>{fmtDate(c.updatedAt)}</td>
-            </tr>
-          </tbody>
-        </table>
+              </dd>
+              <dt>代表窓口</dt>
+              <dd>{c.representativePhone ?? "不明"}</dd>
+              <dt>更新</dt>
+              <dd className="tabular-nums">{fmtDate(c.updatedAt)}</dd>
+            </DescriptionList>
 
-        <details>
-          <summary>候補を修正する</summary>
-          <form action={updateCandidateAction} className="stack">
-            <ReturnTo path={here} />
-            <input type="hidden" name="companyId" value={c.id} />
-            <label>
-              企業名
-              <input name="name" defaultValue={c.name} required />
-            </label>
-            <label>
-              都道府県
-              <input name="prefecture" defaultValue={c.prefecture ?? ""} />
-            </label>
-            <label>
-              市区町村
-              <input name="city" defaultValue={c.city ?? ""} />
-            </label>
-            <label>
-              住所
-              <input name="address" defaultValue={c.address ?? ""} />
-            </label>
-            <label>
-              住所の出典URL
-              <input name="addressSourceUrl" type="url" defaultValue={c.addressSourceUrl ?? ""} />
-            </label>
-            <label>
-              業種
-              <input name="industry" defaultValue={c.industry ?? ""} />
-            </label>
-            <label>
-              代表窓口（電話）
-              <input name="representativePhone" defaultValue={c.representativePhone ?? ""} />
-            </label>
-            <button type="submit">修正を保存</button>
-          </form>
-        </details>
+            <div className="space-y-2">
+              <details className={detailsClass}>
+                <summary className={summaryClass}>候補を修正する</summary>
+                <form action={updateCandidateAction} className={stackFormClass}>
+                  <ReturnTo path={here} />
+                  <input type="hidden" name="companyId" value={c.id} />
+                  <Field label="企業名" htmlFor="cand-name">
+                    <Input id="cand-name" name="name" defaultValue={c.name} required />
+                  </Field>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="都道府県" htmlFor="cand-prefecture">
+                      <Input id="cand-prefecture" name="prefecture" defaultValue={c.prefecture ?? ""} />
+                    </Field>
+                    <Field label="市区町村" htmlFor="cand-city">
+                      <Input id="cand-city" name="city" defaultValue={c.city ?? ""} />
+                    </Field>
+                  </div>
+                  <Field label="住所" htmlFor="cand-address">
+                    <Input id="cand-address" name="address" defaultValue={c.address ?? ""} />
+                  </Field>
+                  <Field label="住所の出典URL" htmlFor="cand-address-source">
+                    <Input
+                      id="cand-address-source"
+                      name="addressSourceUrl"
+                      type="url"
+                      defaultValue={c.addressSourceUrl ?? ""}
+                    />
+                  </Field>
+                  <Field label="業種" htmlFor="cand-industry">
+                    <Input id="cand-industry" name="industry" defaultValue={c.industry ?? ""} />
+                  </Field>
+                  <Field label="代表窓口（電話）" htmlFor="cand-phone">
+                    <Input id="cand-phone" name="representativePhone" defaultValue={c.representativePhone ?? ""} />
+                  </Field>
+                  <div>
+                    <Button type="submit" size="sm">
+                      修正を保存
+                    </Button>
+                  </div>
+                </form>
+              </details>
 
-        <details>
-          <summary>候補を除外する（企業共通の抑止。再収集でも営業可能に戻りません）</summary>
-          <form action={excludeCandidateAction} className="stack">
-            <ReturnTo path={here} />
-            <input type="hidden" name="companyId" value={c.id} />
-            <label>
-              種類
-              <select name="kind" defaultValue="excluded">
-                <option value="excluded">対象外（除外）</option>
-                <option value="existing_customer">既存顧客</option>
-              </select>
-            </label>
-            <label>
-              理由
-              <input name="reason" required />
-            </label>
-            <button type="submit">除外する</button>
-          </form>
-        </details>
-      </section>
+              <details className={detailsClass}>
+                <summary className={summaryClass}>
+                  候補を除外する（企業共通の抑止。再収集でも営業可能に戻りません）
+                </summary>
+                <form action={excludeCandidateAction} className={stackFormClass}>
+                  <ReturnTo path={here} />
+                  <input type="hidden" name="companyId" value={c.id} />
+                  <Field label="種類" htmlFor="exclude-kind">
+                    <NativeSelect id="exclude-kind" name="kind" defaultValue="excluded">
+                      <option value="excluded">対象外（除外）</option>
+                      <option value="existing_customer">既存顧客</option>
+                    </NativeSelect>
+                  </Field>
+                  <Field label="理由" htmlFor="exclude-reason">
+                    <Input id="exclude-reason" name="reason" required />
+                  </Field>
+                  <div>
+                    <Button type="submit" size="sm" variant="destructive">
+                      除外する
+                    </Button>
+                  </div>
+                </form>
+              </details>
+            </div>
+          </CardContent>
+        </Card>
 
-      <section>
-        <h2>サイトと公式サイトの確認</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>URL</th>
-              <th>種類</th>
-              <th>主サイト</th>
-              <th>登録</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h2>営業可能化</h2>
+            </CardTitle>
+            <CardDescription>
+              運営確認（最新の提案版の承認）が済み、販売条件・報酬条件が設定された版を選んだ候補だけを営業可能にできます。判定はサーバー側で行います。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {c.pipelineStatus === "sellable" ? (
+              <form action={withdrawSellableAction} className="grid gap-2">
+                <ReturnTo path={here} />
+                <input type="hidden" name="companyId" value={c.id} />
+                <Input name="reason" placeholder="取り下げの理由（必須）" required aria-label="取り下げの理由" />
+                <div>
+                  <Button type="submit" size="sm" variant="destructive">
+                    営業可能を取り下げる
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <>
+                {baseIssues.length > 0 ? (
+                  <Alert variant="warning">
+                    <AlertDescription>
+                      <ul className="list-disc space-y-0.5 pl-4">
+                        {baseIssues.map((i) => (
+                          <li key={i}>{sellableIssueText(i)}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                {readyTerms.length === 0 ? (
+                  <Alert variant="warning">
+                    <AlertDescription>
+                      <p>
+                        販売条件・報酬条件が設定された有効な版がありません。<Link href="/ops/contracts">商品条件</Link>
+                        で版を作成してください。
+                      </p>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <form action={makeSellableAction} className="grid gap-2">
+                  <ReturnTo path={here} />
+                  <input type="hidden" name="companyId" value={c.id} />
+                  <NativeSelect name="productTermsId" defaultValue="" aria-label="販売条件・報酬条件の版">
+                    <option value="">販売条件・報酬条件の版を選ぶ</option>
+                    {terms.value.map((t) => {
+                      const ready = isTermsReadyForSales(t);
+                      return (
+                        <option key={t.id} value={t.id} disabled={!ready}>
+                          {t.version} {t.name}：{yen(t.price)} / {rewardRuleText(t.rewardRule)}
+                          {ready ? "" : `（使えません：${termsIssueText(t)}）`}
+                        </option>
+                      );
+                    })}
+                  </NativeSelect>
+                  <div>
+                    <Button type="submit" size="sm" variant="success">
+                      営業可能にする
+                    </Button>
+                  </div>
+                </form>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Section title="サイトと公式サイトの確認">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>URL</TableHead>
+              <TableHead>種類</TableHead>
+              <TableHead>主サイト</TableHead>
+              <TableHead>登録</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {d.websites.map((w) => (
-              <tr key={w.id}>
-                <td>{w.url}</td>
-                <td>{w.kind === "current" ? "現サイト" : "提案"}</td>
-                <td>{w.isPrimary ? "主" : ""}</td>
-                <td>{fmtDate(w.createdAt)}</td>
-              </tr>
+              <TableRow key={w.id}>
+                <TableCell className="break-all">{w.url}</TableCell>
+                <TableCell>{w.kind === "current" ? "現サイト" : "提案"}</TableCell>
+                <TableCell>{w.isPrimary ? <Badge variant="info">主</Badge> : ""}</TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(w.createdAt)}</TableCell>
+              </TableRow>
             ))}
-            {d.websites.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="muted">
-                  サイトは見つかっていません
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-        <form action={setOfficialSiteStatusAction} className="inline">
+            {d.websites.length === 0 ? <EmptyRow colSpan={4}>サイトは見つかっていません</EmptyRow> : null}
+          </TableBody>
+        </Table>
+        <form action={setOfficialSiteStatusAction} className={inlineFormClass}>
           <ReturnTo path={here} />
           <input type="hidden" name="companyId" value={c.id} />
-          <select
+          <NativeSelect
             name="status"
             defaultValue={c.officialSiteStatus === "needs_review" ? "confirmed" : c.officialSiteStatus}
+            aria-label="公式サイトの確度"
+            className="w-auto"
           >
             {Object.entries(OFFICIAL_SITE_LABEL).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
               </option>
             ))}
-          </select>
-          <select name="websiteId" defaultValue="">
+          </NativeSelect>
+          <NativeSelect name="websiteId" defaultValue="" aria-label="主サイト" className="w-auto max-w-full">
             <option value="">（主サイトは変えない）</option>
             {d.websites.map((w) => (
               <option key={w.id} value={w.id}>
                 主サイト：{w.url}
               </option>
             ))}
-          </select>
-          <input name="note" placeholder="確認メモ（任意）" />
-          <button type="submit">公式サイトの確度を更新</button>
+          </NativeSelect>
+          <Input name="note" placeholder="確認メモ（任意）" aria-label="確認メモ" className="w-56" />
+          <Button type="submit" size="sm">
+            公式サイトの確度を更新
+          </Button>
         </form>
 
-        <h3>出典</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>取得元</th>
-              <th>役割</th>
-              <th>出典URL</th>
-              <th>取得日時</th>
-            </tr>
-          </thead>
-          <tbody>
+        <SubHeading>出典</SubHeading>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>取得元</TableHead>
+              <TableHead>役割</TableHead>
+              <TableHead>出典URL</TableHead>
+              <TableHead>取得日時</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {d.sources.map((s) => (
-              <tr key={s.id}>
-                <td>{s.provider}</td>
-                <td>{s.role === "site" ? "公式サイト候補" : "企業候補"}</td>
-                <td>{s.sourceUrl ?? "—"}</td>
-                <td>{fmtDate(s.fetchedAt)}</td>
-              </tr>
+              <TableRow key={s.id}>
+                <TableCell>{s.provider}</TableCell>
+                <TableCell>{s.role === "site" ? "公式サイト候補" : "企業候補"}</TableCell>
+                <TableCell className="break-all">{s.sourceUrl ?? "—"}</TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(s.fetchedAt)}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>診断結果</h2>
+      <Section title="診断結果">
         {d.latestAudit ? (
           <AuditView audit={d.latestAudit} findings={d.findings} />
         ) : (
-          <p className="muted">診断はまだありません。</p>
+          <EmptyState>診断はまだありません。</EmptyState>
         )}
-        {d.audits.length > 1 ? <p className="muted">過去の診断 {d.audits.length - 1}件（最新のみ表示）</p> : null}
-      </section>
+        {d.audits.length > 1 ? (
+          <p className="text-muted-foreground text-sm">過去の診断 {d.audits.length - 1}件（最新のみ表示）</p>
+        ) : null}
+      </Section>
 
-      <section>
-        <h2>提案版とレビュー（運営確認）</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>版</th>
-              <th>状態</th>
-              <th>内容</th>
-              <th>デモ</th>
-              <th>レビュー</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section title="提案版とレビュー（運営確認）">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>版</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>内容</TableHead>
+              <TableHead>デモ</TableHead>
+              <TableHead>レビュー</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {d.proposalVersions.map((v) => (
-              <tr key={v.id}>
-                <td>v{v.version}</td>
-                <td>{label(PROPOSAL_STATUS_LABEL, v.status)}</td>
-                <td>
+              <TableRow key={v.id}>
+                <TableCell className="font-medium tabular-nums">v{v.version}</TableCell>
+                <TableCell>
+                  <StatusBadge map={PROPOSAL_STATUS_LABEL} status={v.status} />
+                </TableCell>
+                <TableCell className="min-w-56">
                   <details>
-                    <summary>改善提案・電話台本など</summary>
-                    <Json value={v.content} />
+                    <summary className={summaryClass}>改善提案・電話台本など</summary>
+                    <div className="mt-2">
+                      <Json value={v.content} />
+                    </div>
                   </details>
-                </td>
-                <td>{v.demoArtifactDir ? <code>{v.demoArtifactDir}</code> : "—"}</td>
-                <td>
-                  {fmtDate(v.reviewedAt)}
-                  {v.reviewNote ? <div>{v.reviewNote}</div> : null}
-                </td>
-                <td>
+                </TableCell>
+                <TableCell>
+                  {v.demoArtifactDir ? <code className="break-all text-xs">{v.demoArtifactDir}</code> : "—"}
+                </TableCell>
+                <TableCell>
+                  <span className="whitespace-nowrap tabular-nums">{fmtDate(v.reviewedAt)}</span>
+                  {v.reviewNote ? <div className="text-muted-foreground text-xs">{v.reviewNote}</div> : null}
+                </TableCell>
+                <TableCell>
                   {v.status === "in_review" ? (
-                    <>
-                      <form action={reviewProposalAction} className="inline">
+                    <div className="grid min-w-64 gap-2">
+                      <form action={reviewProposalAction} className={inlineFormClass}>
                         <ReturnTo path={here} />
                         <input type="hidden" name="proposalVersionId" value={v.id} />
                         <input type="hidden" name="decision" value="approved" />
-                        <input name="note" placeholder="確認メモ（任意）" />
-                        <button type="submit">承認</button>
+                        <Input
+                          name="note"
+                          placeholder="確認メモ（任意）"
+                          aria-label="確認メモ"
+                          className="h-8 flex-1"
+                        />
+                        <Button type="submit" size="sm" variant="success">
+                          承認
+                        </Button>
                       </form>
-                      <form action={reviewProposalAction} className="inline">
+                      <form action={reviewProposalAction} className={inlineFormClass}>
                         <ReturnTo path={here} />
                         <input type="hidden" name="proposalVersionId" value={v.id} />
                         <input type="hidden" name="decision" value="rejected" />
-                        <input name="note" placeholder="差し戻しの理由（必須）" required />
-                        <button type="submit">差し戻し</button>
+                        <Input
+                          name="note"
+                          placeholder="差し戻しの理由（必須）"
+                          required
+                          aria-label="差し戻しの理由"
+                          className="h-8 flex-1"
+                        />
+                        <Button type="submit" size="sm" variant="outline">
+                          差し戻し
+                        </Button>
                       </form>
-                    </>
+                    </div>
                   ) : null}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-            {d.proposalVersions.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="muted">
-                  提案版はまだありません
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+            {d.proposalVersions.length === 0 ? <EmptyRow colSpan={6}>提案版はまだありません</EmptyRow> : null}
+          </TableBody>
+        </Table>
 
-        <h3>生成ジョブ</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>用途</th>
-              <th>状態</th>
-              <th>生成器</th>
-              <th>モデル（要求/応答）</th>
-              <th>プロンプト版</th>
-              <th>失敗理由</th>
-              <th>登録</th>
-            </tr>
-          </thead>
-          <tbody>
+        <SubHeading>生成ジョブ</SubHeading>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>用途</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>生成器</TableHead>
+              <TableHead>モデル（要求/応答）</TableHead>
+              <TableHead>プロンプト版</TableHead>
+              <TableHead>失敗理由</TableHead>
+              <TableHead>登録</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {d.generationJobs.map((j) => (
-              <tr key={j.id}>
-                <td>{j.purpose}</td>
-                <td>{label(JOB_STATUS_LABEL, j.status)}</td>
-                <td>{j.generator}</td>
-                <td>
+              <TableRow key={j.id}>
+                <TableCell>{j.purpose}</TableCell>
+                <TableCell>
+                  <StatusBadge map={JOB_STATUS_LABEL} status={j.status} />
+                </TableCell>
+                <TableCell>{j.generator}</TableCell>
+                <TableCell className="text-xs">
                   {j.requestedModel ?? "未記録"} / {j.responseModel ?? "未記録"}
-                </td>
-                <td>{j.promptVersion}</td>
-                <td>{j.errorCode ? `${j.errorCode}: ${j.error ?? ""}` : "—"}</td>
-                <td>{fmtDate(j.createdAt)}</td>
-              </tr>
+                </TableCell>
+                <TableCell className="text-xs">{j.promptVersion}</TableCell>
+                <TableCell className={j.errorCode ? "text-destructive text-xs" : undefined}>
+                  {j.errorCode ? `${j.errorCode}: ${j.error ?? ""}` : "—"}
+                </TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(j.createdAt)}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>営業可能化</h2>
-        <p className="muted">
-          運営確認（最新の提案版の承認）が済み、販売条件・報酬条件が設定された版を選んだ候補だけを営業可能にできます。判定はサーバー側で行います。
-        </p>
-        {c.pipelineStatus === "sellable" ? (
-          <form action={withdrawSellableAction} className="inline">
-            <ReturnTo path={here} />
-            <input type="hidden" name="companyId" value={c.id} />
-            <input name="reason" placeholder="取り下げの理由（必須）" required />
-            <button type="submit">営業可能を取り下げる</button>
-          </form>
-        ) : (
-          <>
-            {baseIssues.length > 0 ? (
-              <ul className="warn">
-                {baseIssues.map((i) => (
-                  <li key={i}>{sellableIssueText(i)}</li>
-                ))}
-              </ul>
-            ) : null}
-            {readyTerms.length === 0 ? (
-              <p className="warn">
-                販売条件・報酬条件が設定された有効な版がありません。<Link href="/ops/contracts">商品条件</Link>
-                で版を作成してください。
-              </p>
-            ) : null}
-            <form action={makeSellableAction} className="inline">
-              <ReturnTo path={here} />
-              <input type="hidden" name="companyId" value={c.id} />
-              <select name="productTermsId" defaultValue="">
-                <option value="">販売条件・報酬条件の版を選ぶ</option>
-                {terms.value.map((t) => {
-                  const ready = isTermsReadyForSales(t);
-                  return (
-                    <option key={t.id} value={t.id} disabled={!ready}>
-                      {t.version} {t.name}：{yen(t.price)} / {rewardRuleText(t.rewardRule)}
-                      {ready ? "" : `（使えません：${termsIssueText(t)}）`}
-                    </option>
-                  );
-                })}
-              </select>
-              <button type="submit">営業可能にする</button>
-            </form>
-          </>
-        )}
-      </section>
-
-      <section>
-        <h2>担当の履歴</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>営業ユーザー</th>
-              <th>状態</th>
-              <th>確保</th>
-              <th>期限</th>
-              <th>解除理由</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section
+        title="担当の履歴"
+        actions={
+          <Link href="/ops/assignments" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            担当状況の画面で付け替え・延長・解除
+          </Link>
+        }
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>営業ユーザー</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>確保</TableHead>
+              <TableHead>期限</TableHead>
+              <TableHead>解除理由</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {d.assignments.map(({ a, userName }) => (
-              <tr key={a.id}>
-                <td>{userName}</td>
-                <td>{label(ASSIGNMENT_STATUS_LABEL, a.status)}</td>
-                <td>{fmtDate(a.claimedAt)}</td>
-                <td>{fmtDate(a.expiresAt)}</td>
-                <td>{a.releaseReason ?? "—"}</td>
-              </tr>
+              <TableRow key={a.id}>
+                <TableCell>{userName}</TableCell>
+                <TableCell>
+                  <StatusBadge map={ASSIGNMENT_STATUS_LABEL} status={a.status} />
+                </TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(a.claimedAt)}</TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(a.expiresAt)}</TableCell>
+                <TableCell>{a.releaseReason ?? "—"}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-        <p>
-          <Link href="/ops/assignments">担当状況の画面で付け替え・延長・解除</Link>
-        </p>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>この企業の操作履歴（最新50件）</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>日時</th>
-              <th>主体</th>
-              <th>操作</th>
-              <th>変更前</th>
-              <th>変更後</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section title="この企業の操作履歴（最新50件）">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>日時</TableHead>
+              <TableHead>主体</TableHead>
+              <TableHead>操作</TableHead>
+              <TableHead>変更前</TableHead>
+              <TableHead>変更後</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {events.value.map(({ e, actorName }) => (
-              <tr key={e.id}>
-                <td>{fmtDate(e.createdAt)}</td>
-                <td>
+              <TableRow key={e.id}>
+                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(e.createdAt)}</TableCell>
+                <TableCell>
                   {e.actorKind}
                   {actorName ? `：${actorName}` : ""}
-                </td>
-                <td>{e.action}</td>
-                <td>
+                </TableCell>
+                <TableCell>
+                  <code className="text-xs">{e.action}</code>
+                </TableCell>
+                <TableCell className="min-w-48">
                   <Json value={e.before} />
-                </td>
-                <td>
+                </TableCell>
+                <TableCell className="min-w-48">
                   <Json value={e.after} />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
-    </main>
+          </TableBody>
+        </Table>
+      </Section>
+    </>
+  );
+}
+
+/** ページ見出し（企業名・状態・一覧へ戻る） */
+function PageHeaderBlock({
+  back,
+  name,
+  pipelineStatus,
+  officialSiteStatus,
+  suppression,
+}: {
+  back: string;
+  name: string;
+  pipelineStatus: string;
+  officialSiteStatus: string;
+  suppression: string;
+}) {
+  return (
+    <PageHeader
+      title={name}
+      description={
+        <div className="flex flex-wrap items-center gap-1.5">
+          <StatusBadge map={PIPELINE_LABEL} status={pipelineStatus} />
+          <Badge variant="outline">公式サイト：{label(OFFICIAL_SITE_LABEL, officialSiteStatus)}</Badge>
+          {suppression !== "none" ? (
+            <Badge variant="destructive">営業抑止：{label(SUPPRESSION_LABEL, suppression)}</Badge>
+          ) : null}
+        </div>
+      }
+      actions={
+        <Link href={back} className={buttonVariants({ variant: "outline", size: "sm" })}>
+          <ArrowLeft aria-hidden="true" />
+          一覧へ戻る
+        </Link>
+      }
+    />
   );
 }

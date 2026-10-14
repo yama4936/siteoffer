@@ -1,32 +1,56 @@
 "use client";
 
 // 営業画面のフォーム。値の検証・権限の判定はサーバー側（core の業務関数）で行い、ここでは結果を表示するだけ。
-import { useActionState, useState } from "react";
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
+import { type ReactNode, useActionState, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Field, Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import type { SalesAction, SalesActionState } from "@/lib/sales/action-state";
 import { ACTIVITY_KINDS, DOMAIN_INTENTS, DOMAIN_MANAGERS, TRI_STATES } from "@/lib/sales/labels";
 
 export function ActionMessage({ state }: { state: SalesActionState }) {
   if (!state) return null;
+  const ok = state.status !== "error";
   return (
-    <div role={state.status === "error" ? "alert" : "status"} className={`msg msg-${state.status}`}>
-      <p>{state.message}</p>
-      {state.notices?.map((n) => (
-        <p key={n} className="notice">
-          {n}
-        </p>
-      ))}
-    </div>
+    <Alert role={ok ? "status" : "alert"} variant={ok ? "success" : "destructive"}>
+      {ok ? <CircleCheck /> : <CircleAlert />}
+      <AlertDescription>
+        <p>{state.message}</p>
+        {state.notices?.map((n) => (
+          <p key={n} className="text-muted-foreground">
+            {n}
+          </p>
+        ))}
+      </AlertDescription>
+    </Alert>
   );
 }
+
+/** フォーム内の補足（注意書き） */
+function Hint({ children }: { children: ReactNode }) {
+  return (
+    <Alert variant="info">
+      <Info />
+      <AlertDescription>{children}</AlertDescription>
+    </Alert>
+  );
+}
+
+/** ラジオボタン・チェックボックスと文言を横に並べるラベル */
+const choiceLabelClass = "items-start font-normal leading-snug [&>input]:mt-0.5";
 
 export function ClaimButton({ action, companyId }: { action: SalesAction; companyId: string }) {
   const [state, formAction, pending] = useActionState(action, undefined);
   return (
-    <form action={formAction}>
+    <form action={formAction} className="grid max-w-xl gap-3">
       <input type="hidden" name="companyId" value={companyId} />
-      <button type="submit" className="primary" disabled={pending}>
+      <Button type="submit" size="lg" className="w-full sm:w-fit" disabled={pending}>
         {pending ? "確保しています…" : "この企業の担当を確保する"}
-      </button>
+      </Button>
       <ActionMessage state={state} />
     </form>
   );
@@ -35,15 +59,14 @@ export function ClaimButton({ action, companyId }: { action: SalesAction; compan
 export function ReleaseForm({ action, assignmentId }: { action: SalesAction; assignmentId: string }) {
   const [state, formAction, pending] = useActionState(action, undefined);
   return (
-    <form action={formAction} className="stack">
+    <form action={formAction} className="grid max-w-xl gap-4">
       <input type="hidden" name="assignmentId" value={assignmentId} />
-      <label>
-        手放す理由（任意）
-        <input name="reason" maxLength={500} />
-      </label>
-      <button type="submit" disabled={pending}>
+      <Field label="手放す理由（任意）" htmlFor="release-reason">
+        <Input id="release-reason" name="reason" maxLength={500} />
+      </Field>
+      <Button type="submit" variant="destructive" className="w-fit" disabled={pending}>
         担当を手放す
-      </button>
+      </Button>
       <ActionMessage state={state} />
     </form>
   );
@@ -54,44 +77,50 @@ export function ActivityForm({ action, assignmentId }: { action: SalesAction; as
   const [kind, setKind] = useState<string>("no_answer");
   const [declineKind, setDeclineKind] = useState<string>("");
   return (
-    <form action={formAction} className="stack">
+    <form action={formAction} className="grid max-w-xl gap-4">
       <input type="hidden" name="assignmentId" value={assignmentId} />
-      <label>
-        活動の種類
-        <select name="kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+      <Field label="活動の種類" htmlFor="activity-kind">
+        <NativeSelect id="activity-kind" name="kind" value={kind} onChange={(e) => setKind(e.target.value)}>
           {ACTIVITY_KINDS.map((k) => (
             <option key={k.value} value={k.value}>
               {k.label}
             </option>
           ))}
-        </select>
-      </label>
+        </NativeSelect>
+      </Field>
       {(kind === "contract_review" || kind === "contract_completed") && (
-        <p className="hint">
+        <Hint>
           契約に至った場合は、下の「成約報告」から契約資料を登録してください。報告だけでは報酬は確定せず、運営が契約資料を確認して契約完了にします。
-        </p>
+        </Hint>
       )}
-      <label>
-        活動した日時（空欄なら現在）
-        <input type="datetime-local" name="occurredAt" />
-      </label>
-      <label>
-        次回対応日{kind === "callback_scheduled" ? "（必須）" : "（任意）"}
-        <input type="datetime-local" name="nextActionAt" required={kind === "callback_scheduled"} />
-      </label>
-      <label>
-        結果・メモ
-        <textarea name="note" rows={3} maxLength={2000} />
-      </label>
-      <label className="inline">
-        <input type="checkbox" name="consultOps" />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="活動した日時（空欄なら現在）" htmlFor="activity-occurred-at">
+          <Input id="activity-occurred-at" type="datetime-local" name="occurredAt" />
+        </Field>
+        <Field
+          label={`次回対応日${kind === "callback_scheduled" ? "（必須）" : "（任意）"}`}
+          htmlFor="activity-next-action-at"
+        >
+          <Input
+            id="activity-next-action-at"
+            type="datetime-local"
+            name="nextActionAt"
+            required={kind === "callback_scheduled"}
+          />
+        </Field>
+      </div>
+      <Field label="結果・メモ" htmlFor="activity-note">
+        <Textarea id="activity-note" name="note" rows={3} maxLength={2000} />
+      </Field>
+      <Label className={choiceLabelClass}>
+        <Input type="checkbox" name="consultOps" />
         運営に相談する
-      </label>
+      </Label>
       {kind === "declined" && (
-        <fieldset>
-          <legend>営業拒否の内容</legend>
-          <label className="inline">
-            <input
+        <fieldset className="grid gap-3 rounded-lg border bg-muted/30 p-4">
+          <legend className="px-1 font-medium text-sm">営業拒否の内容</legend>
+          <Label className={choiceLabelClass}>
+            <Input
               type="radio"
               name="declineKind"
               value="not_now"
@@ -100,9 +129,9 @@ export function ActivityForm({ action, assignmentId }: { action: SalesAction; as
               onChange={() => setDeclineKind("not_now")}
             />
             今は不要（時期を改めれば話を聞く可能性がある）
-          </label>
-          <label className="inline">
-            <input
+          </Label>
+          <Label className={choiceLabelClass}>
+            <Input
               type="radio"
               name="declineKind"
               value="do_not_contact"
@@ -110,23 +139,21 @@ export function ActivityForm({ action, assignmentId }: { action: SalesAction; as
               onChange={() => setDeclineKind("do_not_contact")}
             />
             今後も連絡しないでほしい
-          </label>
+          </Label>
           {declineKind === "not_now" && (
-            <label>
-              企業が示した再連絡の目安（任意）
-              <input type="date" name="recontactAfter" />
-            </label>
+            <Field label="企業が示した再連絡の目安（任意）" htmlFor="activity-recontact-after">
+              <Input id="activity-recontact-after" type="date" name="recontactAfter" />
+            </Field>
           )}
-          <label>
-            企業の意向・理由（任意）
-            <input name="declineReason" maxLength={500} />
-          </label>
-          <p className="hint">営業拒否は企業共通の状態として記録され、担当は終了します。</p>
+          <Field label="企業の意向・理由（任意）" htmlFor="activity-decline-reason">
+            <Input id="activity-decline-reason" name="declineReason" maxLength={500} />
+          </Field>
+          <p className="text-muted-foreground text-xs">営業拒否は企業共通の状態として記録され、担当は終了します。</p>
         </fieldset>
       )}
-      <button type="submit" className="primary" disabled={pending}>
+      <Button type="submit" className="w-fit" disabled={pending}>
         記録する
-      </button>
+      </Button>
       <ActionMessage state={state} />
     </form>
   );
@@ -163,71 +190,90 @@ export function DomainPreferenceForm({
   const [state, formAction, pending] = useActionState(action, undefined);
   const [intent, setIntent] = useState(initial.intent);
   return (
-    <form action={formAction} className="stack">
+    <form action={formAction} className="grid max-w-xl gap-4">
       <input type="hidden" name="assignmentId" value={assignmentId} />
       <input type="hidden" name="companyId" value={companyId} />
-      <p className="warn">
-        レジストラのパスワード・移管コード・AWSの鍵などは入力しないでください。実際の設定や移管は運営が行います。
-      </p>
-      <label>
-        現在のサイトURL
-        <input name="currentUrl" defaultValue={initial.currentUrl} maxLength={2000} />
-      </label>
-      <label>
-        現在のドメイン
-        <input name="currentDomain" defaultValue={initial.currentDomain} placeholder="example.co.jp" maxLength={253} />
-      </label>
-      <fieldset>
-        <legend>ドメインの希望</legend>
+      <Alert variant="warning">
+        <TriangleAlert />
+        <AlertDescription>
+          レジストラのパスワード・移管コード・AWSの鍵などは入力しないでください。実際の設定や移管は運営が行います。
+        </AlertDescription>
+      </Alert>
+      <Field label="現在のサイトURL" htmlFor="domain-current-url">
+        <Input id="domain-current-url" name="currentUrl" defaultValue={initial.currentUrl} maxLength={2000} />
+      </Field>
+      <Field label="現在のドメイン" htmlFor="domain-current-domain">
+        <Input
+          id="domain-current-domain"
+          name="currentDomain"
+          defaultValue={initial.currentDomain}
+          placeholder="example.co.jp"
+          maxLength={253}
+        />
+      </Field>
+      <fieldset className="grid gap-3 rounded-lg border p-4">
+        <legend className="px-1 font-medium text-sm">ドメインの希望</legend>
         {DOMAIN_INTENTS.map((i) => (
-          <label key={i.value} className="inline">
-            <input
+          <Label key={i.value} className={choiceLabelClass}>
+            <Input
               type="radio"
               name="intent"
               value={i.value}
               checked={intent === i.value}
               onChange={() => setIntent(i.value)}
             />
-            <span>
+            <span className="grid gap-0.5">
               {i.label}
-              {i.help && <small className="help">{i.help}</small>}
+              {i.help && <small className="text-muted-foreground text-xs">{i.help}</small>}
             </span>
-          </label>
+          </Label>
         ))}
       </fieldset>
-      {(intent === "keep" || intent === "transfer_consult") && <p className="hint">{reviewNotice}</p>}
-      <label>
-        希望する新規ドメイン候補（1行に1つ、10件まで）
-        <textarea name="newDomainCandidates" rows={3} defaultValue={initial.newDomainCandidates.join("\n")} />
-      </label>
-      <p className="hint">{availabilityNotice}</p>
-      <label>
-        現在のドメインの管理者
-        <select name="currentManager" defaultValue={initial.currentManager}>
-          {DOMAIN_MANAGERS.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        現在のドメインでメールを使っているか
-        <select name="usesEmail" defaultValue={initial.usesEmail}>
-          {TRI_STATES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        企業の希望（自由記述）
-        <textarea name="customerWish" rows={3} defaultValue={initial.customerWish} maxLength={2000} />
-      </label>
-      <button type="submit" className="primary" disabled={pending}>
+      {(intent === "keep" || intent === "transfer_consult") && <Hint>{reviewNotice}</Hint>}
+      <Field
+        label="希望する新規ドメイン候補（1行に1つ、10件まで）"
+        htmlFor="domain-new-candidates"
+        hint={availabilityNotice}
+      >
+        <Textarea
+          id="domain-new-candidates"
+          name="newDomainCandidates"
+          rows={3}
+          defaultValue={initial.newDomainCandidates.join("\n")}
+        />
+      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="現在のドメインの管理者" htmlFor="domain-current-manager">
+          <NativeSelect id="domain-current-manager" name="currentManager" defaultValue={initial.currentManager}>
+            {DOMAIN_MANAGERS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </Field>
+        <Field label="現在のドメインでメールを使っているか" htmlFor="domain-uses-email">
+          <NativeSelect id="domain-uses-email" name="usesEmail" defaultValue={initial.usesEmail}>
+            {TRI_STATES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </Field>
+      </div>
+      <Field label="企業の希望（自由記述）" htmlFor="domain-customer-wish">
+        <Textarea
+          id="domain-customer-wish"
+          name="customerWish"
+          rows={3}
+          defaultValue={initial.customerWish}
+          maxLength={2000}
+        />
+      </Field>
+      <Button type="submit" className="w-fit" disabled={pending}>
         ドメイン希望を記録する
-      </button>
+      </Button>
       <ActionMessage state={state} />
     </form>
   );
@@ -246,34 +292,29 @@ export function ContractReportForm({
 }) {
   const [state, formAction, pending] = useActionState(action, undefined);
   return (
-    <form action={formAction} className="stack">
+    <form action={formAction} className="grid max-w-xl gap-4">
       <input type="hidden" name="assignmentId" value={assignmentId} />
       {proposalVersionId && <input type="hidden" name="proposalVersionId" value={proposalVersionId} />}
-      <label>
-        販売条件
-        <select name="productTermsId" defaultValue={terms[0]?.id ?? ""}>
+      <Field label="販売条件" htmlFor="contract-product-terms">
+        <NativeSelect id="contract-product-terms" name="productTermsId" defaultValue={terms[0]?.id ?? ""}>
           <option value="">選択しない（運営が確認時に設定）</option>
           {terms.map((t) => (
             <option key={t.id} value={t.id}>
               {t.label}
             </option>
           ))}
-        </select>
-      </label>
-      <label>
-        契約資料（ファイル名・保管場所など）
-        <input name="documentRef" maxLength={500} />
-      </label>
-      <label>
-        報告メモ
-        <textarea name="reportNote" rows={3} maxLength={2000} />
-      </label>
-      <p className="hint">
-        成約報告だけでは報酬は確定しません。運営が契約資料を確認し、契約完了にした時点で報酬が発生します。
-      </p>
-      <button type="submit" className="primary" disabled={pending}>
+        </NativeSelect>
+      </Field>
+      <Field label="契約資料（ファイル名・保管場所など）" htmlFor="contract-document-ref">
+        <Input id="contract-document-ref" name="documentRef" maxLength={500} />
+      </Field>
+      <Field label="報告メモ" htmlFor="contract-report-note">
+        <Textarea id="contract-report-note" name="reportNote" rows={3} maxLength={2000} />
+      </Field>
+      <Hint>成約報告だけでは報酬は確定しません。運営が契約資料を確認し、契約完了にした時点で報酬が発生します。</Hint>
+      <Button type="submit" className="w-fit" disabled={pending}>
         成約を報告する
-      </button>
+      </Button>
       <ActionMessage state={state} />
     </form>
   );

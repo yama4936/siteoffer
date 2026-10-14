@@ -1,4 +1,11 @@
+import { Filter } from "lucide-react";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
+import { inlineFormClass } from "@/components/ops/ui-parts-1";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { PageHeader, Section } from "@/components/ui/page";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { fmtDate } from "@/lib/ops/format";
 import { getSettingsForOps, listAuditEventsForOps, listUsersForOps } from "@/lib/ops/queries";
@@ -26,145 +33,171 @@ export default async function SettingsPage({
   const here = "/ops/settings";
 
   return (
-    <main>
-      <h1>6. 設定・操作履歴</h1>
+    <>
+      <PageHeader title="6. 設定・操作履歴" />
       <Flash searchParams={sp} />
 
-      <section>
-        <h2>運営設定</h2>
-        <p className="muted">
-          既定値は推奨案（同時担当3社・未着手72時間など）です。変更は操作履歴に残ります。変更は以後の確保・期限計算に使われ、既存の担当の期限は変えません。
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>設定</th>
-              <th>現在値</th>
-              <th>既定値</th>
-              <th>最終変更</th>
-              <th>変更</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section
+        title="運営設定"
+        description="既定値は推奨案（同時担当3社・未着手72時間など）です。変更は操作履歴に残ります。変更は以後の確保・期限計算に使われ、既存の担当の期限は変えません。"
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>設定</TableHead>
+              <TableHead>現在値</TableHead>
+              <TableHead>既定値</TableHead>
+              <TableHead>最終変更</TableHead>
+              <TableHead>変更</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {settings.value.map((s) => (
-              <tr key={s.key}>
-                <td>
-                  {s.label}
-                  <div className="muted">
+              <TableRow key={s.key}>
+                <TableCell className="min-w-48">
+                  <div className="font-medium">{s.label}</div>
+                  <div className="text-muted-foreground text-xs">
                     <code>{s.key}</code>
                   </div>
-                </td>
-                <td>{s.value}</td>
-                <td>{s.defaultValue}</td>
-                <td>{fmtDate(s.updatedAt)}</td>
-                <td>
-                  <form action={updateSettingAction} className="inline">
+                </TableCell>
+                <TableCell className="font-semibold tabular-nums">{s.value}</TableCell>
+                <TableCell className="text-muted-foreground tabular-nums">{s.defaultValue}</TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(s.updatedAt)}</TableCell>
+                <TableCell>
+                  <form action={updateSettingAction} className={inlineFormClass}>
                     <ReturnTo path={here} />
                     <input type="hidden" name="key" value={s.key} />
-                    <input name="value" type="number" min={s.min} max={s.max} defaultValue={s.value} required />
-                    <button type="submit">変更</button>
+                    <Input
+                      name="value"
+                      type="number"
+                      min={s.min}
+                      max={s.max}
+                      defaultValue={s.value}
+                      required
+                      aria-label={s.label}
+                      className="h-8 w-28 tabular-nums"
+                    />
+                    <Button type="submit" size="xs">
+                      変更
+                    </Button>
                   </form>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>ユーザー</h2>
-        <p className="muted">
-          利用停止にすると、ログインと既存のセッションでの操作ができなくなります。運営アカウントは対象外です。
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>表示名</th>
-              <th>メール</th>
-              <th>役割</th>
-              <th>状態</th>
-              <th>有効な担当</th>
-              <th>登録</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section
+        title="ユーザー"
+        description="利用停止にすると、ログインと既存のセッションでの操作ができなくなります。運営アカウントは対象外です。"
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>表示名</TableHead>
+              <TableHead>メール</TableHead>
+              <TableHead>役割</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>有効な担当</TableHead>
+              <TableHead>登録</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {users.value.map((u) => (
-              <tr key={u.id}>
-                <td>{u.displayName}</td>
-                <td>{u.email}</td>
-                <td>{u.role === "ops" ? "運営" : "営業"}</td>
-                <td className={u.status === "suspended" ? "warn" : undefined}>
-                  {u.status === "suspended" ? "利用停止" : "利用中"}
-                </td>
-                <td>{u.activeAssignments}</td>
-                <td>{fmtDate(u.createdAt)}</td>
-                <td>
+              <TableRow key={u.id}>
+                <TableCell className="font-medium">{u.displayName}</TableCell>
+                <TableCell className="break-all">{u.email}</TableCell>
+                <TableCell>
+                  <Badge variant={u.role === "ops" ? "info" : "outline"}>{u.role === "ops" ? "運営" : "営業"}</Badge>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={u.status === "suspended" ? "destructive" : "success"}>
+                    {u.status === "suspended" ? "利用停止" : "利用中"}
+                  </Badge>
+                </TableCell>
+                <TableCell className="tabular-nums">{u.activeAssignments}</TableCell>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(u.createdAt)}</TableCell>
+                <TableCell className="min-w-64">
                   {u.role === "sales" ? (
-                    <form action={u.status === "active" ? suspendUserAction : reactivateUserAction} className="inline">
+                    <form
+                      action={u.status === "active" ? suspendUserAction : reactivateUserAction}
+                      className={inlineFormClass}
+                    >
                       <ReturnTo path={here} />
                       <input type="hidden" name="userId" value={u.id} />
-                      <input name="reason" placeholder="理由" />
-                      <button type="submit">{u.status === "active" ? "利用停止" : "利用停止を解除"}</button>
+                      <Input name="reason" placeholder="理由" className="h-8 w-auto flex-1 basis-32" />
+                      <Button type="submit" variant={u.status === "active" ? "destructive" : "outline"} size="xs">
+                        {u.status === "active" ? "利用停止" : "利用停止を解除"}
+                      </Button>
                     </form>
                   ) : null}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
+          </TableBody>
+        </Table>
+      </Section>
 
-      <section>
-        <h2>操作履歴（最新200件）</h2>
-        <form className="inline" method="get" action={here}>
-          <input
+      <Section title="操作履歴（最新200件）">
+        <form className={inlineFormClass} method="get" action={here}>
+          <Input
             name="targetType"
             placeholder="対象の種類（例：settings, company）"
             defaultValue={filter.targetType ?? ""}
+            aria-label="対象の種類"
+            className="w-full sm:w-72"
           />
-          <input
+          <Input
             name="action"
             placeholder="操作の前方一致（例：assignment.）"
             defaultValue={filter.actionPrefix ?? ""}
+            aria-label="操作の前方一致"
+            className="w-full sm:w-72"
           />
-          <button type="submit">絞り込み</button>
+          <Button type="submit" variant="secondary">
+            <Filter />
+            絞り込み
+          </Button>
         </form>
-        <table>
-          <thead>
-            <tr>
-              <th>日時</th>
-              <th>主体</th>
-              <th>操作</th>
-              <th>対象</th>
-              <th>変更前</th>
-              <th>変更後</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>日時</TableHead>
+              <TableHead>主体</TableHead>
+              <TableHead>操作</TableHead>
+              <TableHead>対象</TableHead>
+              <TableHead>変更前</TableHead>
+              <TableHead>変更後</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {events.value.map(({ e, actorName }) => (
-              <tr key={e.id}>
-                <td>{fmtDate(e.createdAt)}</td>
-                <td>
+              <TableRow key={e.id}>
+                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(e.createdAt)}</TableCell>
+                <TableCell className="whitespace-nowrap">
                   {e.actorKind}
                   {actorName ? `：${actorName}` : ""}
-                </td>
-                <td>{e.action}</td>
-                <td>
+                </TableCell>
+                <TableCell>
+                  <code className="rounded bg-muted px-1 py-0.5 text-xs">{e.action}</code>
+                </TableCell>
+                <TableCell>
                   {e.targetType}
-                  <div className="muted">{e.targetId}</div>
-                </td>
-                <td>
+                  <div className="break-all font-mono text-muted-foreground text-xs">{e.targetId}</div>
+                </TableCell>
+                <TableCell className="min-w-56 max-w-96">
                   <Json value={e.before} />
-                </td>
-                <td>
+                </TableCell>
+                <TableCell className="min-w-56 max-w-96">
                   <Json value={e.after} />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </section>
-    </main>
+          </TableBody>
+        </Table>
+      </Section>
+    </>
   );
 }

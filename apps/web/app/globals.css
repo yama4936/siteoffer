@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+/*
+ * SiteOffer の見た目（Tailwind CSS v4 ＋ shadcn/ui の色トークン）。
+ * フォントは端末のものを使い、外部（CDN・Webフォント）からは読み込まない。
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.985 0.002 247);
+  --foreground: oklch(0.21 0.02 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 265);
+  --primary: oklch(0.49 0.2 264);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.96 0.006 264);
+  --secondary-foreground: oklch(0.27 0.03 265);
+  --muted: oklch(0.965 0.005 264);
+  --muted-foreground: oklch(0.52 0.02 264);
+  --accent: oklch(0.95 0.02 264);
+  --accent-foreground: oklch(0.3 0.08 264);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.6 0.15 155);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.78 0.15 80);
+  --warning-foreground: oklch(0.3 0.07 60);
+  --border: oklch(0.91 0.008 264);
+  --input: oklch(0.88 0.01 264);
+  --ring: oklch(0.6 0.15 264);
+  --sidebar: oklch(0.21 0.03 265);
+  --sidebar-foreground: oklch(0.93 0.01 264);
+  --sidebar-muted: oklch(0.7 0.02 264);
+  --sidebar-accent: oklch(0.29 0.04 265);
+}
+
+@theme inline {
+  --font-sans:
+    system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-accent: var(--sidebar-accent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    line-height: 1.7;
+  }
+  a {
+    @apply text-primary underline-offset-4 hover:underline;
+  }
+  pre {
+    @apply font-mono;
+  }
+}

@@ -1,11 +1,21 @@
 import { isTermsReadyForSales } from "@siteoffer/core";
 import Link from "next/link";
+import type * as React from "react";
 import { Flash, Forbidden, Json, ReturnTo } from "@/components/ops/ui";
+import { detailsClass, inlineFormClass, StatusBadge, stackFormClass, summaryClass } from "@/components/ops/ui-parts-2";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Field, Label } from "@/components/ui/label";
+import { EmptyState, PageHeader, Section } from "@/components/ui/page";
+import { NativeSelect } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { getDb } from "@/lib/db";
 import {
   CONTRACT_STATUS_LABEL,
   fmtDate,
-  label,
   PAYMENT_STATUS_LABEL,
   REWARD_STATUS_LABEL,
   rewardRuleText,
@@ -41,151 +51,169 @@ export default async function ContractsPage({
   if (!terms.ok || !list.ok) return <Forbidden />;
 
   return (
-    <main>
-      <h1>4. 商品条件・契約確認・入金・報酬</h1>
+    <>
+      <PageHeader title="4. 商品条件・契約確認・入金・報酬" />
       <Flash searchParams={await searchParams} />
 
-      <section>
-        <h2>販売条件・報酬条件の版</h2>
-        <p className="muted">
-          販売価格・報酬額は未決です。既存の版は書き換えず、新しい版を作ります。完了した契約は完了時の写しで固定され、後の変更の影響を受けません（AC-16）。
-          価格・報酬条件が未設定の版は保存できますが、その版では営業可能にできません。
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>版</th>
-              <th>名称</th>
-              <th>範囲</th>
-              <th>販売価格</th>
-              <th>月額</th>
-              <th>報酬条件</th>
-              <th>営業に使えるか</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section
+        title="販売条件・報酬条件の版"
+        description={
+          <>
+            販売価格・報酬額は未決です。既存の版は書き換えず、新しい版を作ります。完了した契約は完了時の写しで固定され、後の変更の影響を受けません（AC-16）。
+            価格・報酬条件が未設定の版は保存できますが、その版では営業可能にできません。
+          </>
+        }
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>版</TableHead>
+              <TableHead>名称</TableHead>
+              <TableHead>範囲</TableHead>
+              <TableHead className="text-right">販売価格</TableHead>
+              <TableHead className="text-right">月額</TableHead>
+              <TableHead>報酬条件</TableHead>
+              <TableHead>営業に使えるか</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {terms.value.map((t) => (
-              <tr key={t.id}>
-                <td>{t.version}</td>
-                <td>{t.name}</td>
-                <td>
+              <TableRow key={t.id}>
+                <TableCell className="whitespace-nowrap font-medium">{t.version}</TableCell>
+                <TableCell>{t.name}</TableCell>
+                <TableCell className="min-w-48">
                   <Json value={t.scope} />
-                </td>
-                <td>{yen(t.price)}</td>
-                <td>{t.monthlyFee === null ? "—" : yen(t.monthlyFee)}</td>
-                <td>{rewardRuleText(t.rewardRule)}</td>
-                <td className={isTermsReadyForSales(t) ? undefined : "warn"}>
-                  {isTermsReadyForSales(t) ? "使える" : `使えない（${termsIssueText(t)}）`}
-                </td>
-                <td>
-                  <form action={setProductTermsActiveAction} className="inline">
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-right tabular-nums">{yen(t.price)}</TableCell>
+                <TableCell className="whitespace-nowrap text-right tabular-nums">
+                  {t.monthlyFee === null ? "—" : yen(t.monthlyFee)}
+                </TableCell>
+                <TableCell>{rewardRuleText(t.rewardRule)}</TableCell>
+                <TableCell>
+                  {isTermsReadyForSales(t) ? (
+                    <Badge variant="success">使える</Badge>
+                  ) : (
+                    <Badge variant="warning" className="whitespace-normal">
+                      使えない（{termsIssueText(t)}）
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <form action={setProductTermsActiveAction} className={inlineFormClass}>
                     <ReturnTo path={here} />
                     <input type="hidden" name="productTermsId" value={t.id} />
                     <input type="hidden" name="active" value={t.active ? "false" : "true"} />
-                    <button type="submit">{t.active ? "無効にする" : "有効にする"}</button>
+                    <Button type="submit" size="xs" variant="outline">
+                      {t.active ? "無効にする" : "有効にする"}
+                    </Button>
                   </form>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-        <details>
-          <summary>新しい版を作成する</summary>
-          <form action={createProductTermsAction} className="stack">
+          </TableBody>
+        </Table>
+        <details className={detailsClass}>
+          <summary className={summaryClass}>新しい版を作成する</summary>
+          <form action={createProductTermsAction} className={stackFormClass}>
             <ReturnTo path={here} />
-            <label>
-              版（一意。例：2026-10-a）
-              <input name="version" required />
-            </label>
-            <label>
-              名称
-              <input name="name" required />
-            </label>
-            <label>
-              提供範囲（ページ数・修正回数・納期など）
-              <textarea name="scope" rows={3} />
-            </label>
-            <label>
-              販売価格（円・空欄は未設定）
-              <input name="price" inputMode="numeric" />
-            </label>
-            <label>
-              月額（円・任意）
-              <input name="monthlyFee" inputMode="numeric" />
-            </label>
-            <label>
-              報酬条件の種類
-              <select name="rewardType" defaultValue="">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="版（一意。例：2026-10-a）" htmlFor="terms-version">
+                <Input id="terms-version" name="version" required />
+              </Field>
+              <Field label="名称" htmlFor="terms-name">
+                <Input id="terms-name" name="name" required />
+              </Field>
+            </div>
+            <Field label="提供範囲（ページ数・修正回数・納期など）" htmlFor="terms-scope">
+              <Textarea id="terms-scope" name="scope" rows={3} />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="販売価格（円・空欄は未設定）" htmlFor="terms-price">
+                <Input id="terms-price" name="price" inputMode="numeric" className="tabular-nums" />
+              </Field>
+              <Field label="月額（円・任意）" htmlFor="terms-monthly">
+                <Input id="terms-monthly" name="monthlyFee" inputMode="numeric" className="tabular-nums" />
+              </Field>
+            </div>
+            <Field label="報酬条件の種類" htmlFor="terms-reward-type">
+              <NativeSelect id="terms-reward-type" name="rewardType" defaultValue="">
                 <option value="">未設定</option>
                 <option value="fixed">定額（円）</option>
                 <option value="rate">販売価格に対する割合（万分率。1000 = 10%）</option>
-              </select>
-            </label>
-            <label>
-              報酬条件の値
-              <input name="rewardValue" inputMode="numeric" />
-            </label>
-            <button type="submit">版を作成</button>
+              </NativeSelect>
+            </Field>
+            <Field label="報酬条件の値" htmlFor="terms-reward-value">
+              <Input id="terms-reward-value" name="rewardValue" inputMode="numeric" className="tabular-nums" />
+            </Field>
+            <div>
+              <Button type="submit" size="sm">
+                版を作成
+              </Button>
+            </div>
           </form>
         </details>
-      </section>
+      </Section>
 
-      <section>
-        <h2>契約（成約報告）</h2>
-        <p className="muted">
-          営業ユーザーの成約報告だけでは報酬は発生しません。運営が契約資料を確認して契約完了にしたときに、報酬が1回だけ発生します。入金と報酬は別に記録します。
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>企業・営業</th>
-              <th>状態</th>
-              <th>報告・資料</th>
-              <th>契約確認</th>
-              <th>入金</th>
-              <th>報酬</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.value.map(({ c, companyName, salesName, payments, reward }) => (
-              <tr key={c.id}>
-                <td>
-                  <Link href={`/ops/companies/${c.companyId}`}>{companyName}</Link>
-                  <div className="muted">営業：{salesName}</div>
-                </td>
-                <td>
-                  {label(CONTRACT_STATUS_LABEL, c.status)}
-                  {c.closeReason ? <div className="muted">{c.closeReason}</div> : null}
-                </td>
-                <td>
-                  報告 {fmtDate(c.reportedAt)}
-                  <div>資料：{c.documentRef ?? "未登録"}</div>
-                  {c.reportNote ? <div className="muted">{c.reportNote}</div> : null}
-                </td>
-                <td>
+      <Section
+        title="契約（成約報告）"
+        description="営業ユーザーの成約報告だけでは報酬は発生しません。運営が契約資料を確認して契約完了にしたときに、報酬が1回だけ発生します。入金と報酬は別に記録します。"
+      >
+        {list.value.length === 0 ? <EmptyState>契約はまだありません</EmptyState> : null}
+        <div className="grid gap-4">
+          {list.value.map(({ c, companyName, salesName, payments, reward }) => (
+            <Card key={c.id} className="gap-3">
+              <CardHeader>
+                <CardTitle>
+                  <h3>
+                    <Link href={`/ops/companies/${c.companyId}`}>{companyName}</Link>
+                  </h3>
+                </CardTitle>
+                <CardDescription>営業：{salesName}</CardDescription>
+                <CardAction className="text-right">
+                  <StatusBadge map={CONTRACT_STATUS_LABEL} status={c.status} />
+                  {c.closeReason ? <div className="mt-1 text-muted-foreground text-xs">{c.closeReason}</div> : null}
+                </CardAction>
+              </CardHeader>
+              <CardContent className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+                <Block title="報告・資料">
+                  <div className="tabular-nums">報告 {fmtDate(c.reportedAt)}</div>
+                  <div className="break-all">資料：{c.documentRef ?? "未登録"}</div>
+                  {c.reportNote ? <div className="text-muted-foreground text-xs">{c.reportNote}</div> : null}
+                </Block>
+
+                <Block title="契約確認">
                   {c.status === "completed" ? (
                     <>
-                      完了 {fmtDate(c.completedAt)}
+                      <div className="tabular-nums">完了 {fmtDate(c.completedAt)}</div>
                       <details>
-                        <summary>契約時点の写し</summary>
-                        <Json value={c.snapshot} />
+                        <summary className={summaryClass}>契約時点の写し</summary>
+                        <div className="mt-2">
+                          <Json value={c.snapshot} />
+                        </div>
                       </details>
                     </>
                   ) : null}
                   {c.status === "reported" ? (
-                    <form action={startContractReviewAction} className="inline">
+                    <form action={startContractReviewAction} className={inlineFormClass}>
                       <ReturnTo path={here} />
                       <input type="hidden" name="contractId" value={c.id} />
-                      <button type="submit">確認を開始</button>
+                      <Button type="submit" size="xs" variant="outline">
+                        確認を開始
+                      </Button>
                     </form>
                   ) : null}
                   {c.status === "reported" || c.status === "under_review" ? (
                     <>
-                      <form action={confirmContractAction} className="stack">
+                      <form action={confirmContractAction} className="grid gap-2">
                         <ReturnTo path={here} />
                         <input type="hidden" name="contractId" value={c.id} />
-                        <select name="productTermsId" defaultValue={c.productTermsId ?? ""}>
+                        <NativeSelect
+                          name="productTermsId"
+                          defaultValue={c.productTermsId ?? ""}
+                          aria-label="条件の版"
+                          className="h-8"
+                        >
                           <option value="">条件の版（報告時の版を使う）</option>
                           {terms.value
                             .filter((t) => isTermsReadyForSales(t))
@@ -194,127 +222,214 @@ export default async function ContractsPage({
                                 {t.version}：{yen(t.price)} / {rewardRuleText(t.rewardRule)}
                               </option>
                             ))}
-                        </select>
-                        <input
+                        </NativeSelect>
+                        <Input
                           name="documentRef"
                           placeholder="契約資料の参照（未登録なら必須）"
                           defaultValue={c.documentRef ?? ""}
+                          aria-label="契約資料の参照"
+                          className="h-8"
                         />
-                        <button type="submit">契約完了を確認</button>
+                        <div>
+                          <Button type="submit" size="xs" variant="success">
+                            契約完了を確認
+                          </Button>
+                        </div>
                       </form>
-                      <form action={rejectContractAction} className="inline">
+                      <form action={rejectContractAction} className={inlineFormClass}>
                         <ReturnTo path={here} />
                         <input type="hidden" name="contractId" value={c.id} />
-                        <input name="reason" placeholder="差し戻しの理由（必須）" required />
-                        <button type="submit">差し戻し</button>
+                        <Input
+                          name="reason"
+                          placeholder="差し戻しの理由（必須）"
+                          required
+                          aria-label="差し戻しの理由"
+                          className="h-8 flex-1"
+                        />
+                        <Button type="submit" size="xs" variant="outline">
+                          差し戻し
+                        </Button>
                       </form>
                     </>
                   ) : null}
-                </td>
-                <td>
+                </Block>
+
+                <Block title="入金">
                   {payments.map((p) => (
-                    <div key={p.id}>
-                      {yen(p.amount)}：{label(PAYMENT_STATUS_LABEL, p.status)}
-                      {p.receivedAt ? `（${fmtDate(p.receivedAt)}）` : ""}
-                      {p.status === "pending" ? (
-                        <>
-                          <PaymentButton paymentId={p.id} status="received" text="入金済みにする" />
-                          <PaymentButton paymentId={p.id} status="cancelled" text="取消" />
-                        </>
-                      ) : null}
-                      {p.status === "received" ? (
-                        <PaymentButton paymentId={p.id} status="refunded" text="返金にする" />
+                    <div key={p.id} className="space-y-1.5 rounded-md border px-2.5 py-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium tabular-nums">{yen(p.amount)}</span>
+                        <StatusBadge map={PAYMENT_STATUS_LABEL} status={p.status} />
+                        {p.receivedAt ? (
+                          <span className="text-muted-foreground text-xs tabular-nums">
+                            （{fmtDate(p.receivedAt)}）
+                          </span>
+                        ) : null}
+                      </div>
+                      {p.status === "pending" || p.status === "received" ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {p.status === "pending" ? (
+                            <>
+                              <PaymentButton paymentId={p.id} status="received" text="入金済みにする" />
+                              <PaymentButton paymentId={p.id} status="cancelled" text="取消" />
+                            </>
+                          ) : null}
+                          {p.status === "received" ? (
+                            <PaymentButton paymentId={p.id} status="refunded" text="返金にする" />
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                   ))}
                   {c.status === "completed" ? (
-                    <form action={recordPaymentAction} className="inline">
+                    <form action={recordPaymentAction} className={inlineFormClass}>
                       <ReturnTo path={here} />
                       <input type="hidden" name="contractId" value={c.id} />
-                      <input name="amount" inputMode="numeric" placeholder="金額（円）" required size={10} />
-                      <label>
-                        <input type="checkbox" name="received" /> 入金済み
-                      </label>
-                      <input name="note" placeholder="メモ" size={10} />
-                      <button type="submit">入金を記録</button>
+                      <Input
+                        name="amount"
+                        inputMode="numeric"
+                        placeholder="金額（円）"
+                        required
+                        size={10}
+                        aria-label="金額（円）"
+                        className="h-8 w-28 tabular-nums"
+                      />
+                      <Label className="font-normal">
+                        <Input type="checkbox" name="received" /> 入金済み
+                      </Label>
+                      <Input name="note" placeholder="メモ" size={10} aria-label="メモ" className="h-8 w-28" />
+                      <Button type="submit" size="xs">
+                        入金を記録
+                      </Button>
                     </form>
                   ) : null}
-                </td>
-                <td>
+                </Block>
+
+                <Block title="報酬">
                   {reward ? (
                     <>
-                      <div>
-                        {label(REWARD_STATUS_LABEL, reward.reward.status)}：現在額 {yen(reward.currentAmount)}
-                        <span className="muted">（発生時 {yen(reward.reward.amount)}）</span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusBadge map={REWARD_STATUS_LABEL} status={reward.reward.status} />
+                        <span>
+                          ：現在額 <span className="font-medium tabular-nums">{yen(reward.currentAmount)}</span>
+                        </span>
+                        <span className="text-muted-foreground text-xs tabular-nums">
+                          （発生時 {yen(reward.reward.amount)}）
+                        </span>
                       </div>
-                      {reward.reward.scheduledFor ? <div>支払予定 {fmtDate(reward.reward.scheduledFor)}</div> : null}
-                      {reward.reward.paidAt ? <div>支払済み {fmtDate(reward.reward.paidAt)}</div> : null}
+                      {reward.reward.scheduledFor ? (
+                        <div className="tabular-nums">支払予定 {fmtDate(reward.reward.scheduledFor)}</div>
+                      ) : null}
+                      {reward.reward.paidAt ? (
+                        <div className="tabular-nums">支払済み {fmtDate(reward.reward.paidAt)}</div>
+                      ) : null}
                       {reward.adjustments.map((adj) => (
-                        <div key={adj.id} className="muted">
+                        <div key={adj.id} className="text-muted-foreground text-xs tabular-nums">
                           調整 {adj.delta > 0 ? "+" : ""}
                           {adj.delta.toLocaleString("ja-JP")}円：{adj.reason}（{fmtDate(adj.createdAt)}）
                         </div>
                       ))}
                       {reward.reward.status === "accrued" || reward.reward.status === "scheduled" ? (
-                        <form action={scheduleRewardAction} className="inline">
+                        <form action={scheduleRewardAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="rewardId" value={reward.reward.id} />
-                          <input type="date" name="scheduledFor" required aria-label="支払予定日" />
-                          <button type="submit">支払予定を設定</button>
+                          <Input
+                            type="date"
+                            name="scheduledFor"
+                            required
+                            aria-label="支払予定日"
+                            className="h-8 w-40"
+                          />
+                          <Button type="submit" size="xs" variant="outline">
+                            支払予定を設定
+                          </Button>
                         </form>
                       ) : null}
                       {reward.reward.status === "scheduled" ? (
-                        <form action={markRewardPaidAction} className="inline">
+                        <form action={markRewardPaidAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="rewardId" value={reward.reward.id} />
-                          <button type="submit">支払済みにする</button>
+                          <Button type="submit" size="xs" variant="success">
+                            支払済みにする
+                          </Button>
                         </form>
                       ) : null}
                       {reward.reward.status !== "cancelled" ? (
-                        <form action={adjustRewardAction} className="inline">
+                        <form action={adjustRewardAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="rewardId" value={reward.reward.id} />
-                          <input name="delta" inputMode="numeric" placeholder="増減（円）" required size={8} />
-                          <input name="reason" placeholder="理由（必須）" required size={10} />
-                          <button type="submit">調整</button>
+                          <Input
+                            name="delta"
+                            inputMode="numeric"
+                            placeholder="増減（円）"
+                            required
+                            size={8}
+                            aria-label="増減（円）"
+                            className="h-8 w-24 tabular-nums"
+                          />
+                          <Input
+                            name="reason"
+                            placeholder="理由（必須）"
+                            required
+                            size={10}
+                            aria-label="調整の理由"
+                            className="h-8 w-28"
+                          />
+                          <Button type="submit" size="xs" variant="outline">
+                            調整
+                          </Button>
                         </form>
                       ) : null}
                       {reward.reward.status === "accrued" || reward.reward.status === "scheduled" ? (
-                        <form action={cancelRewardAction} className="inline">
+                        <form action={cancelRewardAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="rewardId" value={reward.reward.id} />
-                          <input name="reason" placeholder="取消の理由（必須）" required size={10} />
-                          <button type="submit">取消</button>
+                          <Input
+                            name="reason"
+                            placeholder="取消の理由（必須）"
+                            required
+                            size={10}
+                            aria-label="取消の理由"
+                            className="h-8 w-36"
+                          />
+                          <Button type="submit" size="xs" variant="destructive">
+                            取消
+                          </Button>
                         </form>
                       ) : null}
                     </>
                   ) : (
-                    <span className="muted">未発生</span>
+                    <span className="text-muted-foreground">未発生</span>
                   )}
-                </td>
-              </tr>
-            ))}
-            {list.value.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="muted">
-                  契約はまだありません
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </section>
-    </main>
+                </Block>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** 契約カードの中の1区画（報告・契約確認・入金・報酬） */
+function Block({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-2 text-sm">
+      <h4 className="font-medium text-muted-foreground text-xs">{title}</h4>
+      {children}
+    </div>
   );
 }
 
 function PaymentButton({ paymentId, status, text }: { paymentId: string; status: string; text: string }) {
   return (
-    <form action={updatePaymentStatusAction} className="inline">
+    <form action={updatePaymentStatusAction} className={inlineFormClass}>
       <ReturnTo path={here} />
       <input type="hidden" name="paymentId" value={paymentId} />
       <input type="hidden" name="status" value={status} />
-      <button type="submit">{text}</button>
+      <Button type="submit" size="xs" variant={status === "received" ? "success" : "outline"}>
+        {text}
+      </Button>
     </form>
   );
 }
