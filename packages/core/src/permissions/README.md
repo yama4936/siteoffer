@@ -22,7 +22,7 @@ if (can(actor, "read_shared", { type: "company", companyId, sellable, assignedUs
 - 所有者のある resource は `ownerUserId: null` を受け付ける。「所有者を限定しない」（全件の一覧、運営だけの操作で対象を読む前の確認）の意味で、営業には常に拒否される。
 - `actor` は apps/web では `getCurrentActor()`（apps/web/lib/session.ts）から得る。未ログインは `null` で、常に拒否される。
 - 利用停止中のユーザーは `AuthProvider.authenticate` が拒否するため、`actor` 自体が作られない。
-- `system`（ワーカーの定期ジョブ等）は許可、`customer`（提案リンク）はこの表では常に拒否。提案リンクの判定は share-link 側で行う。
+- `system`（ワーカーの定期ジョブ等）は許可、`customer`（提案リンク）はこの表では常に拒否。提案リンクの判定は share-link 側（`verifyShareLink`）で行う。リンクの発行・取り消しの可否は `shareLink` resource で判定する（承認済みの版か等の業務条件は `issueShareLink` 側）。
 - 運営（ops）は原則すべて許可。例外：利用停止・解除の対象は営業ユーザーだけ（自分や他の運営は不可）。
 
 ## 営業（sales）の規則の要点
@@ -36,6 +36,7 @@ if (can(actor, "read_shared", { type: "company", companyId, sellable, assignedUs
 | productTerms | `read` だけ（価格・報酬条件は変更不可） |
 | payment / settings / auditLog | 不可 |
 | user | 自分の `read` だけ |
+| shareLink | `create` は自分が担当中の企業の提案（purpose: proposal）だけ。`revoke` は自分が発行したものだけ。`read` は提案リンクで、自分の担当企業か自分の発行のもの。納品（delivery）のリンクは不可 |
 
 業務上の条件（同時担当数の上限・営業拒否中の確保禁止・状態遷移・営業が記録できる抑止の種類・担当確保や成約報告の主体が営業であることなど）はここでは判定しない。各業務関数で判定する。
 

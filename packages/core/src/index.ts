@@ -6,3 +6,4 @@ export * from "./domain-preference/index.ts";
 export * from "./permissions/index.ts";
 export * from "./reward/index.ts";
 export * from "./sales-activity/index.ts";
+export * from "./share-link/index.ts";

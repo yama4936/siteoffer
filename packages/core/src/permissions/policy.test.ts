@@ -20,6 +20,13 @@ const companyOthers = { type: "company", companyId: "c2", sellable: true, assign
 const companyMine = { type: "company", companyId: "c3", sellable: true, assignedUserId: SALES_A } as const;
 const companyUnreviewed = { type: "company", companyId: "c4", sellable: false, assignedUserId: null } as const;
 
+function linkProposal(assignedUserId: string | null, createdBy: string | null) {
+  return { type: "shareLink", purpose: "proposal", companyId: "c1", assignedUserId, createdBy } as const;
+}
+function linkDelivery(assignedUserId: string | null, createdBy: string | null) {
+  return { type: "shareLink", purpose: "delivery", companyId: "c1", assignedUserId, createdBy } as const;
+}
+
 /** AC-17：営業ユーザー（A）から見た許可・拒否の表。運営は営業の利用停止の例外を除き許可 */
 const table: Row[] = [
   // 企業共通の状態（担当中か・営業拒否）は誰の担当でも読める
@@ -80,6 +87,18 @@ const table: Row[] = [
   ["自分を利用停止", "suspend", { type: "user", userId: SALES_A, role: "sales" }, { sales: N, ops: Y }],
   ["営業ユーザーの停止を解除", "reactivate", { type: "user", userId: SALES_B, role: "sales" }, { sales: N, ops: Y }],
   ["運営ユーザーを利用停止", "suspend", { type: "user", userId: OPS, role: "ops" }, { sales: N, ops: N }],
+  // 共有リンク（11章・AC-14）
+  ["自分の担当企業の提案リンクを発行", "create", linkProposal(SALES_A, null), { sales: Y, ops: Y }],
+  ["他人の担当企業の提案リンクを発行", "create", linkProposal(SALES_B, null), { sales: N, ops: Y }],
+  ["担当のいない企業の提案リンクを発行", "create", linkProposal(null, null), { sales: N, ops: Y }],
+  ["自分の担当企業の納品リンクを発行", "create", linkDelivery(SALES_A, null), { sales: N, ops: Y }],
+  ["自分が発行した提案リンクを取り消す", "revoke", linkProposal(SALES_A, SALES_A), { sales: Y, ops: Y }],
+  ["担当が外れた後も自分が発行したリンクは取り消せる", "revoke", linkProposal(null, SALES_A), { sales: Y, ops: Y }],
+  ["他人が発行した提案リンクを取り消す", "revoke", linkProposal(SALES_A, SALES_B), { sales: N, ops: Y }],
+  ["運営が発行した納品リンクを取り消す", "revoke", linkDelivery(SALES_A, OPS), { sales: N, ops: Y }],
+  ["自分の担当企業の提案リンクを読む", "read", linkProposal(SALES_A, SALES_B), { sales: Y, ops: Y }],
+  ["他人の担当企業の提案リンクを読む", "read", linkProposal(SALES_B, SALES_B), { sales: N, ops: Y }],
+  ["納品リンクを読む", "read", linkDelivery(SALES_A, OPS), { sales: N, ops: Y }],
 ];
 
 // biome-ignore lint/suspicious/noExplicitAny: 表の行は action と resource の組を動的に持つ

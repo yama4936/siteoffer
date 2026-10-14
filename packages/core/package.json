@@ -5,7 +5,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./auth": "./src/auth/index.ts",
-    "./permissions": "./src/permissions/index.ts"
+    "./permissions": "./src/permissions/index.ts",
+    "./share-link/testing": "./src/share-link/test-helpers.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

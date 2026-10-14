@@ -37,6 +37,16 @@ export interface ResourceMap {
   auditLog: Record<never, never>;
   /** ユーザー（営業・運営） */
   user: { userId: string; role: "sales" | "ops" };
+  /**
+   * 共有リンク（11章）。purpose は proposal（提案デモ）か delivery（制作版の顧客確認）。
+   * assignedUserId は対象企業の有効な担当の営業ユーザー、createdBy はリンクの発行者（発行前は null）。
+   */
+  shareLink: {
+    purpose: "proposal" | "delivery";
+    companyId: string;
+    assignedUserId: string | null;
+    createdBy: string | null;
+  };
 }
 
 export interface ActionMap {
@@ -56,6 +66,8 @@ export interface ActionMap {
   auditLog: "read";
   /** suspend・reactivate：利用停止と解除 */
   user: "read" | "list" | "suspend" | "reactivate";
+  /** create：発行。revoke：取り消し */
+  shareLink: "read" | "create" | "revoke";
 }
 
 export type ResourceType = keyof ResourceMap;
@@ -103,6 +115,18 @@ const salesPolicies: { [K in ResourceType]: SalesPolicy<K> } = {
   settings: () => false,
   auditLog: () => false,
   user: (actor, action, r) => action === "read" && r.userId === actor.userId,
+  // 営業が発行できるのは自分の担当企業の提案リンクだけ（承認済みの版かは発行処理で判定する）。
+  // 取り消しは発行者だけ。納品（delivery）のリンクは運営が扱う
+  shareLink: (actor, action, r) => {
+    switch (action) {
+      case "create":
+        return r.purpose === "proposal" && r.assignedUserId === actor.userId;
+      case "read":
+        return r.purpose === "proposal" && (r.createdBy === actor.userId || r.assignedUserId === actor.userId);
+      case "revoke":
+        return r.createdBy !== null && r.createdBy === actor.userId;
+    }
+  },
 };
 
 /** 運営にも許さない操作。利用停止の対象は営業ユーザーだけ（運営アカウントは seed・管理手順で扱う） */
