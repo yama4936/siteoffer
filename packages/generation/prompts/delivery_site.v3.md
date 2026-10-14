@@ -4,6 +4,7 @@
 
 ## 内容
 
+- 画像添付は `imagePolicy.allowedUses` に `production` があるものだけ利用候補にできる。`analysis_only` や `sales_demo` の許可を本番利用へ拡張しない。
 - companyInfo.rows と works.items は確認済みの事実だけを使い、factRef に根拠の key を書く。材料がなければ null にする。
 - contact は確認済みの電話・メール・営業時間だけを使う。primary は存在する連絡手段にする。
 - 顧客の声・受賞・料金・資格・対応地域は、確認済みの事実がある場合だけ使う。

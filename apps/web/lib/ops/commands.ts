@@ -40,6 +40,7 @@ import {
   appSettings,
   companies,
   type DbOrTx,
+  imageAssets,
   productTerms,
   proposals,
   proposalVersions,
@@ -57,6 +58,9 @@ export interface OpsDeps {
 
 type Company = typeof companies.$inferSelect;
 type OfficialSiteStatus = Company["officialSiteStatus"];
+type ImageAsset = typeof imageAssets.$inferSelect;
+type ImageAssetSource = ImageAsset["sourceType"];
+type ImageAssetRightsStatus = ImageAsset["rightsStatus"];
 
 class Abort extends Error {
   readonly code: string;
@@ -269,6 +273,117 @@ export function excludeCandidate(
       kind: input.kind,
       reason: input.reason.trim(),
     });
+  });
+}
+
+const IMAGE_ASSET_SOURCES = ["original_site", "customer_upload", "generated", "operator_upload"] as const;
+const IMAGE_RIGHTS_STATUSES = ["unknown", "customer_claimed", "license_verified", "use_approved"] as const;
+
+/** 画像そのものではなく、出所と利用可否を企業単位の素材台帳へ登録する。 */
+export async function createImageAsset(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; label: string; sourceType: ImageAssetSource; sourceUrl?: string | null; note?: string },
+): Promise<Result<ImageAsset, string>> {
+  const ops = authorizeCompanyManage(actor, input.companyId);
+  if (!ops.ok) return ops;
+  const label = input.label.trim();
+  const sourceUrl = input.sourceUrl?.trim() || null;
+  if (!label) return err("invalid_input", "素材名は必須です");
+  if (!(IMAGE_ASSET_SOURCES as readonly string[]).includes(input.sourceType)) {
+    return err("invalid_input", "素材の出所が不正です");
+  }
+  if (sourceUrl && !/^https?:\/\//.test(sourceUrl)) return err("invalid_input", "出典URLは http(s) で始めてください");
+  if (input.sourceType === "original_site" && !sourceUrl) {
+    return err("invalid_input", "元サイト由来の素材には出典URLが必要です");
+  }
+  return inTx(db, async (tx, fail) => {
+    const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, input.companyId));
+    if (!company) return fail("not_found");
+    const [row] = await tx
+      .insert(imageAssets)
+      .values({
+        companyId: input.companyId,
+        label,
+        sourceType: input.sourceType,
+        sourceUrl,
+        note: input.note?.trim() || null,
+        createdAt: clock.now(),
+        updatedAt: clock.now(),
+      })
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "image_asset.create",
+      targetType: "company",
+      targetId: input.companyId,
+      after: { imageAssetId: row!.id, label, sourceType: input.sourceType, rightsStatus: "unknown" },
+    });
+    return row!;
+  });
+}
+
+/** 権利状態と営業デモ・本番の利用範囲を同時に更新する。未確認のまま利用許可は出せない。 */
+export async function updateImageAssetPolicy(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: {
+    companyId: string;
+    imageAssetId: string;
+    rightsStatus: ImageAssetRightsStatus;
+    allowSalesDemo: boolean;
+    allowProduction: boolean;
+    note?: string;
+  },
+): Promise<Result<ImageAsset, string>> {
+  const ops = authorizeCompanyManage(actor, input.companyId);
+  if (!ops.ok) return ops;
+  if (!(IMAGE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) {
+    return err("invalid_input", "権利状態が不正です");
+  }
+  if (input.rightsStatus === "unknown" && (input.allowSalesDemo || input.allowProduction)) {
+    return err("rights_unconfirmed", "権利未確認の素材は評価参照にしか使えません");
+  }
+  return inTx(db, async (tx, fail) => {
+    const [before] = await tx
+      .select()
+      .from(imageAssets)
+      .where(and(eq(imageAssets.id, input.imageAssetId), eq(imageAssets.companyId, input.companyId)))
+      .for("update");
+    if (!before) return fail("not_found");
+    const confirmed = input.rightsStatus !== "unknown";
+    const [after] = await tx
+      .update(imageAssets)
+      .set({
+        rightsStatus: input.rightsStatus,
+        allowSalesDemo: input.allowSalesDemo,
+        allowProduction: input.allowProduction,
+        confirmedBy: confirmed ? ops.value.userId : null,
+        confirmedAt: confirmed ? clock.now() : null,
+        note: input.note?.trim() || null,
+        updatedAt: clock.now(),
+      })
+      .where(eq(imageAssets.id, before.id))
+      .returning();
+    await recordEvent(tx, clock, {
+      actor: ops.value,
+      action: "image_asset.policy_update",
+      targetType: "company",
+      targetId: input.companyId,
+      before: {
+        imageAssetId: before.id,
+        rightsStatus: before.rightsStatus,
+        allowSalesDemo: before.allowSalesDemo,
+        allowProduction: before.allowProduction,
+      },
+      after: {
+        imageAssetId: before.id,
+        rightsStatus: input.rightsStatus,
+        allowSalesDemo: input.allowSalesDemo,
+        allowProduction: input.allowProduction,
+      },
+    });
+    return after!;
   });
 }
 

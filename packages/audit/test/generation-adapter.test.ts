@@ -128,8 +128,26 @@ describe("アダプタ単体", () => {
 
     const att = gen.calls[0]!.input.attachments;
     expect(att.filter((a) => a.kind === "image")).toEqual([
-      { name: "desktop_shot.png", path: "/art/x/desktop shot.png", kind: "image" },
-      { name: "screenshot-2-desktop_shot.png", path: "/art/y/desktop shot.png", kind: "image" },
+      {
+        name: "desktop_shot.png",
+        path: "/art/x/desktop shot.png",
+        kind: "image",
+        imagePolicy: expect.objectContaining({
+          sourceType: "original_site",
+          rightsStatus: "unknown",
+          allowedUses: ["analysis_only"],
+        }),
+      },
+      {
+        name: "screenshot-2-desktop_shot.png",
+        path: "/art/y/desktop shot.png",
+        kind: "image",
+        imagePolicy: expect.objectContaining({
+          sourceType: "original_site",
+          rightsStatus: "unknown",
+          allowedUses: ["analysis_only"],
+        }),
+      },
     ]);
     expect(gen.calls[0]!.input.context).toMatchObject({
       task: "site_evaluation",

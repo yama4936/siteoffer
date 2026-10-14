@@ -14,6 +14,7 @@ import {
   confirmContractByOps,
   confirmDomainPreferenceByOps,
   createDiscoveryJobByOps,
+  createImageAsset,
   createProductTermsVersion,
   excludeCandidate,
   extendAssignmentByOps,
@@ -33,6 +34,7 @@ import {
   startContractReviewByOps,
   suspendSalesUser,
   updateCandidate,
+  updateImageAssetPolicy,
   updatePaymentStatusByOps,
   updateSetting,
   withdrawSellable,
@@ -132,6 +134,37 @@ export async function excludeCandidateAction(fd: FormData) {
         reason: str(fd, "reason"),
       }),
     "候補を除外しました（再収集でも営業可能に戻りません）",
+  );
+}
+
+export async function createImageAssetAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      createImageAsset(d, a, {
+        companyId: str(fd, "companyId"),
+        label: str(fd, "label"),
+        sourceType: str(fd, "sourceType") as Parameters<typeof createImageAsset>[2]["sourceType"],
+        sourceUrl: optStr(fd, "sourceUrl"),
+        note: str(fd, "note"),
+      }),
+    "画像素材を評価参照のみで登録しました",
+  );
+}
+
+export async function updateImageAssetPolicyAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) =>
+      updateImageAssetPolicy(d, a, {
+        companyId: str(fd, "companyId"),
+        imageAssetId: str(fd, "imageAssetId"),
+        rightsStatus: str(fd, "rightsStatus") as Parameters<typeof updateImageAssetPolicy>[2]["rightsStatus"],
+        allowSalesDemo: fd.has("allowSalesDemo"),
+        allowProduction: fd.has("allowProduction"),
+        note: str(fd, "note"),
+      }),
+    "画像素材の権利状態と利用範囲を更新しました",
   );
 }
 

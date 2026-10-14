@@ -41,13 +41,29 @@ import { getCompanyDetail, listAuditEventsForOps, listProductTerms } from "@/lib
 import { sellableIssues, termsIssueText } from "@/lib/ops/sellable";
 import { getCurrentActor } from "@/lib/session";
 import {
+  createImageAssetAction,
   excludeCandidateAction,
   makeSellableAction,
   reviewProposalAction,
   setOfficialSiteStatusAction,
   updateCandidateAction,
+  updateImageAssetPolicyAction,
   withdrawSellableAction,
 } from "../../actions";
+
+const IMAGE_SOURCE_LABEL: Record<string, string> = {
+  original_site: "元サイト",
+  customer_upload: "顧客提供",
+  generated: "生成画像",
+  operator_upload: "運営登録",
+};
+
+const IMAGE_RIGHTS_LABEL: Record<string, string> = {
+  unknown: "未確認（評価参照のみ）",
+  customer_claimed: "顧客が権利を申告",
+  license_verified: "ライセンス確認済み",
+  use_approved: "利用許諾確認済み",
+};
 
 export default async function CompanyPage({
   params,
@@ -338,6 +354,124 @@ export default async function CompanyPage({
                 <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(s.fetchedAt)}</TableCell>
               </TableRow>
             ))}
+          </TableBody>
+        </Table>
+      </Section>
+
+      <Section title="画像素材と利用許諾">
+        <Alert>
+          <AlertDescription>
+            元サイトの画像は登録しただけでは営業デモや納品サイトに使えません。権利状態と利用範囲を画像ごとに確認してください。外部画像の直リンクは行いません。
+          </AlertDescription>
+        </Alert>
+        <details className={detailsClass}>
+          <summary className={summaryClass}>画像素材の出所を登録する</summary>
+          <form action={createImageAssetAction} className={stackFormClass}>
+            <ReturnTo path={here} />
+            <input type="hidden" name="companyId" value={c.id} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="素材名" htmlFor="image-asset-label">
+                <Input id="image-asset-label" name="label" placeholder="例：トップページの店舗外観" required />
+              </Field>
+              <Field label="出所" htmlFor="image-asset-source">
+                <NativeSelect id="image-asset-source" name="sourceType" defaultValue="original_site">
+                  {Object.entries(IMAGE_SOURCE_LABEL).map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </Field>
+            </div>
+            <Field label="出典URL（元サイト由来は必須）" htmlFor="image-asset-url">
+              <Input id="image-asset-url" name="sourceUrl" type="url" />
+            </Field>
+            <Field label="メモ" htmlFor="image-asset-note">
+              <Input id="image-asset-note" name="note" />
+            </Field>
+            <div>
+              <Button type="submit" size="sm">
+                評価参照のみで登録
+              </Button>
+            </div>
+          </form>
+        </details>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>素材・出所</TableHead>
+              <TableHead>権利状態</TableHead>
+              <TableHead>利用範囲</TableHead>
+              <TableHead>確認</TableHead>
+              <TableHead>更新</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {d.imageAssets.map(({ asset, confirmerName }) => (
+              <TableRow key={asset.id}>
+                <TableCell className="min-w-52">
+                  <div className="font-medium">{asset.label}</div>
+                  <div className="text-muted-foreground text-xs">{label(IMAGE_SOURCE_LABEL, asset.sourceType)}</div>
+                  {asset.sourceUrl ? (
+                    <div className="break-all text-muted-foreground text-xs">{asset.sourceUrl}</div>
+                  ) : null}
+                </TableCell>
+                <TableCell>{label(IMAGE_RIGHTS_LABEL, asset.rightsStatus)}</TableCell>
+                <TableCell>
+                  <div>評価参照：可</div>
+                  <div>営業デモ：{asset.allowSalesDemo ? "可" : "不可"}</div>
+                  <div>本番：{asset.allowProduction ? "可" : "不可"}</div>
+                </TableCell>
+                <TableCell className="text-xs">
+                  {asset.confirmedAt ? (
+                    <>
+                      <div>{confirmerName ?? "運営ユーザー"}</div>
+                      <div className="whitespace-nowrap tabular-nums">{fmtDate(asset.confirmedAt)}</div>
+                    </>
+                  ) : (
+                    "未確認"
+                  )}
+                </TableCell>
+                <TableCell className="min-w-72">
+                  <form action={updateImageAssetPolicyAction} className="grid gap-2">
+                    <ReturnTo path={here} />
+                    <input type="hidden" name="companyId" value={c.id} />
+                    <input type="hidden" name="imageAssetId" value={asset.id} />
+                    <NativeSelect
+                      name="rightsStatus"
+                      defaultValue={asset.rightsStatus}
+                      aria-label={`${asset.label}の権利状態`}
+                    >
+                      {Object.entries(IMAGE_RIGHTS_LABEL).map(([value, text]) => (
+                        <option key={value} value={value}>
+                          {text}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" name="allowSalesDemo" defaultChecked={asset.allowSalesDemo} />
+                      営業デモで使用可
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" name="allowProduction" defaultChecked={asset.allowProduction} />
+                      納品サイトで使用可
+                    </label>
+                    <Input
+                      name="note"
+                      defaultValue={asset.note ?? ""}
+                      placeholder="確認根拠・条件"
+                      aria-label={`${asset.label}の確認メモ`}
+                    />
+                    <div>
+                      <Button type="submit" size="sm">
+                        利用方針を更新
+                      </Button>
+                    </div>
+                  </form>
+                </TableCell>
+              </TableRow>
+            ))}
+            {d.imageAssets.length === 0 ? <EmptyRow colSpan={5}>登録された画像素材はありません</EmptyRow> : null}
           </TableBody>
         </Table>
       </Section>

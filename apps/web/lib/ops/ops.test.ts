@@ -6,6 +6,7 @@ import {
   contracts,
   type Db,
   discoveryJobs,
+  imageAssets,
   proposalVersions,
   rewards,
 } from "@siteoffer/db";
@@ -16,6 +17,7 @@ import {
   adjustRewardByOps,
   confirmContractByOps,
   createDiscoveryJobByOps,
+  createImageAsset,
   createProductTermsVersion,
   excludeCandidate,
   extendAssignmentByOps,
@@ -31,6 +33,7 @@ import {
   setProductTermsActive,
   suspendSalesUser,
   updateCandidate,
+  updateImageAssetPolicy,
   updateSetting,
   withdrawSellable,
 } from "./commands";
@@ -95,6 +98,12 @@ describe("営業ユーザー・未ログイン・system は運営の処理と読
         updateCandidate(deps, actor, { companyId: company.id, patch: { name: "改ざん" } }),
         setOfficialSiteStatus(deps, actor, { companyId: company.id, status: "confirmed" }),
         excludeCandidate(deps, actor, { companyId: company.id, kind: "excluded", reason: "x" }),
+        createImageAsset(deps, actor, {
+          companyId: company.id,
+          label: "外観",
+          sourceType: "original_site",
+          sourceUrl: "https://example.test/exterior.jpg",
+        }),
         reviewProposalVersion(deps, actor, { proposalVersionId: version!.id, decision: "approved" }),
         makeSellable(deps, actor, { companyId: company.id, productTermsId: terms.id }),
         withdrawSellable(deps, actor, { companyId: company.id, reason: "x" }),
@@ -350,6 +359,75 @@ describe("候補・収集ジョブ", () => {
     expect(detail.value.latestAudit?.totalScore).toBe("48.5");
     expect(detail.value.findings[0]).toMatchObject({ itemCode: "D1", critical: true });
     expect(detail.value.websites[0]!.isPrimary).toBe(true);
+  });
+});
+
+describe("画像素材の権利と利用範囲", () => {
+  it("登録時は評価参照のみに固定し、権利未確認のままデモ・本番利用を許可できない", async () => {
+    const { actor: ops } = await seedUser(db, "ops");
+    const { company } = await seedCandidate(db);
+    const created = await createImageAsset(deps, ops, {
+      companyId: company.id,
+      label: "トップページの店舗外観",
+      sourceType: "original_site",
+      sourceUrl: "https://example.test/exterior.jpg",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error(created.error);
+    expect(created.value).toMatchObject({
+      rightsStatus: "unknown",
+      allowSalesDemo: false,
+      allowProduction: false,
+      confirmedBy: null,
+      confirmedAt: null,
+    });
+
+    expect(
+      await updateImageAssetPolicy(deps, ops, {
+        companyId: company.id,
+        imageAssetId: created.value.id,
+        rightsStatus: "unknown",
+        allowSalesDemo: true,
+        allowProduction: false,
+      }),
+    ).toMatchObject({ ok: false, error: "rights_unconfirmed" });
+    expect(await eventCount("image_asset.policy_update")).toBe(0);
+  });
+
+  it("許諾確認後は用途と確認者・日時を記録し、企業詳細に表示する", async () => {
+    const { actor: ops, user } = await seedUser(db, "ops");
+    const { company } = await seedCandidate(db);
+    const created = await createImageAsset(deps, ops, {
+      companyId: company.id,
+      label: "ロゴ",
+      sourceType: "customer_upload",
+      note: "顧客から提供",
+    });
+    if (!created.ok) throw new Error(created.error);
+    const updated = await updateImageAssetPolicy(deps, ops, {
+      companyId: company.id,
+      imageAssetId: created.value.id,
+      rightsStatus: "use_approved",
+      allowSalesDemo: true,
+      allowProduction: true,
+      note: "デモ・納品利用の許諾を確認",
+    });
+    expect(updated.ok && updated.value).toMatchObject({
+      rightsStatus: "use_approved",
+      allowSalesDemo: true,
+      allowProduction: true,
+      confirmedBy: user.id,
+      confirmedAt: clock.now(),
+    });
+    expect(await eventCount("image_asset.create")).toBe(1);
+    expect(await eventCount("image_asset.policy_update")).toBe(1);
+
+    const detail = await getCompanyDetail(db, ops, company.id);
+    expect(detail.ok && detail.value?.imageAssets[0]).toMatchObject({
+      confirmerName: user.displayName,
+      asset: { id: created.value.id, allowProduction: true },
+    });
+    expect(await db.select().from(imageAssets)).toHaveLength(1);
   });
 });
 

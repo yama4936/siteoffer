@@ -142,10 +142,11 @@ $OUT/site/
 
 ### 画像表現
 
+- 画像1点ごとの出所・権利状態・利用範囲・確認者・確認日時は `image-policy.md` に従って記録する。
 - 許諾済みのローカル素材、特定の人物・施設・実績を装わない生成画像、CSS・インラインSVGの抽象表現、画像なしのいずれかを design-brief.json で選ぶ。
 - 営業用ファーストビューに「画像予定地」「差し替え予定」などのプレースホルダーを置かない。
 - 文字入りの元画像（電話番号画像・見出し画像）は、確認済み内容だけをHTMLテキストに置き換える。
-- 元画像の参照URLと許諾確認の必要性は rebuild.json に記録する。
+- 元画像の参照URLと許諾確認の必要性は rebuild.json に記録する。未確認素材と元サイトのスクリーンショットは評価参照だけにし、営業デモへ転用しない。
 
 ## 5. セクション別の改善パターン
 
@@ -293,7 +294,19 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
     "tone": "白地に紺、写真少なめの堅い印象"
   },
   "images": [
-    {"page": "index.html", "label": "元サイトの事務所外観写真", "original_src": "https://example.co.jp/img/main.jpg", "treatment": "HTMLでは使わず抽象表現に変更", "needs_permission": true}
+    {
+      "id": "hero-exterior",
+      "page": "index.html",
+      "label": "元サイトの事務所外観写真",
+      "source_type": "original_site",
+      "source_ref": "https://example.co.jp/img/main.jpg",
+      "rights_status": "unknown",
+      "allowed_uses": ["analysis_only"],
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "treatment": "abstract",
+      "note": "営業デモでは事務所を表さない抽象表現に変更"
+    }
   ],
   "excluded_features": ["問い合わせフォームの送信（mailto: リンクに置き換え）"],
   "needs_confirmation": [

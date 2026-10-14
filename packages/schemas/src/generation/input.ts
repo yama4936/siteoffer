@@ -49,17 +49,79 @@ export const externalDataSchema = z.strictObject({
 });
 export type ExternalData = z.infer<typeof externalDataSchema>;
 
+export const imageSourceTypes = ["original_site", "customer_upload", "generated", "operator_upload"] as const;
+export const imageSourceTypeSchema = z.enum(imageSourceTypes);
+export type ImageSourceType = z.infer<typeof imageSourceTypeSchema>;
+
+export const imageRightsStatuses = ["unknown", "customer_claimed", "license_verified", "use_approved"] as const;
+export const imageRightsStatusSchema = z.enum(imageRightsStatuses);
+export type ImageRightsStatus = z.infer<typeof imageRightsStatusSchema>;
+
+export const imageAllowedUses = ["analysis_only", "sales_demo", "production"] as const;
+export const imageAllowedUseSchema = z.enum(imageAllowedUses);
+export type ImageAllowedUse = z.infer<typeof imageAllowedUseSchema>;
+
+/**
+ * 画像1点ごとの権利・利用範囲。未確認素材は評価の参照にしか使えない。
+ * confirmedBy / confirmedAt は営業デモまたは本番利用を許可した根拠として対で記録する。
+ */
+export const imagePolicySchema = z
+  .strictObject({
+    sourceType: imageSourceTypeSchema,
+    sourceUrl: z.string().nullable(),
+    rightsStatus: imageRightsStatusSchema,
+    allowedUses: z.array(imageAllowedUseSchema).min(1),
+    confirmedBy: z.string().nullable(),
+    confirmedAt: z.string().nullable(),
+    note: z.string().nullable(),
+  })
+  .superRefine((policy, ctx) => {
+    if (new Set(policy.allowedUses).size !== policy.allowedUses.length) {
+      ctx.addIssue({ code: "custom", path: ["allowedUses"], message: "allowedUses に重複があります" });
+    }
+    const publishable = policy.allowedUses.some((use) => use === "sales_demo" || use === "production");
+    if (
+      policy.rightsStatus === "unknown" &&
+      (publishable || policy.allowedUses.some((use) => use !== "analysis_only"))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allowedUses"],
+        message: "権利未確認の画像は analysis_only にしか使えません",
+      });
+    }
+    if (publishable && (!policy.confirmedBy || !policy.confirmedAt)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["confirmedBy"],
+        message: "営業デモ・本番利用には確認者と確認日時が必要です",
+      });
+    }
+  });
+export type ImagePolicy = z.infer<typeof imagePolicySchema>;
+
 /** 作業ディレクトリに置く添付（スクリーンショット等） */
-export const attachmentSchema = z.strictObject({
-  /** 作業ディレクトリ内のファイル名 */
-  name: z
-    .string()
-    .min(1)
-    .regex(/^[A-Za-z0-9_.-]+$/),
-  /** アプリ側のローカルパス（コンテナには作業ディレクトリへのコピーだけが渡る） */
-  path: z.string().min(1),
-  kind: z.enum(["image", "text", "file"]),
-});
+export const attachmentSchema = z
+  .strictObject({
+    /** 作業ディレクトリ内のファイル名 */
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[A-Za-z0-9_.-]+$/),
+    /** アプリ側のローカルパス（コンテナには作業ディレクトリへのコピーだけが渡る） */
+    path: z.string().min(1),
+    kind: z.enum(["image", "text", "file"]),
+    /** 画像は必須。画像以外は null とし、権利情報を誤って適用しない */
+    imagePolicy: imagePolicySchema.nullable(),
+  })
+  .superRefine((attachment, ctx) => {
+    if (attachment.kind === "image" && attachment.imagePolicy === null) {
+      ctx.addIssue({ code: "custom", path: ["imagePolicy"], message: "画像には利用方針が必要です" });
+    }
+    if (attachment.kind !== "image" && attachment.imagePolicy !== null) {
+      ctx.addIssue({ code: "custom", path: ["imagePolicy"], message: "画像以外に画像利用方針は設定できません" });
+    }
+  });
 export type Attachment = z.infer<typeof attachmentSchema>;
 
 export const generationInputSchema = z.strictObject({

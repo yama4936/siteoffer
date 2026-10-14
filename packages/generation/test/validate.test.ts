@@ -1,3 +1,4 @@
+import { generationInputSchema } from "@siteoffer/schemas";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { checkFacts } from "../src/facts.ts";
@@ -51,6 +52,50 @@ describe("出力の検証", () => {
     ev.items.pop();
     const r = validateOutput("evaluation", fixtureInput(), generationOutputSchemas.evaluation, ev);
     expect(r).toMatchObject({ ok: false, error: "schema_violation" });
+  });
+});
+
+describe("画像添付の利用方針", () => {
+  const image = {
+    name: "hero.webp",
+    path: "/tmp/hero.webp",
+    kind: "image" as const,
+    imagePolicy: {
+      sourceType: "original_site" as const,
+      sourceUrl: "https://example.test/hero.webp",
+      rightsStatus: "unknown" as const,
+      allowedUses: ["analysis_only" as const],
+      confirmedBy: null,
+      confirmedAt: null,
+      note: null,
+    },
+  };
+
+  it("権利未確認の画像は評価参照だけを許す", () => {
+    const input = fixtureInput();
+    input.attachments = [image];
+    expect(generationInputSchema.safeParse(input).success).toBe(true);
+    input.attachments[0]!.imagePolicy!.allowedUses = ["sales_demo"];
+    expect(generationInputSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("営業デモ利用には権利状態・確認者・確認日時が必要", () => {
+    const input = fixtureInput();
+    input.attachments = [
+      {
+        ...image,
+        imagePolicy: {
+          ...image.imagePolicy,
+          rightsStatus: "use_approved",
+          allowedUses: ["sales_demo"],
+          confirmedBy: "ops-user",
+          confirmedAt: "2026-10-14T00:00:00Z",
+        },
+      },
+    ];
+    expect(generationInputSchema.safeParse(input).success).toBe(true);
+    input.attachments[0]!.imagePolicy!.confirmedAt = null;
+    expect(generationInputSchema.safeParse(input).success).toBe(false);
   });
 });
 

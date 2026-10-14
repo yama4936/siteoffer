@@ -6,6 +6,7 @@ export * from "./discovery.ts";
 export * from "./domain-preference.ts";
 export * from "./events.ts";
 export * from "./generation.ts";
+export * from "./image-assets.ts";
 export * from "./proposal.ts";
 export * from "./settings.ts";
 export * from "./share-link.ts";

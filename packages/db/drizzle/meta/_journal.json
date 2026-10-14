@@ -43,6 +43,13 @@
       "when": 1791962422002,
       "tag": "0005_rich_supernaut",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791972145596,
+      "tag": "0006_steady_bruce_banner",
+      "breakpoints": true
     }
   ]
 }

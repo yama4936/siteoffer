@@ -59,6 +59,9 @@ function inputRef(input: GenerationInput) {
     needsReviewFactKeys: input.facts.filter((f) => f.status === "needs_review").map((f) => f.key),
     externalDataIds: input.externalData.map((d) => d.id),
     attachments: input.attachments.map((a) => a.name),
+    imagePolicies: input.attachments
+      .filter((a) => a.kind === "image")
+      .map((a) => ({ name: a.name, policy: a.imagePolicy })),
   };
 }
 

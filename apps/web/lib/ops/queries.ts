@@ -27,6 +27,7 @@ import {
   domainPreferences,
   findings,
   generationJobs,
+  imageAssets,
   payments,
   productTerms,
   proposals,
@@ -177,6 +178,12 @@ export async function getCompanyDetail(db: DbOrTx, actor: Actor | null, companyI
     .where(eq(generationJobs.companyId, companyId))
     .orderBy(desc(generationJobs.createdAt))
     .limit(20);
+  const assets = await db
+    .select({ asset: imageAssets, confirmerName: users.displayName })
+    .from(imageAssets)
+    .leftJoin(users, eq(users.id, imageAssets.confirmedBy))
+    .where(eq(imageAssets.companyId, companyId))
+    .orderBy(desc(imageAssets.createdAt));
   const assignmentRows = await db
     .select({ a: assignments, userName: users.displayName })
     .from(assignments)
@@ -192,6 +199,7 @@ export async function getCompanyDetail(db: DbOrTx, actor: Actor | null, companyI
     findings: auditFindings,
     proposalVersions: versions.map((r) => r.v),
     generationJobs: jobs,
+    imageAssets: assets,
     assignments: assignmentRows,
   });
 }

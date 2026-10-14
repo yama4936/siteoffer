@@ -54,15 +54,28 @@ function safeName(p: string): string {
 /** 診断の採点入力 → 生成ジョブの入力 */
 export function toGenerationInput(input: EvaluationGeneratorInput): GenerationInput {
   const attachments: Attachment[] = [
-    { name: "rubric.md", path: input.rubricPath, kind: "text" },
-    { name: "output-format.md", path: input.outputFormatPath, kind: "text" },
+    { name: "rubric.md", path: input.rubricPath, kind: "text", imagePolicy: null },
+    { name: "output-format.md", path: input.outputFormatPath, kind: "text", imagePolicy: null },
   ];
   const used = new Set(attachments.map((a) => a.name));
   for (const [i, p] of input.screenshotPaths.entries()) {
     let name = safeName(p);
     if (used.has(name)) name = `screenshot-${i + 1}-${name}`;
     used.add(name);
-    attachments.push({ name, path: p, kind: "image" });
+    attachments.push({
+      name,
+      path: p,
+      kind: "image",
+      imagePolicy: {
+        sourceType: "original_site",
+        sourceUrl: input.targetUrl,
+        rightsStatus: "unknown",
+        allowedUses: ["analysis_only"],
+        confirmedBy: null,
+        confirmedAt: null,
+        note: "サイト評価の画面証拠。営業デモ・納品サイトの素材には使わない",
+      },
+    });
   }
   const collectedAt = input.collected.collected_at;
   return {
