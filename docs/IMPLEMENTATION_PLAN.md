@@ -58,7 +58,7 @@
 ### 共有ファイルの扱い（衝突を避けるための約束）
 
 - **ルートの設定**（package.json、pnpm-workspace.yaml、tsconfig、Vitest設定、pnpm-lock.yaml）と **マイグレーション** は統合担当だけが変更する。
-- DBスキーマはドメインごとのファイル（`packages/db/src/schema/<domain>.ts`）に分ける。タスクは自分の担当ファイルの列を追加できる。マイグレーションは作らず、統合担当が取り込み時に `drizzle-kit generate` で作る。
+- DBスキーマはドメインごとのファイル（`packages/db/src/schema/<domain>.ts`）に分ける。タスクは自分の担当ファイルの列を追加できる。テストを通すためにworktreeの中で `pnpm db:generate` を実行してよいが、生成されたマイグレーションは取り込み時に捨て、統合担当がまとめて作り直す。
 - 依存パッケージは自分の担当パッケージの package.json にだけ追加してよい。lockfile の衝突は統合担当が `pnpm install` で解消する。
 - Zodスキーマはタスクごとのディレクトリ（`packages/schemas/src/<domain>/`）に置き、`packages/schemas/src/index.ts` への追記は統合担当が行う。
 - `packages/core/src/index.ts` への export の追記も統合担当が行う。各タスクは自分のディレクトリに `index.ts` を置く。
@@ -141,7 +141,7 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 
 ### T1 認証・権限
 
-- 担当：`packages/core/src/auth/`、`packages/core/src/permissions/`、`apps/web/app/(auth)/`、`apps/web/lib/session.ts`
+- 担当：`packages/core/src/auth/`、`packages/core/src/permissions/`、`packages/db/src/schema/users.ts`、`apps/web/app/(auth)/`、`apps/web/lib/session.ts`、`apps/web/lib/auth/`
 - 内容：メール＋パスワードの簡易ログイン（パスワードはハッシュ化）、セッション、営業・運営の役割。
   営業ユーザーは自己登録できる。登録時に利用条件（文面は仮置きで版を持つ）への同意を記録し、運営が利用停止にできる。運営アカウントは自己登録させず seed で作る。
   認証は `AuthProvider` インターフェースの裏に置き、将来Cognito等へ差し替えられるようにする（24.2）。
@@ -189,7 +189,7 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 
 ### T5 生成（Codex SDKラッパー・モック・記録）
 
-- 担当：`packages/generation/`、`fixtures/codex/`、`packages/schemas/src/generation/`
+- 担当：`packages/generation/`、`fixtures/codex/`、`packages/schemas/src/generation/`、`packages/db/src/schema/generation.ts`
 - 内容：
   - `Generator` インターフェース：用途（提案文・電話台本・想定問答・サイトデモ・納品サイト・評価書）、入力、出力スキーマを受け取る。
   - `CodexGenerator`：`@openai/codex-sdk` を使う。1ジョブ1スレッドとし、スレッドIDを記録する。SDKの使い方は実装時に公式文書で確認する（10.4章のリンク）。
@@ -202,7 +202,7 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 
 ### T6 Astroテンプレートとビルド検査
 
-- 担当：`templates/astro-site/`、`packages/generation/src/site-check/`
+- 担当：`templates/astro-site/`（ビルド検査も `templates/astro-site/check/` に置く。packages/generation は触らない）
 - 内容：1ページの企業サイト（サービス・会社情報・実績・問い合わせ）の共通テンプレート。内容・構成・色はJSONの入力で差し替える。
   非公式の提案であることを示す表示を、デモ用のビルドで必ず入れる（11章）。問い合わせフォームや計測タグは入れない。
   ビルド後の検査：リンク切れ、画像、スマホ幅での表示崩れ（可能なら）、「要確認」の残存。
@@ -210,7 +210,8 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 
 ### T7 診断（評価スキルの組み込み）
 
-- 担当：`packages/audit/`、`fixtures/audit/`
+- 担当：`packages/audit/`、`fixtures/audit/`、`packages/db/src/schema/site-audit.ts`
+- T5と並行するため、採点に使う生成器は `packages/audit` の中に必要最小限のインターフェース（例：`EvaluationGenerator`）として定義し、テストはその固定応答で行う。T5の `Generator` へのつなぎ込みは統合時に行う。
 - 内容：
   - 評価スキルの流れ（`.agents/skills/site-evaluation/SKILL.md`）をワーカーから実行できるようにする：
     collect.py（Pythonのサブプロセス）→ Codexによる採点（T5の Generator・用途「評価書」。rubric.md と output-format.md を入力に含める）→ score.py → site-proposal の decide.py。
