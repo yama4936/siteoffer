@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@siteoffer/astro-site": "workspace:*",
     "zod": "4.6.7"
   }
 }

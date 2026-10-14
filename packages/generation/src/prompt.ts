@@ -12,8 +12,9 @@ export const PROMPT_FILES = {
   proposal_text: "proposal_text.v1.md",
   call_script: "call_script.v1.md",
   faq: "faq.v1.md",
-  demo_site: "demo_site.v1.md",
-  delivery_site: "delivery_site.v1.md",
+  // v2：出力をテンプレートの site.json と同じ形にした（v1 の構成JSONは廃止。ファイルは残す）
+  demo_site: "demo_site.v2.md",
+  delivery_site: "delivery_site.v2.md",
 } as const satisfies Record<GenerationPurpose | "common", string>;
 
 const cache = new Map<string, string>();

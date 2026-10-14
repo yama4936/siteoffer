@@ -2,7 +2,8 @@
  * 生成サイト（1ページの企業サイト）の入力JSON（site.json）の形。
  *
  * - テンプレートはこの入力だけを読んでページを組み立てる。内容・構成（セクションの順序と表示可否）・色を差し替える。
- * - 後でT5の生成スキーマ（packages/schemas/src/generation/）と統合する予定。型名とフィールドの意味をここで定める。
+ * - サイト構成の正はこのスキーマ。生成（T5）の出力スキーマ（demo_site / delivery_site）は
+ *   schema/site-generation.ts で同じ形から作り、packages/schemas/src/generation/ はそれを再利用する。
  * - 文字列には要確認マーカー `{{要確認:説明}}` を入れてよい（未確認の事実を仮置きする印。lib/markers.ts）。
  *   demoでは目立つ表示で残し、deliveryではビルドを失敗させる。
  */
@@ -115,7 +116,16 @@ export const SiteInputSchema = z
     companyInfo: z
       .object({
         intro: z.string().min(1).optional(),
-        rows: z.array(z.object({ label: z.string().min(1), value: z.string().min(1) })).min(1),
+        rows: z
+          .array(
+            z.object({
+              label: z.string().min(1),
+              value: z.string().min(1),
+              /** 根拠にした確認済み事実のキー（生成時に付く。表示には使わない）。 */
+              factRef: z.string().min(1).optional(),
+            }),
+          )
+          .min(1),
       })
       .optional(),
     /** 実績。確認済みのものだけを入れる（未確認なら要確認マーカーを付けるか載せない）。空ならセクションを出さない。 */
@@ -129,6 +139,8 @@ export const SiteInputSchema = z
             /** 年・時期の表記（例：2025年）。 */
             period: z.string().min(1).optional(),
             image: SiteImageSchema.optional(),
+            /** 根拠にした確認済み事実のキー（生成時に付く。表示には使わない）。 */
+            factRef: z.string().min(1).optional(),
           }),
         ),
       })

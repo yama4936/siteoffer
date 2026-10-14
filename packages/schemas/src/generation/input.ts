@@ -71,5 +71,14 @@ export const generationInputSchema = z.strictObject({
 });
 export type GenerationInput = z.infer<typeof generationInputSchema>;
 
-/** 生成物に残っていたら検証エラーにする印 */
+/*
+ * 要確認の表記はテンプレートの要確認マーカー `{{要確認:説明}}` に統一する（正は templates/astro-site/lib/markers.ts）。
+ * 生成物にはマーカーを入れさせない（不明な値は null）。マーカーの検出には markerRegex を使う。
+ */
+export { formatMarker, MARKER_LABEL, markerRegex } from "@siteoffer/astro-site/markers";
+
+/**
+ * マーカーの形になっていない仮置きの語。生成物に残っていたら、マーカーと同じく検証エラーにする
+ * （先頭はマーカーの見出し語。`{{` `}}` を付け忘れた「要確認」も拾う）。
+ */
 export const NEEDS_REVIEW_MARKERS = ["要確認", "仮置き", "TODO", "TBD"] as const;

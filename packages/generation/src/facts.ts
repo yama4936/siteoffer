@@ -1,8 +1,8 @@
-import { type GenerationInput, type GenerationPurpose, NEEDS_REVIEW_MARKERS } from "./schemas.ts";
+import { type GenerationInput, type GenerationPurpose, markerRegex, NEEDS_REVIEW_MARKERS } from "./schemas.ts";
 
 /**
  * 生成物の事実検査（10.2）。
- * 「要確認」の印の残存、未確認の値の流用、入力に根拠のない数値の主張・実績系の語を検出する。
+ * 要確認マーカー（`{{要確認:説明}}`。表記はテンプレートの lib/markers.ts に統一）・仮置きの語の残存、未確認の値の流用、入力に根拠のない数値の主張・実績系の語を検出する。
  * 機械的な検査であり、すべての無根拠な主張を見つけられるわけではない（公開前の人の確認は別に必要）。
  */
 export interface FactViolation {
@@ -99,8 +99,14 @@ export function checkFacts(purpose: GenerationPurpose, input: GenerationInput, o
   for (const { path, text } of walkStrings(output)) {
     const norm = normalizeForMatch(text);
 
+    // 要確認マーカー（テンプレートと同じ表記 `{{要確認:説明}}`）。生成物には入れさせない
+    for (const m of text.matchAll(markerRegex())) {
+      violations.push({ kind: "marker", path, detail: `要確認マーカー「${m[0]}」が残っている` });
+    }
+    // マーカーの形になっていない仮置きの語（マーカーとして数えた部分は除く）
+    const loose = normalizeForMatch(text.replace(markerRegex(), ""));
     for (const m of NEEDS_REVIEW_MARKERS) {
-      if (norm.includes(normalizeForMatch(m))) {
+      if (loose.includes(normalizeForMatch(m))) {
         violations.push({ kind: "marker", path, detail: `「${m}」が残っている` });
       }
     }

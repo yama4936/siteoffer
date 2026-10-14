@@ -4,7 +4,7 @@ import type { Json } from "./collect.ts";
 
 /**
  * 採点の生成器（F-29：Codexが rubric に沿って evaluation.json を書く）。
- * 実装は並行タスクT5の Generator（用途「評価書」）を統合時につなぐ。ここでは最小限の口だけを定義する。
+ * 本番の実装は generation-adapter.ts（T5の生成ジョブ・用途「評価書」につなぐ）。テストでは固定応答に差し替えられる。
  */
 export interface EvaluationGeneratorInput {
   auditId: string;
@@ -18,6 +18,10 @@ export interface EvaluationGeneratorInput {
   rubric: string;
   /** references/output-format.md の本文 */
   outputFormat: string;
+  /** references/rubric.md のパス（生成の作業ディレクトリへ添付として渡す） */
+  rubricPath: string;
+  /** references/output-format.md のパス（同上） */
+  outputFormatPath: string;
   /** 上記を区画に分けて組み立てたプロンプト（buildEvaluationPrompt） */
   prompt: string;
 }

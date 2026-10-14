@@ -133,6 +133,8 @@ export async function runSiteAudit(
     screenshotPaths: c.screenshotPaths,
     rubric,
     outputFormat,
+    rubricPath: p.rubric,
+    outputFormatPath: p.outputFormat,
   };
   const generated = await deps.generator.generate({ ...genInput, prompt: buildEvaluationPrompt(genInput) });
   if (!generated.ok) return fail(`採点の生成に失敗した: ${generated.message ?? generated.error}`);

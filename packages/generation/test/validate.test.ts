@@ -5,6 +5,7 @@ import { toCodexOutputSchema } from "../src/json-schema.ts";
 import { loadCodexFixture } from "../src/mock.ts";
 import { buildPrompt } from "../src/prompt.ts";
 import {
+  formatMarker,
   generationOutputSchemas,
   generationPurposes,
   type ProposalText,
@@ -30,7 +31,7 @@ describe("出力の検証", () => {
   it("スキーマ違反・JSONでない・空の応答は失敗する", () => {
     const input = fixtureInput();
     const bad = clone(loadCodexFixture("demo_site")) as Record<string, unknown>;
-    delete bad.companyName;
+    delete bad.company;
     expect(validateOutput("demo_site", input, siteConfigSchema, bad)).toMatchObject({
       ok: false,
       error: "schema_violation",
@@ -59,13 +60,22 @@ describe("事実検査（10.2）", () => {
 
   it("要確認の印が残っていれば違反", () => {
     const s = site();
-    s.companyInfo.businessHours = "要確認";
+    s.contact.hours = "要確認";
     expect(checkFacts("demo_site", input, s).map((v) => v.kind)).toContain("marker");
+  });
+
+  it("テンプレートと同じ表記の要確認マーカーも違反（1つのマーカーは1件として数える）", () => {
+    const s = site();
+    s.contact.hours = `営業時間 ${formatMarker("定休日")}`;
+    const hits = checkFacts("demo_site", input, s).filter((v) => v.kind === "marker");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.detail).toContain("{{要確認:定休日}}");
+    expect(hits[0]!.path).toBe("contact.hours");
   });
 
   it("未確認の事実の値を使うと違反", () => {
     const s = site();
-    s.lead = "地域リフォーム大賞の工務店です。";
+    s.hero.lead = "地域リフォーム大賞の工務店です。";
     const kinds = checkFacts("demo_site", input, s).map((v) => v.kind);
     expect(kinds).toContain("needs_review_value");
   });
@@ -80,14 +90,14 @@ describe("事実検査（10.2）", () => {
 
   it("確認済み事実にない受賞・顧客の声はサイトに書けない", () => {
     const s = site();
-    s.services[0]!.description = "お客様の声：とても満足しました。";
+    s.services!.items[0]!.description = "お客様の声：とても満足しました。";
     expect(checkFacts("demo_site", input, s).some((v) => v.detail.includes("お客様の声"))).toBe(true);
   });
 
   it("factRef は確認済み事実だけを参照できる", () => {
     const s = site();
-    s.achievements.push({ title: "受賞", description: "大賞", factRef: "claim.award" });
-    s.achievements.push({ title: "事例", description: "事例", factRef: "nope" });
+    s.works!.items.push({ title: "受賞", description: "大賞", period: null, factRef: "claim.award" });
+    s.works!.items.push({ title: "事例", description: "事例", period: null, factRef: "nope" });
     const kinds = checkFacts("demo_site", input, s).map((v) => v.kind);
     expect(kinds).toContain("unconfirmed_fact_ref");
     expect(kinds).toContain("unknown_fact_ref");

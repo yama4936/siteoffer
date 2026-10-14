@@ -47,7 +47,7 @@ describe("生成ジョブ（モック）", () => {
         usage: null,
         errorCode: null,
       });
-      expect(r.value.job.promptVersion).toContain(`${purpose}.v1`);
+      expect(r.value.job.promptVersion).toMatch(new RegExp(`\\+${purpose}\\.v\\d+#`));
       expect(r.value.job.outputRef).toMatchObject({ storage: "generation_jobs.output" });
       expect(r.value.job.inputRef).toMatchObject({ needsReviewFactKeys: ["claim.award", "claim.price"] });
     }

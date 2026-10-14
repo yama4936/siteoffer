@@ -5,6 +5,8 @@
   "exports": {
     ".": "./index.ts",
     "./schema": "./schema/site-input.ts",
+    "./schema/generation": "./schema/site-generation.ts",
+    "./markers": "./lib/markers.ts",
     "./check": "./check/index.ts"
   },
   "scripts": {

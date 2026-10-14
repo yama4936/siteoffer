@@ -1,36 +1,63 @@
 {
-  "companyName": "株式会社あおば工務店",
-  "catchphrase": "あおば市の住まいのことなら、あおば工務店へ。",
-  "lead": "住宅リフォーム、水まわり工事、外壁塗装まで、住まいの困りごとにお応えします。",
-  "services": [
-    {
-      "name": "住宅リフォーム",
-      "description": "内装の張り替えから間取りの変更まで、暮らしに合わせた改修をご提案します。"
-    },
-    { "name": "水まわり工事", "description": "キッチン・浴室・トイレの交換や修理を承ります。" },
-    { "name": "外壁塗装", "description": "外壁の状態を確認し、塗り替えの時期と方法をご案内します。" }
+  "schemaVersion": 1,
+  "company": { "name": "株式会社あおば工務店", "shortName": "あおば工務店" },
+  "meta": {
+    "title": null,
+    "description": "あおば市の株式会社あおば工務店。住宅リフォーム、水まわり工事、外壁塗装まで、住まいの困りごとにお応えします。"
+  },
+  "theme": { "brand": "#2F6B3F", "accent": "#C8553D" },
+  "hero": {
+    "catchcopy": "あおば市の住まいのことなら、あおば工務店へ。",
+    "lead": "住宅リフォーム、水まわり工事、外壁塗装まで、住まいの困りごとにお応えします。"
+  },
+  "sections": [
+    { "type": "services", "visible": true, "heading": null },
+    { "type": "company", "visible": true, "heading": null },
+    { "type": "works", "visible": true, "heading": "施工実績" },
+    { "type": "contact", "visible": true, "heading": null }
   ],
+  "services": {
+    "intro": null,
+    "items": [
+      {
+        "title": "住宅リフォーム",
+        "description": "内装の張り替えから間取りの変更まで、暮らしに合わせた改修をご提案します。"
+      },
+      { "title": "水まわり工事", "description": "キッチン・浴室・トイレの交換や修理を承ります。" },
+      { "title": "外壁塗装", "description": "外壁の状態を確認し、塗り替えの時期と方法をご案内します。" }
+    ]
+  },
   "companyInfo": {
-    "address": "サンプル県あおば市中央1-2-3",
-    "representative": "代表取締役 青葉 太郎",
-    "established": "1998年4月",
-    "businessHours": "9:00〜18:00（日曜定休）",
-    "licenses": [{ "name": "建設業許可 サンプル県知事許可（般-10）第00000号", "factRef": "license.construction" }]
+    "intro": null,
+    "rows": [
+      { "label": "会社名", "value": "株式会社あおば工務店", "factRef": "company.name" },
+      { "label": "所在地", "value": "サンプル県あおば市中央1-2-3", "factRef": "company.address" },
+      { "label": "代表者", "value": "代表取締役 青葉 太郎", "factRef": "company.representative" },
+      { "label": "設立", "value": "1998年4月", "factRef": "company.established" },
+      { "label": "営業時間", "value": "9:00〜18:00（日曜定休）", "factRef": "company.hours" },
+      {
+        "label": "建設業の許可",
+        "value": "建設業許可 サンプル県知事許可（般-10）第00000号",
+        "factRef": "license.construction"
+      }
+    ]
   },
-  "achievements": [
-    { "title": "施工実績", "description": "年間120件（2025年度、社内集計）", "factRef": "achievement.yearly" }
-  ],
+  "works": {
+    "intro": null,
+    "items": [
+      {
+        "title": "施工実績",
+        "description": "年間120件（2025年度、社内集計）",
+        "period": null,
+        "factRef": "achievement.yearly"
+      }
+    ]
+  },
   "contact": {
-    "phone": "000-111-2222",
+    "phone": { "display": "000-111-2222", "tel": null },
     "email": null,
-    "address": "サンプル県あおば市中央1-2-3",
-    "note": "営業時間内にお電話ください。"
-  },
-  "colors": {
-    "primary": "#2F6B3F",
-    "secondary": "#DDE5B6",
-    "accent": "#C8553D",
-    "background": "#FFFFFF",
-    "text": "#1F2933"
+    "hours": "9:00〜18:00（日曜定休）",
+    "note": "営業時間内にお電話ください。",
+    "primary": "phone"
   }
 }

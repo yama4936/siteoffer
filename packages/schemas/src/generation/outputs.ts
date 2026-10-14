@@ -80,56 +80,24 @@ export type Faq = z.infer<typeof faqSchema>;
 
 // ---------- サイト構成（demo_site / delivery_site。Astroテンプレートに渡すJSON） ----------
 
-const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
-
-export const siteConfigSchema = z.strictObject({
-  companyName: text,
-  catchphrase: text,
-  lead: z.string().nullable(),
-  services: z
-    .array(
-      z.strictObject({
-        name: text,
-        description: text,
-      }),
-    )
-    .min(1),
-  /** 会社情報。確認済み事実がなければnull（仮の値を入れない） */
-  companyInfo: z.strictObject({
-    address: z.string().nullable(),
-    representative: z.string().nullable(),
-    established: z.string().nullable(),
-    businessHours: z.string().nullable(),
-    licenses: z.array(
-      z.strictObject({
-        name: text,
-        factRef: text,
-      }),
-    ),
-  }),
-  /** 実績。各項目は確認済み事実への参照が必須 */
-  achievements: z.array(
-    z.strictObject({
-      title: text,
-      description: text,
-      factRef: text,
-    }),
-  ),
-  contact: z.strictObject({
-    phone: z.string().nullable(),
-    email: z.string().nullable(),
-    address: z.string().nullable(),
-    note: z.string().nullable(),
-  }),
-  colors: z.strictObject({
-    primary: hexColor,
-    secondary: hexColor,
-    accent: hexColor,
-    background: hexColor,
-    text: hexColor,
-  }),
-});
-export type SiteConfig = z.infer<typeof siteConfigSchema>;
+/*
+ * 正はテンプレートの SiteInputSchema（templates/astro-site/schema/site-input.ts）。
+ * 生成の出力はその同じ形を Codex の構造化出力向けにした SiteGenerationOutputSchema を再利用する
+ * （省略可能な項目なし・不明は null・会社情報の行と実績に factRef 必須）。
+ * テンプレート入力への変換は siteGenerationToSiteInput、逆は siteInputToSiteGeneration。
+ * 依存の向きは schemas → astro-site（テンプレートは他パッケージに依存しない）。
+ */
+export { type SiteInput, type SiteInputRaw, SiteInputSchema } from "@siteoffer/astro-site/schema";
+export {
+  type SiteGenerationOutput as SiteConfig,
+  type SiteGenerationOutput,
+  SiteGenerationOutputSchema as siteConfigSchema,
+  SiteGenerationOutputSchema,
+  siteGenerationToSiteInput,
+  siteInputToSiteGeneration,
+  type ToGenerationResult,
+  type ToSiteInputOptions,
+} from "@siteoffer/astro-site/schema/generation";
 
 // ---------- 評価書（evaluation。site-evaluation スキルの evaluation.json） ----------
 
