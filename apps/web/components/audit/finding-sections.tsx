@@ -1,10 +1,10 @@
-import { ChevronRight, CircleAlert, CircleCheck, CircleHelp } from "lucide-react";
+import { ChevronRight, CircleAlert, CircleCheck, CircleHelp, CircleMinus } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { type GroupableFinding, groupFindings } from "@/lib/audit/finding-groups";
 
 /**
- * 診断の項目を「改善が必要」（開いて表示）と「問題なし」「評価できなかった・対象外」（閉じて表示）に分けて並べる。
+ * 診断の項目を「改善が必要」（開いて表示）と「軽微な課題」「問題なし」「評価できなかった・対象外」（閉じて表示）に分けて並べる。
  * 項目の見せ方（一覧・表）は呼び出し側の renderList に任せる。開閉は標準の details/summary で、スクリプトに依存しない。
  */
 export function FindingSections<T extends GroupableFinding>({
@@ -15,7 +15,7 @@ export function FindingSections<T extends GroupableFinding>({
   renderList: (items: T[]) => ReactNode;
 }) {
   if (findings.length === 0) return <p className="text-muted-foreground text-sm">診断項目の結果はまだありません。</p>;
-  const { needsWork, ok, other } = groupFindings(findings);
+  const { needsWork, minor, ok, other } = groupFindings(findings);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 font-semibold text-sm">
@@ -27,6 +27,15 @@ export function FindingSections<T extends GroupableFinding>({
         renderList(needsWork)
       ) : (
         <p className="text-muted-foreground text-sm">改善が必要と判定された項目はありません。</p>
+      )}
+      {minor.length > 0 && (
+        <Collapsible
+          icon={<CircleMinus className="size-4 text-warning-foreground" aria-hidden />}
+          title="軽微な課題の項目（レベル2）"
+          count={minor.length}
+        >
+          {renderList(minor)}
+        </Collapsible>
       )}
       {ok.length > 0 && (
         <Collapsible
