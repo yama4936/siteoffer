@@ -6,6 +6,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
 import { authorizeUser, requireUser } from "../permissions/policy.ts";
+import { cancelOfferChangesOnAssignmentEnd } from "../sales-offer/lifecycle.ts";
 import {
   type Assignment,
   type AssignmentStatus,
@@ -44,6 +45,7 @@ export async function releaseAssignment(
       .set({ status: "released", releasedAt: now, releaseReason: input.reason })
       .where(eq(assignments.id, before.id))
       .returning();
+    await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, before.id, `担当解除：${input.reason}`);
     await recordEvent(tx, clock, {
       actor,
       action: actor.kind === "ops" ? "assignment.release_by_ops" : "assignment.release_by_sales",
@@ -111,6 +113,7 @@ export async function reassignAssignment(
         .set({ status: "released", releasedAt: now, releaseReason: `reassigned: ${input.reason}` })
         .where(eq(assignments.id, before.id))
         .returning();
+      await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, before.id, `担当変更：${input.reason}`);
       const hours = await getSetting(tx, "assignment.unstartedTimeoutHours");
       const [created] = await tx
         .insert(assignments)

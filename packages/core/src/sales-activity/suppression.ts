@@ -6,6 +6,7 @@ import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, type Result } from "../common/result.ts";
 import { authorizeUser, requireUser } from "../permissions/policy.ts";
+import { cancelOfferChangesOnAssignmentEnd } from "../sales-offer/lifecycle.ts";
 
 type Company = typeof companies.$inferSelect;
 export type Suppression = Company["suppression"];
@@ -106,6 +107,7 @@ export async function applySuppression(
       .set({ status: assignmentEnd.status, releasedAt: now, releaseReason: assignmentEnd.reason })
       .where(eq(assignments.id, a.id))
       .returning();
+    await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, a.id, "営業抑止により担当が終了しました。");
     await recordEvent(tx, clock, {
       actor,
       action: "assignment.end_by_suppression",

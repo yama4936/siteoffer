@@ -7,6 +7,7 @@ import {
   proposals,
   proposalVersions,
   rewards,
+  salesOfferChanges,
   users,
 } from "@siteoffer/db";
 import { and, eq, inArray } from "drizzle-orm";
@@ -72,7 +73,8 @@ export type ContractError =
   | "document_required"
   | "proposal_version_mismatch"
   | "offer_not_ready"
-  | "offer_mismatch";
+  | "offer_mismatch"
+  | "offer_change_pending";
 
 const REPORTABLE_ASSIGNMENT_STATUSES = [
   "claimed",
@@ -150,6 +152,15 @@ export async function reportContract(
         )
           return err("offer_mismatch", "担当案件の提案版・販売条件と一致しません");
       }
+      const [pendingChange] = await tx
+        .select({ id: salesOfferChanges.id })
+        .from(salesOfferChanges)
+        .where(and(eq(salesOfferChanges.assignmentId, a.id), eq(salesOfferChanges.status, "pending")));
+      if (pendingChange)
+        return err(
+          "offer_change_pending",
+          "販売条件の変更が確認待ちです。変更内容に回答してから成約を報告してください",
+        );
       const now = clock.now();
       const [contract] = await tx
         .insert(contracts)

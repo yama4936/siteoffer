@@ -203,12 +203,14 @@ export function DomainPreferenceForm({
 
 export function ContractReportForm({
   action,
+  blockedReason,
   assignmentId,
   salesOfferId,
   proposalVersionId,
   terms,
 }: {
   action: SalesAction;
+  blockedReason?: string;
   assignmentId: string;
   salesOfferId: string | null;
   proposalVersionId: string | null;
@@ -246,9 +248,21 @@ export function ContractReportForm({
         />
       </Field>
       <Hint>成約報告だけでは報酬は確定しません。運営が契約資料を確認し、契約完了にした時点で報酬が発生します。</Hint>
-      <Button type="submit" className="w-fit" disabled={pending || !salesOfferId || terms.length !== 1}>
+      <Button
+        type="submit"
+        className="w-fit"
+        disabled={pending || !!blockedReason || !salesOfferId || terms.length !== 1}
+      >
         成約を報告する
       </Button>
+      {blockedReason && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {blockedReason}{" "}
+          <a href="#offer-changes" className="text-primary underline">
+            変更内容を確認する
+          </a>
+        </p>
+      )}
       <ActionMessage state={state} />
     </form>
   );

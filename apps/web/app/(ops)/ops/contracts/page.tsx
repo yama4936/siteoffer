@@ -185,7 +185,12 @@ export default async function ContractsPage({
                     <Link href={`/ops/companies/${c.companyId}`}>{companyName}</Link>
                   </h3>
                 </CardTitle>
-                <CardDescription>営業：{salesName}</CardDescription>
+                <CardDescription>
+                  営業：{salesName} ·{" "}
+                  <Link href={`/ops/assignments/${c.assignmentId}/conditions`} className="text-primary underline">
+                    条件変更・履歴
+                  </Link>
+                </CardDescription>
                 <CardAction className="text-right">
                   <StatusBadge map={CONTRACT_STATUS_LABEL} status={c.status} />
                   {c.closeReason ? <div className="mt-1 text-muted-foreground text-xs">{c.closeReason}</div> : null}

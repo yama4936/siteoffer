@@ -1,4 +1,4 @@
-import { index, integer, pgTable, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgTable, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { createdAt, id } from "./common.ts";
 import { companies } from "./companies.ts";
 import { productTerms } from "./product-terms.ts";
@@ -14,6 +14,8 @@ export const salesOffers = pgTable(
       .notNull()
       .references(() => companies.id),
     version: integer("version").notNull(),
+    /** 個別商談の変更条件を会社全体の営業条件として公開しない。 */
+    isPublic: boolean("is_public").notNull().default(true),
     productTermsId: uuid("product_terms_id")
       .notNull()
       .references(() => productTerms.id),

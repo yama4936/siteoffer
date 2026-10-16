@@ -124,6 +124,9 @@ export default async function AssignmentsPage({
                   <TableCell className="min-w-96">
                     {active ? (
                       <div className="grid gap-2">
+                        <Link href={`/ops/assignments/${a.id}/conditions`} className="text-primary text-sm underline">
+                          商談の条件変更・履歴
+                        </Link>
                         <form action={extendAssignmentAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="assignmentId" value={a.id} />

@@ -28,7 +28,7 @@ export async function getReviewInbox(
    coalesce(v.status='approved' and c.suppression='none' and (c.pipeline_status<>'sellable' or (o.id is null and not exists(select 1 from contracts ct where ct.company_id=c.id and ct.status='completed'))),false) as ready
    from companies c left join proposals p on p.company_id=c.id
    left join lateral(select id,version,status,created_at from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
-   left join lateral(select id from sales_offers where company_id=c.id order by version desc limit 1) o on true
+   left join lateral(select id from sales_offers where company_id=c.id and is_public=true order by version desc limit 1) o on true
    where true ${input.companyId ? sql`and c.id=${input.companyId}` : sql``} ${query ? sql`and position(lower(${query}) in lower(c.name||' '||coalesce(c.prefecture,'')||' '||coalesce(c.city,'')||' '||coalesce(c.industry,'')))>0` : sql``}`;
   const count = await db.execute(
     sql`select count(*)::int as "all",count(*) filter(where pending)::int as pending,count(*) filter(where ready)::int as ready from (${base}) inbox`,

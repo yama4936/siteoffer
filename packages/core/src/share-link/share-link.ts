@@ -19,6 +19,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
 import { authorizeUser } from "../permissions/policy.ts";
+import { getSalesOffer } from "../sales-offer/offer.ts";
 import { generateShareToken, hashShareToken, isShareTokenFormat, type ShareTokenRecovery } from "./token.ts";
 
 export type SharePurpose = (typeof shareLinks.$inferSelect)["purpose"];
@@ -174,6 +175,23 @@ export async function issueShareLink(
     if (!auth.ok) return err("forbidden", auth.message);
     const user = auth.value;
 
+    if (actor?.kind === "sales" && input.purpose === "proposal") {
+      const [assignment] = await tx
+        .select({ salesOfferId: assignments.salesOfferId })
+        .from(assignments)
+        .where(
+          and(
+            eq(assignments.companyId, target.companyId),
+            eq(assignments.userId, actor.userId),
+            inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES]),
+          ),
+        );
+      if (assignment?.salesOfferId) {
+        const offer = await getSalesOffer(tx, target.companyId, assignment.salesOfferId);
+        if (!offer || offer.proposal.id !== input.targetId)
+          return err("target_not_approved", "現在の担当案件に引き継がれた提案版を共有してください");
+      }
+    }
     if (!target.approved) return err("target_not_approved", "運営の承認が済んだ提案版だけを共有できます");
     if (!target.artifactDir) return err("target_no_artifact", "共有できる成果物がまだありません");
 

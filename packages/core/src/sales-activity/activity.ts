@@ -15,6 +15,7 @@ import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { authorizeUser, requireUser } from "../permissions/policy.ts";
+import { cancelOfferChangesOnAssignmentEnd } from "../sales-offer/lifecycle.ts";
 import { applySuppression, type DeclineKind } from "./suppression.ts";
 
 export type SalesActivity = typeof salesActivities.$inferSelect;
@@ -226,6 +227,8 @@ export async function recordActivity(
     else if (nextActionMode === "clear") patch.nextActionAt = null;
 
     const [after] = await tx.update(assignments).set(patch).where(eq(assignments.id, before.id)).returning();
+    if (status === "lost")
+      await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, before.id, "失注により担当が終了しました。");
     if (
       before.status !== after!.status ||
       before.expiresAt?.getTime() !== after!.expiresAt?.getTime() ||

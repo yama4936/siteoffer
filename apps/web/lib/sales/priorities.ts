@@ -1,6 +1,7 @@
 import type { MyAssignmentItem } from "./queries";
 export const ASSIGNMENT_VIEWS = {
   all: "対応中すべて",
+  conditions: "販売条件の確認",
   overdue: "予定・期限の超過",
   today: "今日の対応",
   unscheduled: "次回予定なし",
@@ -21,6 +22,13 @@ export function assignmentNextStep(a: MyAssignmentItem, now: Date) {
   });
   if (["completed", "released", "lost"].includes(a.status))
     return result("closed", 6, "対応履歴を見る", "この担当での対応は終了しています。");
+  if (a.offerChangePending)
+    return result(
+      "conditions",
+      -1,
+      "販売条件の変更を確認",
+      "運営から条件変更が届いています。内容に回答してから成約報告へ進めます。",
+    );
   if (a.status === "awaiting_ops")
     return result("waiting", 5, "相談・引き継ぎを確認", "運営の判断を待っています。連絡内容を確認できます。");
   if (a.contractStatus === "completed")

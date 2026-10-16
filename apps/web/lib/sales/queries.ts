@@ -32,6 +32,7 @@ import {
   productTerms,
   rewardAdjustments,
   rewards,
+  salesOfferChanges,
   siteAudits,
   websites,
 } from "@siteoffer/db";
@@ -509,6 +510,7 @@ export interface MyAssignmentItem {
   nextActionAt: Date | null;
   lastActivityAt: Date | null;
   contractStatus: string | null;
+  offerChangePending?: boolean;
 }
 
 /** 自分の担当の一覧。既定は有効な担当だけ。includeEnded で終了した担当も含める */
@@ -546,6 +548,19 @@ export async function listMyAssignments(
     )
     .orderBy(asc(contracts.reportedAt));
   const contractMap = new Map(contractRows.map((c) => [c.assignmentId, c.status]));
+  const pending = await db
+    .select({ assignmentId: salesOfferChanges.assignmentId })
+    .from(salesOfferChanges)
+    .where(
+      and(
+        inArray(
+          salesOfferChanges.assignmentId,
+          rows.map((a) => a.id),
+        ),
+        eq(salesOfferChanges.status, "pending"),
+      ),
+    );
+  const pendingIds = new Set(pending.map((p) => p.assignmentId));
   return ok(
     rows.map((a) => {
       const c = companyMap.get(a.companyId);
@@ -561,6 +576,7 @@ export async function listMyAssignments(
         nextActionAt: a.nextActionAt,
         lastActivityAt: a.lastActivityAt,
         contractStatus: contractMap.get(a.id) ?? null,
+        offerChangePending: isActiveStatus(a.status) && pendingIds.has(a.id),
       };
     }),
   );

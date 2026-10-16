@@ -3,6 +3,7 @@ import { EXISTING_DOMAIN_REVIEW_NOTICE, NEW_DOMAIN_AVAILABILITY_NOTICE } from "@
 import { ChevronRight, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { OfferChanges } from "@/components/offer-changes";
 import { ActivityForm } from "@/components/sales/activity-form";
 import { ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
 import { BackLink, SectionCard } from "@/components/sales/section-card";
@@ -14,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { DescriptionList, EmptyState, Muted, PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
+import { getOfferChangeView } from "@/lib/offer-changes";
 import { emptyActivity } from "@/lib/sales/activity-draft-types";
 import { loadActivityDraft } from "@/lib/sales/activity-drafts";
 import {
@@ -47,6 +49,7 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
   if (!r.ok) notFound();
   const d = r.value;
   const a = d.assignment;
+  const offerChanges = await getOfferChangeView(getDb(), user.actor, assignmentId);
   const pref = d.domainPreference;
   const firstSite = d.sites[0];
   const draft = a.active ? await loadActivityDraft(getDb(), user.actor, a.id) : null;
@@ -84,6 +87,11 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
           </Link>
         )}
       </nav>
+      {offerChanges && offerChanges.history.length > 0 && (
+        <SectionCard id="offer-changes" title="販売条件の変更・確認">
+          <OfferChanges data={offerChanges} viewerRole="sales" />
+        </SectionCard>
+      )}
       <SectionCard title="担当の概要">
         <DescriptionList>
           <dt>担当の状態</dt>
@@ -272,6 +280,11 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
           <TermsTable terms={d.terms} />
           {d.showReport ? (
             <ContractReportForm
+              blockedReason={
+                offerChanges?.history.some((h) => h.status === "pending")
+                  ? "販売条件の変更に回答してから成約を報告してください。"
+                  : undefined
+              }
               action={reportDealAction}
               assignmentId={a.id}
               salesOfferId={d.salesOfferId}

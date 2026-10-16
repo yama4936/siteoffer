@@ -13,10 +13,21 @@ export async function getSalesOffer(db: DbOrTx, companyId: string, offerId?: str
       and(
         eq(salesOffers.companyId, companyId),
         eq(proposals.companyId, companyId),
-        offerId ? eq(salesOffers.id, offerId) : undefined,
+        offerId ? eq(salesOffers.id, offerId) : eq(salesOffers.isPublic, true),
       ),
     )
     .orderBy(desc(salesOffers.version))
     .limit(1);
   return row ?? null;
+}
+
+/** Call only while holding the company row lock, shared by publication and individual negotiations. */
+export async function nextSalesOfferVersion(db: DbOrTx, companyId: string) {
+  const [last] = await db
+    .select({ version: salesOffers.version })
+    .from(salesOffers)
+    .where(eq(salesOffers.companyId, companyId))
+    .orderBy(desc(salesOffers.version))
+    .limit(1);
+  return (last?.version ?? 0) + 1;
 }

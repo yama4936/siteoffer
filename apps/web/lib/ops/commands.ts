@@ -19,6 +19,7 @@ import {
   extendAssignment,
   liftSuppression,
   markRewardPaid,
+  nextSalesOfferVersion,
   ok,
   type PaymentTargetStatus,
   parseRewardRule,
@@ -639,7 +640,7 @@ export async function makeSellable(
     const [previousOffer] = await tx
       .select()
       .from(salesOffers)
-      .where(eq(salesOffers.companyId, company.id))
+      .where(and(eq(salesOffers.companyId, company.id), eq(salesOffers.isPublic, true)))
       .orderBy(desc(salesOffers.version))
       .limit(1);
     const issues = sellableIssues({ company, latestVersion: latest, terms }).filter(
@@ -665,7 +666,7 @@ export async function makeSellable(
       .insert(salesOffers)
       .values({
         companyId: company.id,
-        version: (previousOffer?.version ?? 0) + 1,
+        version: await nextSalesOfferVersion(tx, company.id),
         productTermsId: terms!.id,
         proposalVersionId: latest!.id,
         createdBy: ops.value.userId,
