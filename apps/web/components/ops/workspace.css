@@ -1306,6 +1306,40 @@
   margin-left: 12px;
   text-decoration: underline;
 }
+.review-draft-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--ops-line);
+  border-radius: 8px;
+  background: #f6f9ff;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.review-draft-panel small {
+  color: #65758e;
+  font-size: 11px;
+}
+.review-draft-panel button {
+  border: 1px solid #b9c9ec;
+  border-radius: 6px;
+  padding: 8px;
+  margin: 4px 0;
+  color: #2449a3;
+  text-align: left;
+}
+.review-draft-panel button:disabled {
+  opacity: 0.5;
+}
+.review-draft-conflict {
+  background: #fff5df;
+  padding: 8px;
+  border-radius: 6px;
+}
+.review-draft-panel details p {
+  white-space: pre-wrap;
+}
 @media (min-width: 1251px) {
   .review-queue {
     display: flex;

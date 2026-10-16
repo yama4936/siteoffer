@@ -2,10 +2,19 @@
 
 import { ArrowRight, Check, ChevronRight, ExternalLink, FileText, Monitor, Search, Smartphone } from "lucide-react";
 import Link from "next/link";
-import { useState, useTransition } from "react";
-import { reviewProposalAction } from "@/app/(ops)/ops/actions";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { commitReviewDraftAction, loadReviewDraftAction, saveReviewDraftAction } from "@/app/(ops)/ops/review/actions";
 import { SitePreview } from "@/components/shell/site-preview";
+import { usePersonalDraft } from "@/components/use-personal-draft";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
+import {
+  EMPTY_REVIEW,
+  REVIEW_CHECKS,
+  type ReviewCommitInput,
+  type ReviewDraftSnapshot,
+  type ReviewValues,
+} from "@/lib/ops/review-draft-types";
 
 type Item = {
   id: string;
@@ -54,13 +63,6 @@ type Selected = {
     note: string | null;
   } | null;
 };
-const checks = [
-  ["会社情報の確認", "会社名・住所・電話番号など"],
-  ["画像の利用許諾", "使用する写真・イラストの権利"],
-  ["PC・スマホの表示", "各デバイスでの見え方"],
-  ["リンク・問い合わせ導線", "メニュー・ボタン・フォームの動作"],
-  ["既存機能の引き継ぎ", "ブログ・お知らせなどの更新機能"],
-] as const;
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -72,10 +74,12 @@ export function ReviewWorkspace({
   items,
   selected: c,
   queue,
+  initialDraft,
 }: {
   items: Item[];
   selected: Selected | null;
   queue: ReviewQueue;
+  initialDraft: ReviewDraftSnapshot;
 }) {
   function reviewHref(companyId: string, versionId?: string | null) {
     const q = new URLSearchParams(queue.context);
@@ -85,43 +89,119 @@ export function ReviewWorkspace({
   }
   const [tab, setTab] = useState("compare");
   const [device, setDevice] = useState("desktop");
-  const [checked, setChecked] = useState<string[]>(() => {
-    const confirmed = c?.version?.note?.startsWith("確認済み：") ? c.version.note.split("\n")[0] : "";
-    return checks.map(([title]) => title).filter((title) => confirmed?.includes(title));
-  });
-  const [note, setNote] = useState("");
+  const router = useRouter();
+  const version = c?.version;
+  const confirmed = version?.note?.startsWith("確認済み：") ? version.note.split("\n")[0] : "";
+  const defaults = {
+    ...EMPTY_REVIEW,
+    ...Object.fromEntries(REVIEW_CHECKS.map(([key, title]) => [key, !!confirmed?.includes(title)])),
+  } as ReviewValues;
+  const draft = usePersonalDraft(initialDraft, defaults, (revision, values) =>
+    saveReviewDraftAction(version!.id, revision, values),
+  );
+  // History navigation may reuse an older server payload. Reconcile before accepting edits.
+  const restoreDraft = useRef(draft.applyStored);
+  const [draftLoading, setDraftLoading] = useState(!!version);
+  const [draftLoadError, setDraftLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const versionId = version?.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: An explicit retry starts another authenticated read for the same proposal.
+  useEffect(() => {
+    if (!versionId) return;
+    let active = true;
+    setDraftLoading(true);
+    setDraftLoadError("");
+    void loadReviewDraftAction(versionId)
+      .then((result) => {
+        if (!active) return;
+        if (result.status === "ok") restoreDraft.current(result.snapshot);
+        else setDraftLoadError("最新の下書きを確認できませんでした。接続を確認して再試行してください。");
+      })
+      .catch(() => {
+        if (active) setDraftLoadError("最新の下書きを確認できませんでした。接続を確認して再試行してください。");
+      })
+      .finally(() => {
+        if (active) setDraftLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [versionId, loadAttempt]);
+  const { note } = draft.values;
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState("");
-  const version = c?.version;
+  const [message, setMessage] = useState("");
+  const [completed, setCompleted] = useState(false);
+  const [resultUnknown, setResultUnknown] = useState(false);
+  const sending = useRef(false);
+  const retryInput = useRef<ReviewCommitInput | null>(null);
+  const operationKey = useRef<string | null>(null);
   const content = record(version?.content);
   const proposal = record(content.proposalText);
   const measures = Array.isArray(proposal.measures) ? proposal.measures.map(record) : [];
   const safeWebsite = c?.website && /^https?:\/\//i.test(c.website) ? c.website : null;
   const preview = version?.hasDemo ? `/ops/review/preview/${version.id}/index.html` : null;
   const visible = items;
-  const canReview = version?.status === "in_review" && version.isLatest;
-  function submit(decision: "approved" | "rejected") {
-    if (!c || !version || !canReview) return;
-    if (decision === "rejected" && !note.trim()) {
+  const canReview = version?.status === "in_review" && version.isLatest && !completed;
+  const locked = !canReview || pending || !draft.ready || draftLoading || !!draftLoadError || resultUnknown;
+  function change(patch: Partial<ReviewValues>) {
+    draft.change({ ...draft.latest.current, ...patch });
+    setError("");
+  }
+  function submit(decision: "approved" | "rejected", retry = false) {
+    if (
+      !c ||
+      !version ||
+      sending.current ||
+      pending ||
+      !draft.ready ||
+      draftLoading ||
+      draftLoadError ||
+      draft.conflict ||
+      (!retry && (!canReview || resultUnknown))
+    )
+      return;
+    if (!retry && decision === "rejected" && !note.trim()) {
       setError("修正してほしい内容を確認メモに入力してください。");
       return;
     }
-    if (decision === "approved" && checked.length !== checks.length) {
+    if (!retry && decision === "approved" && REVIEW_CHECKS.some(([key]) => !draft.values[key])) {
       setError("5つの確認項目を確認してください。");
       return;
     }
-    const fd = new FormData();
-    fd.set("proposalVersionId", version.id);
-    fd.set("decision", decision);
-    fd.set("returnTo", reviewHref(c.id, version.id));
-    fd.set("note", decision === "approved" ? `確認済み：${checked.join("、")}\n${note}` : note);
+    sending.current = true;
+    draft.cancelPendingSave();
     setError("");
     startTransition(async () => {
       try {
-        await reviewProposalAction(fd);
-      } catch (e) {
-        if (e instanceof Error && e.message.includes("NEXT_REDIRECT")) throw e;
-        setError("処理に失敗しました。状態を確認して再度お試しください。");
+        if (!retry && !(await draft.flush())) return;
+        operationKey.current ??= crypto.randomUUID();
+        const input =
+          retry && retryInput.current
+            ? retryInput.current
+            : { revision: draft.revision.current, decision, requestKey: operationKey.current };
+        retryInput.current = input;
+        const result = await commitReviewDraftAction(version.id, input);
+        setResultUnknown(false);
+        if (result.status === "conflict") draft.showConflict(result.snapshot);
+        else if (result.status === "error") setError(result.message);
+        else {
+          draft.applyStored(result.snapshot, draft.latest.current);
+          setCompleted(true);
+          setMessage(
+            input.decision === "approved"
+              ? "提案版を承認しました。販売条件を選ぶと営業可能にできます。"
+              : "提案版を差し戻しました。修正メモを履歴に保存しました。",
+          );
+          router.refresh();
+        }
+      } catch {
+        setResultUnknown(true);
+        setError(
+          "レビュー結果を確認できませんでした。入力を残しています。同じ操作で結果を確認しても二重には記録されません。",
+        );
+      } finally {
+        sending.current = false;
       }
     });
   }
@@ -415,15 +495,13 @@ export function ReviewWorkspace({
             <h2>営業前の確認</h2>
             <p>内容を確認して営業へ引き継ぎます</p>
             <div className="review-checks">
-              {checks.map(([title, description]) => (
-                <label key={title} className={checked.includes(title) ? "checked" : ""}>
+              {REVIEW_CHECKS.map(([key, title, description]) => (
+                <label key={title} className={draft.values[key] ? "checked" : ""}>
                   <input
                     type="checkbox"
-                    checked={checked.includes(title)}
-                    disabled={!canReview || pending}
-                    onChange={(e) =>
-                      setChecked(e.target.checked ? [...checked, title] : checked.filter((s) => s !== title))
-                    }
+                    checked={draft.values[key]}
+                    disabled={locked}
+                    onChange={(e) => change({ [key]: e.target.checked })}
                   />
                   <span className="check-icon">
                     <Check size={16} />
@@ -435,16 +513,110 @@ export function ReviewWorkspace({
                 </label>
               ))}
             </div>
-            <label className="review-note" htmlFor="review-note">
-              確認メモ
+            <div className="review-note">
+              <label htmlFor="review-note">確認メモ</label>
               <textarea
                 id="review-note"
                 value={note}
-                onChange={(e) => setNote(e.target.value)}
+                maxLength={4000}
+                onChange={(e) => change({ note: e.target.value })}
                 placeholder="営業に伝えること、修正してほしい内容を入力"
-                disabled={!canReview || pending}
+                disabled={locked}
               />
-            </label>
+            </div>
+            {version && (
+              <section className="review-draft-panel" aria-label="レビューの下書き">
+                <p role="status">
+                  {draftLoading
+                    ? "最新の下書きを確認中…"
+                    : message || (!canReview && !draft.hasDraft ? "この提案版のレビューは閲覧のみです" : draft.status)}
+                </p>
+                {draftLoadError && (
+                  <div role="alert">
+                    <p>{draftLoadError}</p>
+                    <button type="button" onClick={() => setLoadAttempt((n) => n + 1)}>
+                      下書きの読み込みを再試行
+                    </button>
+                  </div>
+                )}
+                <small>
+                  自分専用・この提案版だけの下書きです。承認や修正依頼をするまで、営業・他の担当者には共有されません。
+                </small>
+                <small>{note.length} / 4000文字</small>
+                {draft.hasDraft && !draft.conflict && !resultUnknown && (
+                  <button
+                    type="button"
+                    disabled={pending || draftLoading || !!draftLoadError}
+                    onClick={() => {
+                      if (!window.confirm("この提案版の自分の下書きを破棄しますか？確定済みのレビューは変わりません。"))
+                        return;
+                      startTransition(async () => {
+                        await draft.discard(defaults);
+                      });
+                    }}
+                  >
+                    下書きを破棄
+                  </button>
+                )}
+                {draft.conflict && (
+                  <div role="alert" className="review-draft-conflict">
+                    <p>別の画面で下書きが更新されています。この画面の入力を残して、保存を止めました。</p>
+                    <details>
+                      <summary>保存済みの内容を見る</summary>
+                      <p>{draft.conflict.values?.note || "（確認メモなし）"}</p>
+                      <p>
+                        確認済み：
+                        {REVIEW_CHECKS.filter(([key]) => draft.conflict?.values?.[key])
+                          .map(([, title]) => title)
+                          .join("、") || "なし"}
+                      </p>
+                      {!draft.conflict.values && <p>下書きは破棄済み、またはレビュー確定済みです。</p>}
+                    </details>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => draft.applyStored(draft.conflict!, defaults)}
+                    >
+                      保存済みの内容を使う
+                    </button>
+                    <button
+                      type="button"
+                      disabled={locked}
+                      onClick={() =>
+                        startTransition(async () => {
+                          await draft.keepMine();
+                        })
+                      }
+                    >
+                      この画面の入力で保存する
+                    </button>
+                  </div>
+                )}
+                {draft.error && (
+                  <div role="alert">
+                    <p>{draft.error}</p>
+                    {!draft.conflict && draft.dirty() && (
+                      <button
+                        type="button"
+                        disabled={locked}
+                        onClick={() =>
+                          startTransition(async () => {
+                            await draft.flush();
+                          })
+                        }
+                      >
+                        下書きの保存を再試行
+                      </button>
+                    )}
+                  </div>
+                )}
+                {resultUnknown && (
+                  <button type="button" disabled={pending} onClick={() => submit(retryInput.current!.decision, true)}>
+                    結果を確認して再試行
+                  </button>
+                )}
+              </section>
+            )}
             {error && (
               <p className="review-error" role="alert">
                 {error}
@@ -477,7 +649,7 @@ export function ReviewWorkspace({
               <button
                 type="button"
                 className="review-outline"
-                disabled={!canReview || pending}
+                disabled={locked || !!draft.conflict}
                 onClick={() => submit("rejected")}
               >
                 修正を依頼
@@ -485,7 +657,7 @@ export function ReviewWorkspace({
               <button
                 type="button"
                 className="review-primary"
-                disabled={!canReview || pending || checked.length !== checks.length}
+                disabled={locked || !!draft.conflict || REVIEW_CHECKS.some(([key]) => !draft.values[key])}
                 onClick={() => submit("approved")}
               >
                 {pending ? "保存中…" : "提案を承認"}
