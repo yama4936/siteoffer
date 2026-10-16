@@ -1,6 +1,7 @@
 import { runSiteAudit } from "@siteoffer/audit";
 import { companies, websites } from "@siteoffer/db";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { closeStepAudits } from "../audit-cleanup.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
 import { dispatchProposalHandoffs, findProposalHandoff, recordProposalHandoff } from "../handoff.ts";
 import { type AuditPayload, QUEUES, stepKeys } from "../queues.ts";
@@ -30,6 +31,7 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
   key: stepKeys.audit,
   async run(deps, payload, ctx) {
     const { db, clock } = deps;
+    if (ctx.attempt > 1) await ctx.withOwnership((tx) => closeStepAudits(tx, clock, stepKeys.audit(payload)));
     const [company] = await db.select().from(companies).where(eq(companies.id, payload.companyId));
     if (!company) throw new PreconditionError(`企業がない：${payload.companyId}`);
     const base = { companyId: company.id, auditId: null, auditStatus: null, decision: null, proposalQueued: false };
@@ -70,6 +72,7 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
       websiteId: site.id,
       actor: PIPELINE_ACTOR,
       signal: ctx.signal,
+      workerStep: { key, attempt: ctx.attempt },
       withOwnership: ctx.withOwnership,
     });
     await ctx.assertCurrent();
@@ -122,6 +125,7 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     };
   },
   async onGiveUp(deps, payload, reason) {
+    await deps.db.transaction((tx) => closeStepAudits(tx, deps.clock, stepKeys.audit(payload)));
     // 引き継ぎ確定後の終了通知の失敗で、診断済みの企業を失敗へ戻さない。
     if (await findProposalHandoff(deps.db, stepKeys.audit(payload))) return;
     await moveCompanyStatus(deps.db, deps.clock, {

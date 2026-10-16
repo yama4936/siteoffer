@@ -1,6 +1,7 @@
 import { type Actor, type Clock, recordEvent } from "@siteoffer/core";
 import { auditEvents, type Db, type DbOrTx } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
+import { lockQueueClaim, parseQueueClaim, type QueueClaim } from "./queue-claim.ts";
 
 /**
  * ワーカーの処理単位（ステップ）の実行台帳。
@@ -35,6 +36,7 @@ export interface StepState {
 }
 
 export type ClaimResult =
+  | { kind: "superseded" }
   | { kind: "claimed"; attempt: number; recoveredStale: boolean }
   | {
       kind: "duplicate";
@@ -50,6 +52,24 @@ interface StepEventAfter {
   reason?: string;
   final?: boolean;
   timeoutMs?: number;
+  queueClaim?: QueueClaim;
+  payload?: unknown;
+}
+
+export async function readStepExecution(db: DbOrTx, key: string, attempt: number) {
+  const [row] = await db
+    .select({ after: auditEvents.after })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.targetType, STEP_TARGET),
+        eq(auditEvents.targetId, key),
+        eq(auditEvents.action, STEP_ACTIONS.started),
+        sql`${auditEvents.after}->>'attempt' = ${String(attempt)}`,
+      ),
+    )
+    .limit(1);
+  return (row?.after ?? {}) as StepEventAfter;
 }
 
 export async function readStepState(db: DbOrTx, key: string): Promise<StepState> {
@@ -74,13 +94,16 @@ export async function runOwnedStep<T>(
   attempt: number,
   signal: AbortSignal,
   write: (tx: DbOrTx) => Promise<T>,
+  binding?: { queue: string; claim: QueueClaim },
 ): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${key}`}))`);
     const current = await readStepState(tx, key);
     if (signal.aborted || !current.running || current.attempts !== attempt) throw new StepOwnershipLost();
+    if (binding && !(await lockQueueClaim(tx, binding.queue, binding.claim))?.owned) throw new StepOwnershipLost();
     const result = await write(tx);
     if (signal.aborted) throw new StepOwnershipLost();
+    if (binding && !(await lockQueueClaim(tx, binding.queue, binding.claim))?.owned) throw new StepOwnershipLost();
     return result;
   });
 }
@@ -134,10 +157,20 @@ export function foldStepEvents(rows: { action: string; after: unknown; createdAt
 export async function claimStep(
   db: Db,
   clock: Clock,
-  input: { key: string; queue: string; maxAttempts: number; staleAfterMs: number; actor: Actor },
+  input: {
+    key: string;
+    queue: string;
+    maxAttempts: number;
+    staleAfterMs: number;
+    actor: Actor;
+    queueClaim?: QueueClaim;
+    payload?: unknown;
+  },
 ): Promise<ClaimResult> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${input.key}`}))`);
+    if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+      return { kind: "superseded" };
     const rows = await tx
       .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
       .from(auditEvents)
@@ -149,7 +182,16 @@ export async function claimStep(
     let recoveredStale = false;
     if (state.running) {
       const startedAt = state.lastStartedAt?.getTime() ?? 0;
-      if (clock.now().getTime() - startedAt < input.staleAfterMs) {
+      const previous = rows.find(
+        (r) => r.action === STEP_ACTIONS.started && (r.after as StepEventAfter)?.attempt === state.attempts,
+      );
+      const oldClaim = parseQueueClaim((previous?.after as StepEventAfter)?.queueClaim);
+      const takeover =
+        oldClaim &&
+        input.queueClaim &&
+        oldClaim.id === input.queueClaim.id &&
+        oldClaim.retryCount < input.queueClaim.retryCount;
+      if (!takeover && clock.now().getTime() - startedAt < input.staleAfterMs) {
         return { kind: "duplicate", state: "running", attempts: state.attempts };
       }
       // 実行中のまま残った試行（プロセスの停止など）を失敗として閉じる
@@ -162,7 +204,9 @@ export async function claimStep(
         after: {
           queue: input.queue,
           attempt: state.attempts,
-          reason: "stale: 実行中のまま制限時間を過ぎた（ワーカーの停止などで中断された）",
+          reason: takeover
+            ? "interrupted: キューが停止した試行を回復し、再試行を開始した"
+            : "stale: 実行中のまま制限時間を過ぎた（ワーカーの停止などで中断された）",
           final,
         } satisfies StepEventAfter,
       });
@@ -178,7 +222,11 @@ export async function claimStep(
       action: STEP_ACTIONS.started,
       targetType: STEP_TARGET,
       targetId: input.key,
-      after: { queue: input.queue, attempt } satisfies StepEventAfter,
+      after: {
+        queue: input.queue,
+        attempt,
+        ...(input.queueClaim ? { queueClaim: input.queueClaim, payload: input.payload } : {}),
+      } satisfies StepEventAfter,
     });
     return { kind: "claimed", attempt, recoveredStale };
   });
@@ -192,6 +240,7 @@ export async function finishStep(
     queue: string;
     attempt: number;
     actor: Actor;
+    queueClaim?: QueueClaim;
     outcome: { ok: true; summary?: unknown } | { ok: false; reason: string; final: boolean };
   },
 ): Promise<boolean> {
@@ -203,6 +252,7 @@ export async function finishStep(
       .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, input.key)));
     const state = foldStepEvents(rows);
     if (!state.running || state.attempts !== input.attempt) return false;
+    if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned) return false;
     if (input.outcome.ok) {
       await recordEvent(tx, clock, {
         actor: input.actor,

@@ -2,6 +2,7 @@ import type { Actor } from "@siteoffer/core";
 import type { DbOrTx } from "@siteoffer/db";
 import type { WorkerDeps } from "./deps.ts";
 import { claimStep, finishStep, runOwnedStep, StepOwnershipLost } from "./ledger.ts";
+import type { QueueClaim } from "./queue-claim.ts";
 import type { StepKind } from "./queues.ts";
 
 /** 同じ入力で再試行しても結果が変わらない失敗（入力不正・判定が create でない等）。再試行せずに止める */
@@ -53,6 +54,11 @@ export type StepOutcome<R> =
   /** 失敗。上限到達または再試行不能で止めた */
   | { status: "failed"; key: string; attempt: number; reason: string };
 
+export interface StepExecutionOptions {
+  queueClaim?: QueueClaim;
+  signal?: AbortSignal;
+}
+
 const WORKER_ACTOR: Actor = { kind: "system", job: "worker" };
 
 /**
@@ -63,16 +69,20 @@ export async function executeStep<P, R>(
   deps: WorkerDeps,
   def: StepDefinition<P, R>,
   payload: P,
+  options: StepExecutionOptions = {},
 ): Promise<StepOutcome<R>> {
   const key = def.key(payload);
   const policy = deps.policies[def.kind];
+  if (options.signal?.aborted) return { status: "superseded", key, attempt: 0 };
   const claim = await claimStep(deps.db, deps.clock, {
     key,
     queue: def.queue,
     maxAttempts: policy.maxAttempts,
     staleAfterMs: policy.timeoutMs,
     actor: WORKER_ACTOR,
+    ...(options.queueClaim ? { queueClaim: options.queueClaim, payload } : {}),
   });
+  if (claim.kind === "superseded") return { status: "superseded", key, attempt: 0 };
   if (claim.kind === "duplicate") {
     deps.logger.info("同じキーのステップは実行しない", { queue: def.queue, key, state: claim.state });
     if (claim.closedStale) {
@@ -84,6 +94,15 @@ export async function executeStep<P, R>(
 
   const attempt = claim.attempt;
   const ac = new AbortController();
+  let onAbort!: () => void;
+  const stopped = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      ac.abort();
+      reject(new StepOwnershipLost());
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+  });
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -95,7 +114,14 @@ export async function executeStep<P, R>(
   try {
     const withOwnership: StepContext["withOwnership"] = async (write) => {
       try {
-        return await runOwnedStep(deps.db, key, attempt, ac.signal, write);
+        return await runOwnedStep(
+          deps.db,
+          key,
+          attempt,
+          ac.signal,
+          write,
+          options.queueClaim ? { queue: def.queue, claim: options.queueClaim } : undefined,
+        );
       } catch (error) {
         if (error instanceof StepOwnershipLost) ac.abort();
         throw error;
@@ -107,12 +133,13 @@ export async function executeStep<P, R>(
       withOwnership,
       assertCurrent: () => withOwnership(async () => {}),
     };
-    const result = await Promise.race([def.run(deps, payload, ctx), timeout]);
+    const result = await Promise.race([def.run(deps, payload, ctx), timeout, stopped]);
     const recorded = await finishStep(deps.db, deps.clock, {
       key,
       queue: def.queue,
       attempt,
       actor: WORKER_ACTOR,
+      ...(options.queueClaim ? { queueClaim: options.queueClaim } : {}),
       outcome: { ok: true, summary: def.summarize?.(result) },
     });
     if (!recorded) return { status: "superseded", key, attempt };
@@ -127,6 +154,7 @@ export async function executeStep<P, R>(
       queue: def.queue,
       attempt,
       actor: WORKER_ACTOR,
+      ...(options.queueClaim ? { queueClaim: options.queueClaim } : {}),
       outcome: { ok: false, reason, final },
     });
     if (!recorded) return { status: "superseded", key, attempt };
@@ -139,5 +167,6 @@ export async function executeStep<P, R>(
     return { status: "retry", key, attempt, reason };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
   }
 }

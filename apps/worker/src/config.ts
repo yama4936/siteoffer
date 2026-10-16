@@ -62,6 +62,7 @@ export interface WorkerConfig {
     recoverDiscovery: string;
     recoverGeneration: string;
     dispatchHandoffs: string;
+    recoverPipeline: string;
   };
   discoveryStaleAfterMs: number;
   /** キューごとの同時実行数（このプロセス内） */

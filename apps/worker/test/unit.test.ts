@@ -55,13 +55,21 @@ describe("設定", () => {
 describe("pg-boss への登録（pg-boss の代わりの記録用オブジェクト）", () => {
   function fakeBoss() {
     const queues: Record<string, unknown> = {};
-    const handlers: Record<string, (jobs: { data: unknown }[]) => Promise<unknown>> = {};
+    const handlers: Record<
+      string,
+      (jobs: { data: unknown; id?: string; retryCount?: number; signal?: AbortSignal }[]) => Promise<unknown>
+    > = {};
+    const workOptions: Record<string, unknown> = {};
     const schedules: Record<string, string> = {};
     const boss = {
+      async updateQueue(name: string, options: object) {
+        queues[name] = { ...(queues[name] as object), ...options };
+      },
       async createQueue(name: string, options?: unknown) {
         queues[name] = options;
       },
       async work(name: string, a: unknown, b?: unknown) {
+        workOptions[name] = typeof a === "function" ? {} : a;
         handlers[name] = (typeof a === "function" ? a : b) as (typeof handlers)[string];
         return name;
       },
@@ -72,7 +80,7 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
         return null;
       },
     } as unknown as BossLike;
-    return { boss, queues, handlers, schedules };
+    return { boss, queues, handlers, schedules, workOptions };
   }
 
   it("収集専用モードは診断・制作のキューを購読しない", async () => {
@@ -92,12 +100,19 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
     expect(f.handlers[QUEUES.audit]).toBeUndefined();
     expect(f.handlers[QUEUES.proposal]).toBeUndefined();
     expect(f.handlers[QUEUES.dispatchHandoffs]).toBeUndefined();
+    expect(f.handlers[QUEUES.recoverPipeline]).toBeUndefined();
   });
 
   it("処理のキューは exclusive・再試行上限・制限時間付きで作り、retry の結果は例外にして再試行させる", async () => {
     const f = fakeBoss();
     let next: RunOutcome = { status: "retry", key: "k", attempt: 1, reason: "一時的な失敗" };
-    const runtime: WorkerRuntime = { run: async () => next };
+    const calls: Parameters<WorkerRuntime["run"]>[] = [];
+    const runtime: WorkerRuntime = {
+      run: async (...args) => {
+        calls.push(args);
+        return next;
+      },
+    };
     await registerQueues(
       f.boss,
       runtime,
@@ -110,6 +125,7 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
     );
     expect(f.queues[QUEUES.proposal]).toMatchObject({
       policy: "exclusive",
+      heartbeatSeconds: 120,
       retryLimit: DEFAULT_POLICIES.proposal.maxAttempts - 1,
       expireInSeconds: DEFAULT_POLICIES.proposal.timeoutMs / 1000 + 60,
     });
@@ -118,9 +134,23 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
       [QUEUES.recoverDiscovery]: DEFAULT_SCHEDULES.recoverDiscovery,
       [QUEUES.recoverGeneration]: DEFAULT_SCHEDULES.recoverGeneration,
       [QUEUES.dispatchHandoffs]: DEFAULT_SCHEDULES.dispatchHandoffs,
+      [QUEUES.recoverPipeline]: DEFAULT_SCHEDULES.recoverPipeline,
     });
 
+    expect(f.queues[QUEUES.audit]).toMatchObject({ heartbeatSeconds: 120 });
+    expect(f.queues[QUEUES.discovery]).not.toHaveProperty("heartbeatSeconds");
+    expect(f.workOptions[QUEUES.audit]).toMatchObject({ heartbeatRefreshSeconds: 20 });
+    expect(f.workOptions[QUEUES.proposal]).toMatchObject({ heartbeatRefreshSeconds: 20 });
+    const signal = new AbortController().signal;
     const handler = f.handlers[QUEUES.proposal]!;
+    await expect(handler([{ id: "job-proof", retryCount: 2, data: { companyId: "company" }, signal }])).rejects.toThrow(
+      "一時的な失敗",
+    );
+    expect(calls.at(-1)).toEqual([
+      QUEUES.proposal,
+      { companyId: "company" },
+      { queueClaim: { id: "job-proof", retryCount: 2 }, signal },
+    ]);
     await expect(handler([{ data: {} }])).rejects.toThrow("一時的な失敗");
     next = { status: "failed", key: "k", attempt: 3, reason: "上限" };
     await expect(handler([{ data: {} }])).resolves.toBeUndefined();

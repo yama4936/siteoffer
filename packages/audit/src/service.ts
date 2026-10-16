@@ -23,6 +23,7 @@ export interface RunSiteAuditInput {
   websiteId: string;
   actor: Actor;
   signal?: AbortSignal;
+  workerStep?: { key: string; attempt: number };
   /** ワーカーの現在の試行に属するDB更新を保護する。外部処理はこの中で実行しない。 */
   withOwnership?: <T>(write: (tx: DbOrTx) => Promise<T>) => Promise<T>;
 }
@@ -88,14 +89,24 @@ export async function runSiteAudit(
       action: "site_audit.started",
       targetType: TARGET,
       targetId: auditId,
-      after: { status: "collecting", websiteId: site.id, targetUrl: url.href },
+      after: {
+        status: "collecting",
+        websiteId: site.id,
+        targetUrl: url.href,
+        ...(input.workerStep ? { workerStepKey: input.workerStep.key, workerAttempt: input.workerStep.attempt } : {}),
+      },
     });
   });
 
   const update = async (patch: AuditPatch, action: string) => {
     const transact: typeof owned = patch.status === "failed" ? (write) => db.transaction(write) : owned;
     await transact(async (tx) => {
-      await tx.select({ id: siteAudits.id }).from(siteAudits).where(eq(siteAudits.id, auditId)).for("update");
+      const [current] = await tx
+        .select({ status: siteAudits.status })
+        .from(siteAudits)
+        .where(eq(siteAudits.id, auditId))
+        .for("update");
+      if (patch.status === "failed" && (!current || !["collecting", "scoring"].includes(current.status))) return;
       if (patch.status !== "failed") checkAuditSignal(input.signal);
       await tx
         .update(siteAudits)

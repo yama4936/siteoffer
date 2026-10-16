@@ -1,11 +1,12 @@
 import { releaseExpiredAssignments } from "@siteoffer/core";
 import { recoverExpiredGenerationJobs } from "@siteoffer/generation";
 import type { JobQueue, WorkerDeps } from "./deps.ts";
-import { executeStep, type StepOutcome } from "./execute.ts";
+import { executeStep, type StepExecutionOptions, type StepOutcome } from "./execute.ts";
 import { dispatchProposalHandoffs } from "./handoff.ts";
 import { auditStep } from "./pipeline/audit.ts";
 import { discoveryStep, recoverStaleDiscoveryJobs } from "./pipeline/discovery.ts";
 import { proposalStep } from "./pipeline/proposal.ts";
+import { recoverPipelineSteps } from "./pipeline-recovery.ts";
 import { auditPayloadSchema, discoveryPayloadSchema, proposalPayloadSchema, QUEUES, type QueueName } from "./queues.ts";
 
 export type RunOutcome =
@@ -17,7 +18,7 @@ export type RunOutcome =
  * キュー名と内容を受け取り、対応する処理を実行する。pg-boss からも、テストからも同じ入口で呼ぶ。
  */
 export function createWorkerRuntime(deps: WorkerDeps) {
-  async function run(name: QueueName, data: unknown): Promise<RunOutcome> {
+  async function run(name: QueueName, data: unknown, options?: StepExecutionOptions): Promise<RunOutcome> {
     switch (name) {
       case QUEUES.discovery: {
         const p = discoveryPayloadSchema.safeParse(data);
@@ -27,17 +28,21 @@ export function createWorkerRuntime(deps: WorkerDeps) {
       case QUEUES.audit: {
         const p = auditPayloadSchema.safeParse(data);
         if (!p.success) return { status: "invalid_payload", reason: p.error.message };
-        return executeStep(deps, auditStep, p.data);
+        return executeStep(deps, auditStep, p.data, options);
       }
       case QUEUES.proposal: {
         const p = proposalPayloadSchema.safeParse(data);
         if (!p.success) return { status: "invalid_payload", reason: p.error.message };
-        return executeStep(deps, proposalStep, p.data);
+        return executeStep(deps, proposalStep, p.data, options);
       }
       case QUEUES.expireAssignments: {
         const result = await releaseExpiredAssignments(deps.db, deps.clock);
         if (result.released.length || result.escalated.length) deps.logger.info("担当の期限を処理した", { ...result });
         return { status: "maintenance", result };
+      }
+      case QUEUES.recoverPipeline: {
+        const recovered = await recoverPipelineSteps(deps);
+        return { status: "maintenance", result: { recovered } };
       }
       case QUEUES.dispatchHandoffs: {
         const result = await dispatchProposalHandoffs(deps);
