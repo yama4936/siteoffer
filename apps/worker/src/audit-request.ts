@@ -23,7 +23,7 @@ export function auditRequestPayload(r: { id: string; companyId: string }) {
 export function auditRequestKey(r: { id: string; companyId: string }) {
   return stepKeys.audit(auditRequestPayload(r));
 }
-async function allowed(db: DbOrTx, actor: Actor | null) {
+export async function isAuditOperator(db: DbOrTx, actor: Actor | null) {
   if (actor?.kind !== "ops" || !UUID.test(actor.userId)) return false;
   const [u] = await db
     .select({ id: users.id })
@@ -81,7 +81,7 @@ async function requestIssue(db: DbOrTx, actor: Actor, company: typeof companies.
   return null;
 }
 export async function getCompanyAuditRequest(db: DbOrTx, actor: Actor | null, companyId: string) {
-  if (!(await allowed(db, actor))) return err("forbidden");
+  if (!(await isAuditOperator(db, actor))) return err("forbidden");
   if (!UUID.test(companyId)) return err("invalid_input");
   const [company] = await db.select().from(companies).where(eq(companies.id, companyId));
   if (!company) return err("not_found");
@@ -118,7 +118,7 @@ export async function requestAuditByOps(
   actor: Actor | null,
   input: { companyId: string; requestId: string },
 ) {
-  if (actor?.kind !== "ops" || !(await allowed(db, actor))) return err("forbidden", "運営だけが行える操作です");
+  if (actor?.kind !== "ops" || !(await isAuditOperator(db, actor))) return err("forbidden", "運営だけが行える操作です");
   if (!UUID.test(input.companyId) || !UUID.test(input.requestId))
     return err("invalid_input", "企業と依頼を確認してください");
   return db.transaction(async (tx) => {

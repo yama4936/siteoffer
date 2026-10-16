@@ -7,6 +7,7 @@
 import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
 import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
 import { requestAuditByOps } from "@siteoffer/worker/audit-request";
+import { cancelAuditRequest } from "@siteoffer/worker/audit-request-management";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -550,5 +551,22 @@ export async function requestCompanyAuditAction(input: { companyId: string; requ
     };
   } catch {
     return { ok: false, message: "受付結果を確認できませんでした。同じ操作でもう一度確認してください。" };
+  }
+}
+
+export async function cancelCompanyAuditAction(requestId: string) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await cancelAuditRequest(getDb(), systemClock, actor, requestId);
+    if (!result.ok) return { ok: false, message: result.message ?? "依頼と操作権限を確認してください" };
+    revalidatePath("/ops");
+    revalidatePath("/ops/processing");
+    revalidatePath(`/ops/companies/${result.value.companyId}`);
+    return {
+      ok: true,
+      message: result.value.alreadyCancelled ? "この診断依頼は取消済みです。" : "開始前の診断依頼を取り消しました。",
+    };
+  } catch {
+    return { ok: false, message: "取消結果を確認できませんでした。同じ操作でもう一度確認してください。" };
   }
 }

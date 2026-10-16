@@ -15,7 +15,7 @@ export const auditRequests = pgTable(
       .notNull()
       .references(() => websites.id),
     targetUrl: text("target_url").notNull(),
-    status: text("status", { enum: ["queued", "processing", "completed", "failed", "blocked"] })
+    status: text("status", { enum: ["queued", "processing", "completed", "failed", "blocked", "cancelled"] })
       .notNull()
       .default("queued"),
     attempts: integer("attempts").notNull().default(0),

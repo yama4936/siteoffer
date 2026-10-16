@@ -5,17 +5,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { requestCompanyAuditAction } from "@/app/(ops)/ops/actions";
 import { Button } from "@/components/ui/button";
+import { auditRequestMessages, auditRequestLabels as labels } from "@/lib/ops/audit-request-display";
 import { fmtDate } from "@/lib/ops/format";
 
 type Result = Awaited<ReturnType<typeof getCompanyAuditRequest>>;
 type Data = Extract<Result, { ok: true }>["value"];
-const labels = {
-  queued: "受付済み・開始待ち",
-  processing: "診断中・自動再試行中",
-  completed: "診断完了",
-  failed: "診断停止",
-  blocked: "対象の再確認が必要",
-};
+
 export function AuditRequest({ companyId, data }: { companyId: string; data: Data }) {
   const router = useRouter();
   const [confirm, setConfirm] = useState(false);
@@ -68,7 +63,7 @@ export function AuditRequest({ companyId, data }: { companyId: string; data: Dat
       {data.request && (
         <div className="space-y-1 text-sm">
           <p>前回の受付：{fmtDate(data.request.createdAt)}</p>
-          <p>{data.request.message ?? "依頼は保存済みです。ワーカーが順次処理します。"}</p>
+          <p>{data.request.message ?? auditRequestMessages[data.request.status]}</p>
           {data.request.targetUrl !== data.targetUrl && (
             <p className="break-all text-muted-foreground">受付時の対象：{data.request.targetUrl}</p>
           )}
@@ -98,6 +93,12 @@ export function AuditRequest({ companyId, data }: { companyId: string; data: Dat
       </p>
       <Link className="text-primary text-sm underline" href={`/ops/processing?company=${companyId}#audit-recovery`}>
         処理状況・保存済み結果の再開を確認
+      </Link>
+      <Link
+        className="block text-primary text-sm underline"
+        href={`/ops/processing?company=${companyId}&requestView=all#audit-requests`}
+      >
+        診断依頼の履歴・取消を確認
       </Link>
       {active && (
         <p className="text-muted-foreground text-xs">5秒ごとに状況を更新します。画面を閉じても依頼は残ります。</p>

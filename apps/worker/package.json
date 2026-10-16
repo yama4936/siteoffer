@@ -5,7 +5,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./audit-recovery": "./src/audit-recovery.ts",
-    "./audit-request": "./src/audit-request.ts"
+    "./audit-request": "./src/audit-request.ts",
+    "./audit-request-management": "./src/audit-request-management.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

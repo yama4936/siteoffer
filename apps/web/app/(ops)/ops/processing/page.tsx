@@ -1,9 +1,11 @@
 import { systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
 import { getAuditRecoveryCandidates } from "@siteoffer/worker/audit-recovery";
+import { AUDIT_REQUEST_VIEWS, listAuditRequests } from "@siteoffer/worker/audit-request-management";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AuditRecovery } from "@/components/ops/audit-recovery";
+import { AuditRequests } from "@/components/ops/audit-requests";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { DiscoveryStatus } from "@/components/ops/discovery-status";
 import { PageHeader } from "@/components/ui/page";
@@ -43,6 +45,20 @@ export default async function ProcessingPage({
   const recovery = await getAuditRecoveryCandidates(db, user.actor, company, Number(sp.auditPage));
   if (!recovery.ok) notFound();
   const recoverable = recovery.value;
+  if (
+    (sp.requestView !== undefined && typeof sp.requestView !== "string") ||
+    (sp.requestQuery !== undefined && typeof sp.requestQuery !== "string")
+  )
+    notFound();
+  const requests = await listAuditRequests(db, user.actor, {
+    companyId: company,
+    view: sp.requestView as string | undefined,
+    query: sp.requestQuery as string | undefined,
+    page: Number(sp.requestPage),
+  });
+  if (!requests.ok) notFound();
+  const requested = requests.value;
+
   const discovery = await discoveryAvailability(db, systemClock);
   const groups = [
     {
@@ -117,11 +133,23 @@ export default async function ProcessingPage({
   function pageHref(kind: string, page: number) {
     const q = new URLSearchParams();
     if (company) q.set("company", company);
+    q.set("requestPage", String(kind === "requests" ? page : requested.page));
+    q.set("requestView", requested.view);
+    if (requested.query) q.set("requestQuery", requested.query);
+
     q.set("auditPage", String(kind === "audit" ? page : recoverable.page));
     if (deliveryState === "stopped") q.set("deliveryState", "stopped");
     for (const [key, value] of Object.entries(d.paging)) q.set(`${key}Page`, String(key === kind ? page : value.page));
-    return `/ops/processing?${q}#${kind === "audit" ? "audit-recovery" : `processing-${kind}`}`;
+    return `/ops/processing?${q}#${kind === "audit" ? "audit-recovery" : kind === "requests" ? "audit-requests" : `processing-${kind}`}`;
   }
+  function requestFilterHref(view: string) {
+    const u = new URL(pageHref("requests", 1), "http://local.invalid");
+    u.searchParams.set("requestView", view);
+    return `${u.pathname}${u.search}${u.hash}`;
+  }
+  const requestSearchFields = Array.from(
+    new URL(pageHref("requests", 1), "http://local.invalid").searchParams.entries(),
+  ).filter(([key]) => key !== "requestQuery");
   function deliveryFilterHref(state: "all" | "stopped") {
     const url = new URL(pageHref("deliveries", 1), "http://local.invalid");
     url.searchParams.set("deliveryState", state);
@@ -156,7 +184,7 @@ export default async function ProcessingPage({
       <DiscoveryRefresh />
       {company && (
         <p className="mb-4 text-sm">
-          {d.companyName}の制作を表示中 ·{" "}
+          {d.companyName}の処理を表示中 ·{" "}
           <Link className="text-primary underline" href="/ops/processing">
             全案件を見る
           </Link>
@@ -166,6 +194,18 @@ export default async function ProcessingPage({
         {...recoverable}
         previousHref={pageHref("audit", recoverable.page - 1)}
         nextHref={pageHref("audit", recoverable.page + 1)}
+      />
+      <AuditRequests
+        data={requested}
+        filters={Object.entries(AUDIT_REQUEST_VIEWS).map(([key, label]) => ({
+          key,
+          label,
+          count: requested.counts[key as keyof typeof AUDIT_REQUEST_VIEWS],
+          href: requestFilterHref(key),
+        }))}
+        searchFields={requestSearchFields}
+        previousHref={pageHref("requests", requested.page - 1)}
+        nextHref={pageHref("requests", requested.page + 1)}
       />
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         {(
