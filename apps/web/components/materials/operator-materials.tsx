@@ -1,13 +1,15 @@
 "use client";
 import type { ImageSubmissionView } from "@siteoffer/core";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { refreshImageSubmissionsAction, reviewCustomerImageAction } from "@/app/image-submission-actions";
 import { Button } from "@/components/ui/button";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { fmtDate } from "@/lib/ops/format";
 import { materialStatus, rightsLabels, useMaterialNavigationGuard } from "./shared";
+
+import { MaterialUpdatesStatus, useMaterialUpdates } from "./updates";
 
 type Item = ImageSubmissionView & { companyName: string; submitterName: string };
 type Listing = { total: number; items: Item[] };
@@ -29,16 +31,29 @@ export function OperatorMaterials({
     [message, setMessage] = useState(""),
     [dirty, setDirty] = useState(false),
     [savedCompany, setSavedCompany] = useState<string | null>(null);
-  // Keep the reviewed snapshot stable until an explicit refresh or route change.
+  // Background reads detect changes but preserve the exact version being reviewed.
+  const loadUpdates = useCallback(
+    () => refreshImageSubmissionsAction({ companyId, page, pendingOnly }),
+    [companyId, page, pendingOnly],
+  );
+  const updates = useMaterialUpdates({
+    snapshot: listing,
+    load: loadUpdates,
+    apply: setListing,
+    editing: selected,
+    paused: busy || pending !== null,
+  });
   useMaterialNavigationGuard(dirty || pending !== null);
   async function refresh() {
     if (busy || pending) return;
     if (dirty && !window.confirm("入力中の確認内容を破棄して一覧を更新しますか？")) return;
+    updates.invalidate();
     setBusy(true);
     try {
       const r = await refreshImageSubmissionsAction({ companyId, page, pendingOnly });
       if (r.ok) {
         setListing(r.result);
+        updates.acknowledge();
         setSelected(null);
         setDirty(false);
         setMessage("一覧を更新しました");
@@ -51,6 +66,7 @@ export function OperatorMaterials({
   }
   async function review(input: Parameters<typeof reviewCustomerImageAction>[0]) {
     if (busy) return;
+    updates.invalidate();
     setBusy(true);
     setPending(input);
     setMessage("");
@@ -85,8 +101,10 @@ export function OperatorMaterials({
       }));
       try {
         const fresh = await refreshImageSubmissionsAction({ companyId, page, pendingOnly });
-        if (fresh.ok) setListing(fresh.result);
-        else setMessage((value) => `${value} 一覧の再取得はできませんでした。一覧を更新してください。`);
+        if (fresh.ok) {
+          setListing(fresh.result);
+          updates.acknowledge();
+        } else setMessage((value) => `${value} 一覧の再取得はできませんでした。一覧を更新してください。`);
       } catch {
         setMessage((value) => `${value} 一覧の再取得はできませんでした。一覧を更新してください。`);
       }
@@ -100,6 +118,7 @@ export function OperatorMaterials({
     prefix = `/ops/materials?${companyId ? `company=${companyId}&` : ""}all=${pendingOnly ? 0 : 1}&`;
   return (
     <div className="space-y-5">
+      <MaterialUpdatesStatus updates={updates} editing={selected !== null} pending={busy || pending !== null} />
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
           {listing.total}件 · {page + 1}ページ目
@@ -183,6 +202,7 @@ export function OperatorMaterials({
               className="mt-5"
               onClick={() => {
                 if (dirty && !window.confirm("入力中の確認内容を破棄しますか？")) return;
+                updates.invalidate();
                 setSelected(selected === item.assetId ? null : item.assetId);
                 setDirty(false);
               }}

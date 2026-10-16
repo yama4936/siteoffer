@@ -1,7 +1,7 @@
 "use client";
 import type { CustomerImageDetails, ImageSubmissionView } from "@siteoffer/core";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   refreshCustomerImagesAction,
   reviseCustomerImageAction,
@@ -11,6 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { fmtDate } from "@/lib/ops/format";
 import { MaterialDetailsFields, materialStatus, useMaterialNavigationGuard } from "./shared";
+
+import { MaterialUpdatesStatus, useMaterialUpdates } from "./updates";
 
 type Listing = { total: number; items: ImageSubmissionView[] };
 type Job =
@@ -38,7 +40,15 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
     [preview, setPreview] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   // Keep the editable snapshot stable across Server Action revalidation.
-  // Route keys remount on scope changes; explicit refresh loads the latest version.
+  // Route keys remount on scope changes; background reads preserve an open editor.
+  const loadUpdates = useCallback(() => refreshCustomerImagesAction(companyId, page), [companyId, page]);
+  const updates = useMaterialUpdates({
+    snapshot: listing,
+    load: loadUpdates,
+    apply: setListing,
+    editing,
+    paused: busy || job !== null,
+  });
   useEffect(() => {
     if (!file) {
       setPreview(null);
@@ -51,6 +61,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
   useMaterialNavigationGuard(dirty || file !== null || job !== null);
   function chooseEditor(next: string | null) {
     if ((dirty || file) && !window.confirm("未送信の入力を破棄して切り替えますか？")) return;
+    updates.invalidate();
     formRef.current?.reset();
     setFile(null);
     setDirty(false);
@@ -59,11 +70,13 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
   async function refresh() {
     if (busy || job) return;
     if ((dirty || file) && !window.confirm("未送信の入力を破棄して確認状況を更新しますか？")) return;
+    updates.invalidate();
     setBusy(true);
     try {
       const r = await refreshCustomerImagesAction(companyId, page);
       if (r.ok) {
         setListing(r.result);
+        updates.acknowledge();
         setEditing(null);
         setDirty(false);
         setFile(null);
@@ -77,6 +90,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
   }
   async function run(work: Job) {
     if (busy) return;
+    updates.invalidate();
     setBusy(true);
     setJob(work);
     setMessage("");
@@ -115,8 +129,10 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
       }));
       try {
         const latest = await refreshCustomerImagesAction(companyId, page);
-        if (latest.ok) setListing(latest.result);
-        else setMessage((value) => `${value} 一覧の再取得はできませんでした。確認状況を更新してください。`);
+        if (latest.ok) {
+          setListing(latest.result);
+          updates.acknowledge();
+        } else setMessage((value) => `${value} 一覧の再取得はできませんでした。確認状況を更新してください。`);
       } catch {
         setMessage((value) => `${value} 一覧の再取得はできませんでした。確認状況を更新してください。`);
       }
@@ -129,6 +145,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
   const locked = busy || job !== null;
   return (
     <div className="space-y-6">
+      <MaterialUpdatesStatus updates={updates} editing={editing !== null} pending={busy || job !== null} />
       {message && (
         <div role="status" className="rounded-xl border bg-white p-4 text-sm leading-7">
           {message}
