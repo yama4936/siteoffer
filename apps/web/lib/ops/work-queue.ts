@@ -10,6 +10,7 @@ import {
   designVersions,
   discoveryJobs,
   domainPreferences,
+  proposalHandoffs,
   proposals,
   proposalVersions,
   salesActivities,
@@ -17,6 +18,7 @@ import {
   users,
 } from "@siteoffer/db";
 import { discoveryCriteriaSchema } from "@siteoffer/discovery";
+import { getAuditRecoveryCandidates } from "@siteoffer/worker/audit-recovery";
 import { and, asc, eq, gt, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { currentDeliveryBuild, deliveryNeedsAttention } from "./delivery-processing";
@@ -25,6 +27,7 @@ import { requireOps } from "./guard";
 
 export const WORK_GROUPS = {
   discovery: { label: "収集の復旧", href: "/ops/discovery" },
+  audit_recovery: { label: "診断の再開", href: "/ops/processing#audit-recovery" },
   design: { label: "デザイン", href: "/ops/designs" },
   proposal: { label: "提案レビュー", href: "/ops/review" },
   consultation: { label: "営業からの相談", href: "/ops/consultations" },
@@ -79,6 +82,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     domain,
     consultation,
     deliveryRecovery,
+    auditRecovery,
   ] = await Promise.all([
     db
       .select({
@@ -227,7 +231,11 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
         and(
           activeCompany,
           eq(companies.pipelineStatus, "audited"),
-          sql`exists (select 1 from ${siteAudits} where ${siteAudits.companyId} = ${companies.id} and ${siteAudits.status} = 'evaluated' and ${siteAudits.decision} = 'create')`,
+          sql`exists (select 1 from ${siteAudits} where ${siteAudits.companyId} = ${companies.id}
+            and ${siteAudits.status} = 'evaluated' and ${siteAudits.decision} = 'create'
+            and ${siteAudits.id} = (select latest.id from site_audits latest where latest.company_id = ${companies.id}
+              order by latest.created_at desc, latest.id desc limit 1)
+            and not exists (select 1 from ${proposalHandoffs} where ${proposalHandoffs.auditId} = ${siteAudits.id}))`,
           notExists(
             db.select({ id: designVersions.id }).from(designVersions).where(eq(designVersions.companyId, companies.id)),
           ),
@@ -310,8 +318,20 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
         asc(deliveries.id),
       )
       .limit(PER_GROUP),
+    getAuditRecoveryCandidates(db, actor),
   ]);
+  if (!auditRecovery.ok) return auditRecovery;
   const items: WorkItem[] = [
+    ...auditRecovery.value.items.map((r) => ({
+      id: r.auditId,
+      group: "audit_recovery" as const,
+      title: r.companyName,
+      reason: r.blockedReason ?? "診断は保存済みです。採点を繰り返さず、停止した判定の反映から再開できます。",
+      action: r.blockedReason ? "企業情報を確認" : "保存済み結果で再開",
+      href: r.blockedReason ? `/ops/companies/${r.companyId}` : `/ops/processing?company=${r.companyId}#audit-recovery`,
+      since: r.createdAt,
+      priority: 0,
+    })),
     ...deliveryRecovery.map((r) => ({
       id: r.id,
       group: "delivery_recovery" as const,
@@ -461,6 +481,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
   items.sort((a, b) => a.priority - b.priority || a.since.localeCompare(b.since) || a.id.localeCompare(b.id));
   const groups = Object.entries({
     discovery: failed,
+    audit_recovery: [{ total: auditRecovery.value.total }],
     design,
     proposal,
     assignment,

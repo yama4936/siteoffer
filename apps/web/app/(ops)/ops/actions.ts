@@ -519,6 +519,7 @@ export async function resumeAuditAction(auditId: string) {
   try {
     const result = await resumeAuditByOps(getDb(), systemClock, actor, auditId);
     if (!result.ok) return { ok: false, message: result.message ?? "診断と操作権限を確認してください" };
+    revalidatePath("/ops");
     revalidatePath("/ops/processing");
     revalidatePath(`/ops/companies/${result.value.companyId}`);
     return {

@@ -37,7 +37,7 @@ export function WorkQueue({
       (group === "all" || item.group === group) &&
       `${item.title} ${item.reason}`.toLocaleLowerCase("ja").includes(query.trim().toLocaleLowerCase("ja")),
   );
-  const first = items[0];
+  const first = filtered[0];
   const names = new Map(groups.map((g) => [g.key, g.label]));
   const count = group === "all" ? total : (groups.find((g) => g.key === group)?.count ?? 0);
   const now = new Date(updatedAt).getTime();
@@ -49,14 +49,36 @@ export function WorkQueue({
       <section className="work-next" aria-labelledby="work-next-title">
         <div className="work-next-symbol">{first ? <ArrowRight size={24} /> : <CheckCheck size={24} />}</div>
         <div>
-          <p className="work-eyebrow">{first ? "次に進める仕事" : "確認できる仕事は片付きました"}</p>
-          <h2 id="work-next-title">{first?.title ?? "新しい案件を準備しましょう"}</h2>
-          <p>{first?.reason ?? "企業の収集から始められます。各業務画面では作業履歴や処理中の案件も確認できます。"}</p>
+          <p className="work-eyebrow">
+            {first ? "次に進める仕事" : total ? "表示条件を確認してください" : "確認できる仕事は片付きました"}
+          </p>
+          <h2 id="work-next-title">
+            {first?.title ?? (total ? "表示条件に合う仕事はありません" : "新しい案件を準備しましょう")}
+          </h2>
+          <p>
+            {first?.reason ??
+              (total
+                ? "検索や仕事の種類を変更すると、ほかの対応待ちの仕事を確認できます。"
+                : "企業の収集から始められます。各業務画面では作業履歴や処理中の案件も確認できます。")}
+          </p>
         </div>
-        <Link className="work-primary" href={first?.href ?? "/ops/discovery"}>
-          {first?.action ?? "企業を収集する"}
-          <ArrowRight size={16} />
-        </Link>
+        {!first && total > 0 ? (
+          <button
+            type="button"
+            className="work-primary"
+            onClick={() => {
+              setGroup("all");
+              setQuery("");
+            }}
+          >
+            絞り込みを解除 <ArrowRight size={16} />
+          </button>
+        ) : (
+          <Link className="work-primary" href={first?.href ?? "/ops/discovery"}>
+            {first?.action ?? "企業を収集する"}
+            <ArrowRight size={16} />
+          </Link>
+        )}
       </section>
       <div className="work-toolbar">
         <div>
