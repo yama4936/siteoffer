@@ -113,16 +113,18 @@ export function MaterialUpdatesStatus({
   updates,
   editing,
   pending,
+  canCompare = false,
 }: {
   updates: Pick<ReturnType<typeof useMaterialUpdates>, "error" | "waiting" | "notice" | "checkedAt">;
   editing: boolean;
   pending: boolean;
+  canCompare?: boolean;
 }) {
   return (
     <section className="space-y-2 text-sm" aria-label="確認状況の更新">
       <p className="text-xs leading-6 text-slate-500">
         {pending
-          ? "送信結果を確認しています。完了後に自動更新を再開します。"
+          ? "処理中です。完了後に自動更新を再開します。"
           : editing
             ? "30秒ごとに変更を確認します。入力中の内容は自動で置き換えません。"
             : "30秒ごとに自動更新します。"}
@@ -144,7 +146,10 @@ export function MaterialUpdatesStatus({
       )}
       {updates.waiting ? (
         <div role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 leading-7 text-blue-900">
-          確認状況が更新されています。入力を保持しています。送信前に一覧を更新して、最新の内容をご確認ください。
+          確認状況が更新されています。入力を保持しています。
+          {canCompare
+            ? "「最新の内容と比較」から変更を確認し、入力を引き継げます。"
+            : "送信前に一覧を更新して、最新の内容をご確認ください。"}
         </div>
       ) : !updates.error && updates.notice ? (
         <p role="status" className="text-blue-700">

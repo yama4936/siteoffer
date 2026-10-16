@@ -3,6 +3,7 @@ import type { CustomerImageDetails, ImageSubmissionView } from "@siteoffer/core"
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  compareImageSubmissionAction,
   refreshCustomerImagesAction,
   reviseCustomerImageAction,
   submitCustomerImageAction,
@@ -10,8 +11,9 @@ import {
 } from "@/app/image-submission-actions";
 import { Button } from "@/components/ui/button";
 import { fmtDate } from "@/lib/ops/format";
+import { CustomerMaterialComparison, useComparisonFocus } from "./comparison";
+import type { MaterialDraft } from "./merge";
 import { MaterialDetailsFields, materialStatus, useMaterialNavigationGuard } from "./shared";
-
 import { MaterialUpdatesStatus, useMaterialUpdates } from "./updates";
 
 type Listing = { total: number; items: ImageSubmissionView[] };
@@ -39,6 +41,14 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
     [file, setFile] = useState<File | null>(null),
     [preview, setPreview] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const [comparison, setComparison] = useState<{
+    before: ImageSubmissionView;
+    latest: ImageSubmissionView;
+    draft: MaterialDraft;
+  } | null>(null);
+  const [resumed, setResumed] = useState<{ assetId: string; draft: MaterialDraft } | null>(null);
+  const [formVersion, setFormVersion] = useState(0);
+  useComparisonFocus(formRef, comparison !== null, formVersion, "label");
   // Keep the editable snapshot stable across Server Action revalidation.
   // Route keys remount on scope changes; background reads preserve an open editor.
   const loadUpdates = useCallback(() => refreshCustomerImagesAction(companyId, page), [companyId, page]);
@@ -66,6 +76,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
     setFile(null);
     setDirty(false);
     setEditing(next);
+    setResumed(null);
   }
   async function refresh() {
     if (busy || job) return;
@@ -78,6 +89,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
         setListing(r.result);
         updates.acknowledge();
         setEditing(null);
+        setResumed(null);
         setDirty(false);
         setFile(null);
         setMessage("一覧を更新しました");
@@ -109,6 +121,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
       setJob(null);
       setDirty(false);
       setEditing(null);
+      setResumed(null);
       setFile(null);
       formRef.current?.reset();
       setMessage(
@@ -142,10 +155,55 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
       setBusy(false);
     }
   }
-  const locked = busy || job !== null;
+  async function compare(item: ImageSubmissionView) {
+    if (busy || job || comparison || !formRef.current) return;
+    const draft = fields(new FormData(formRef.current));
+    updates.invalidate();
+    setBusy(true);
+    try {
+      const result = await compareImageSubmissionAction(companyId, item.assetId);
+      if (result.ok) setComparison({ before: item, latest: result.item, draft });
+      else setMessage(result.message);
+    } catch {
+      setMessage("最新の内容を取得できませんでした。入力は残っています。再試行してください。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  function resumeComparison(draft: MaterialDraft) {
+    if (!comparison) return;
+    updates.invalidate();
+    setListing((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => (item.assetId === comparison.latest.assetId ? comparison.latest : item)),
+    }));
+    setResumed({ assetId: comparison.latest.assetId, draft });
+    setFormVersion((version) => version + 1);
+    setDirty(true);
+    setComparison(null);
+    setMessage("入力を引き継ぎました。まだ送信していません。内容を確認してチェックを付け直してください。");
+  }
+  function finishComparison() {
+    if (!comparison || !window.confirm("未保存の入力を破棄して最新状況を表示しますか？")) return;
+    updates.invalidate();
+    setListing((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => (item.assetId === comparison.latest.assetId ? comparison.latest : item)),
+    }));
+    setComparison(null);
+    setResumed(null);
+    setEditing(null);
+    setDirty(false);
+  }
+  const locked = busy || job !== null || comparison !== null;
   return (
     <div className="space-y-6">
-      <MaterialUpdatesStatus updates={updates} editing={editing !== null} pending={busy || job !== null} />
+      <MaterialUpdatesStatus
+        updates={updates}
+        editing={editing !== null}
+        pending={busy || job !== null}
+        canCompare={editing !== null && editing !== "new"}
+      />
       {message && (
         <div role="status" className="rounded-xl border bg-white p-4 text-sm leading-7">
           {message}
@@ -321,7 +379,9 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
             </div>
             {editing === item.assetId && (
               <form
-                key={item.revision}
+                ref={formRef}
+                hidden={comparison?.before.assetId === item.assetId}
+                key={`${item.revision}:${formVersion}`}
                 className="mt-5 space-y-4 border-t pt-5"
                 onChange={() => setDirty(true)}
                 onSubmit={(e) => {
@@ -340,11 +400,26 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
                 }}
               >
                 <fieldset disabled={locked} className="space-y-4">
-                  <MaterialDetailsFields item={item} />
+                  <MaterialDetailsFields item={resumed?.assetId === item.assetId ? resumed.draft : item} />
                   <p className="text-xs text-slate-500">画像は差し替えできません。別の画像は新しく提出してください。</p>
-                  <Button type="submit">説明を更新して確認を依頼</Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="submit">説明を更新して確認を依頼</Button>
+                    <Button type="button" data-material-compare variant="outline" onClick={() => void compare(item)}>
+                      最新の内容と比較
+                    </Button>
+                  </div>
                 </fieldset>
               </form>
+            )}
+            {comparison?.before.assetId === item.assetId && (
+              <CustomerMaterialComparison
+                before={comparison.before}
+                latest={comparison.latest}
+                draft={comparison.draft}
+                onResume={resumeComparison}
+                onClose={() => setComparison(null)}
+                onFinish={finishComparison}
+              />
             )}
           </article>
         ))}

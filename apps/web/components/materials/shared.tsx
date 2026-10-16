@@ -1,8 +1,8 @@
 "use client";
-import type { ImageSubmissionView } from "@siteoffer/core";
 import { useEffect, useId } from "react";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
+import type { MaterialDraft } from "./merge";
 export const materialStatus = {
   pending: "運営の確認待ち",
   needs_changes: "説明の追加が必要",
@@ -37,7 +37,7 @@ export function useMaterialNavigationGuard(dirty: boolean) {
     };
   }, [dirty]);
 }
-export function MaterialDetailsFields({ item }: { item?: ImageSubmissionView }) {
+export function MaterialDetailsFields({ item }: { item?: MaterialDraft }) {
   const id = useId();
   return (
     <div className="space-y-4">

@@ -481,3 +481,16 @@ export async function getCustomerImageFile(db: DbOrTx, actor: Actor | null, asse
     return { bytes };
   });
 }
+
+/** A scoped, fresh detail read for comparing an open form with its current source. */
+export async function getImageSubmission(db: DbOrTx, actor: Actor | null, companyId: string, assetId: string) {
+  if (!uuid(assetId)) throw new ImageSubmissionError("画像を確認してください");
+  return db.transaction(async (tx) => {
+    if (actor?.kind === "ops") await operator(tx, actor, companyId);
+    else await customer(tx, actor, companyId);
+    const item = await read(tx, companyId, assetId);
+    if (actor?.kind === "customer_user" && item.submittedBy !== actor.userId)
+      throw new ImageSubmissionError("自分が提出した画像だけ確認できます");
+    return item;
+  });
+}

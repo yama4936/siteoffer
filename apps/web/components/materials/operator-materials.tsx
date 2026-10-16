@@ -1,14 +1,18 @@
 "use client";
 import type { ImageSubmissionView } from "@siteoffer/core";
 import Link from "next/link";
-import { useCallback, useState } from "react";
-import { refreshImageSubmissionsAction, reviewCustomerImageAction } from "@/app/image-submission-actions";
+import { useCallback, useRef, useState } from "react";
+import {
+  compareImageSubmissionAction,
+  refreshImageSubmissionsAction,
+  reviewCustomerImageAction,
+} from "@/app/image-submission-actions";
 import { Button } from "@/components/ui/button";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { fmtDate } from "@/lib/ops/format";
+import { OperatorMaterialComparison, useComparisonFocus } from "./comparison";
 import { materialStatus, rightsLabels, useMaterialNavigationGuard } from "./shared";
-
 import { MaterialUpdatesStatus, useMaterialUpdates } from "./updates";
 
 type Item = ImageSubmissionView & { companyName: string; submitterName: string };
@@ -31,6 +35,15 @@ export function OperatorMaterials({
     [message, setMessage] = useState(""),
     [dirty, setDirty] = useState(false),
     [savedCompany, setSavedCompany] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [comparison, setComparison] = useState<{
+    before: ImageSubmissionView;
+    latest: ImageSubmissionView;
+    note: string;
+  } | null>(null);
+  const [resumed, setResumed] = useState<{ assetId: string; note: string } | null>(null);
+  const [formVersion, setFormVersion] = useState(0);
+  useComparisonFocus(formRef, comparison !== null, formVersion, "decision");
   // Background reads detect changes but preserve the exact version being reviewed.
   const loadUpdates = useCallback(
     () => refreshImageSubmissionsAction({ companyId, page, pendingOnly }),
@@ -55,6 +68,7 @@ export function OperatorMaterials({
         setListing(r.result);
         updates.acknowledge();
         setSelected(null);
+        setResumed(null);
         setDirty(false);
         setMessage("一覧を更新しました");
       } else setMessage(r.message);
@@ -80,6 +94,7 @@ export function OperatorMaterials({
       }
       setPending(null);
       setSelected(null);
+      setResumed(null);
       setDirty(false);
       setMessage(
         r.replayed
@@ -114,11 +129,60 @@ export function OperatorMaterials({
       setBusy(false);
     }
   }
-  const locked = busy || pending !== null,
+  async function compare(item: ImageSubmissionView) {
+    if (busy || pending || comparison || !formRef.current) return;
+    const note = String(new FormData(formRef.current).get("note") ?? "");
+    updates.invalidate();
+    setBusy(true);
+    try {
+      const result = await compareImageSubmissionAction(item.companyId, item.assetId);
+      if (result.ok) setComparison({ before: item, latest: result.item, note });
+      else setMessage(result.message);
+    } catch {
+      setMessage("最新の内容を取得できませんでした。確認メモは残っています。再試行してください。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  function resumeComparison() {
+    if (!comparison) return;
+    updates.invalidate();
+    setListing((previous) => ({
+      ...previous,
+      items: previous.items.map((item) =>
+        item.assetId === comparison.latest.assetId ? { ...item, ...comparison.latest } : item,
+      ),
+    }));
+    setResumed({ assetId: comparison.latest.assetId, note: comparison.note });
+    setFormVersion((version) => version + 1);
+    setDirty(true);
+    setComparison(null);
+    setMessage("確認メモを引き継ぎました。まだ保存していません。確認結果・用途・確認チェックを選び直してください。");
+  }
+  function finishComparison() {
+    if (!comparison || !window.confirm("未保存の確認メモを破棄して最新状況を表示しますか？")) return;
+    updates.invalidate();
+    setListing((previous) => ({
+      total: previous.total - (pendingOnly && comparison.latest.status !== "pending" ? 1 : 0),
+      items: previous.items
+        .map((item) => (item.assetId === comparison.latest.assetId ? { ...item, ...comparison.latest } : item))
+        .filter((item) => !pendingOnly || item.status === "pending"),
+    }));
+    setComparison(null);
+    setResumed(null);
+    setSelected(null);
+    setDirty(false);
+  }
+  const locked = busy || pending !== null || comparison !== null,
     prefix = `/ops/materials?${companyId ? `company=${companyId}&` : ""}all=${pendingOnly ? 0 : 1}&`;
   return (
     <div className="space-y-5">
-      <MaterialUpdatesStatus updates={updates} editing={selected !== null} pending={busy || pending !== null} />
+      <MaterialUpdatesStatus
+        updates={updates}
+        editing={selected !== null}
+        pending={busy || pending !== null}
+        canCompare={selected !== null}
+      />
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
           {listing.total}件 · {page + 1}ページ目
@@ -204,6 +268,7 @@ export function OperatorMaterials({
                 if (dirty && !window.confirm("入力中の確認内容を破棄しますか？")) return;
                 updates.invalidate();
                 setSelected(selected === item.assetId ? null : item.assetId);
+                setResumed(null);
                 setDirty(false);
               }}
             >
@@ -212,7 +277,9 @@ export function OperatorMaterials({
           )}
           {selected === item.assetId && item.status === "pending" && (
             <form
-              key={item.revision}
+              ref={formRef}
+              hidden={comparison?.before.assetId === item.assetId}
+              key={`${item.revision}:${formVersion}`}
               className="mt-5 border-t pt-5"
               onChange={() => setDirty(true)}
               onSubmit={(e) => {
@@ -253,7 +320,7 @@ export function OperatorMaterials({
                       type="checkbox"
                       name="allowDemo"
                       disabled={!item.requestedDemo}
-                      defaultChecked={item.requestedDemo}
+                      defaultChecked={resumed?.assetId === item.assetId ? false : item.requestedDemo}
                     />
                     営業デモ {!item.requestedDemo && "（顧客の許可なし）"}
                   </label>
@@ -263,7 +330,7 @@ export function OperatorMaterials({
                       type="checkbox"
                       name="allowProduction"
                       disabled={!item.requestedProduction}
-                      defaultChecked={item.requestedProduction}
+                      defaultChecked={resumed?.assetId === item.assetId ? false : item.requestedProduction}
                     />
                     本番サイト {!item.requestedProduction && "（顧客の許可なし）"}
                   </label>
@@ -275,6 +342,7 @@ export function OperatorMaterials({
                   <textarea
                     id={`note-${item.assetId}`}
                     name="note"
+                    defaultValue={resumed?.assetId === item.assetId ? resumed.note : ""}
                     required
                     minLength={5}
                     maxLength={2000}
@@ -286,9 +354,24 @@ export function OperatorMaterials({
                   <Input id={`confirm-${item.assetId}`} name="confirmed" type="checkbox" required className="mt-1" />
                   実際の画像と申告内容を確認しました。採用する場合は、その用途で利用できることを確認しました。
                 </label>
-                <Button type="submit">確認結果を保存</Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit">確認結果を保存</Button>
+                  <Button type="button" data-material-compare variant="outline" onClick={() => void compare(item)}>
+                    最新の内容と比較
+                  </Button>
+                </div>
               </fieldset>
             </form>
+          )}
+          {comparison?.before.assetId === item.assetId && (
+            <OperatorMaterialComparison
+              before={comparison.before}
+              latest={comparison.latest}
+              note={comparison.note}
+              onResume={resumeComparison}
+              onClose={() => setComparison(null)}
+              onFinish={finishComparison}
+            />
           )}
         </article>
       ))}

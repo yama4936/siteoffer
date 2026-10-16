@@ -20,6 +20,7 @@ import { captureDeliveryImageAssets, deliveryImageAssetsValid } from "./image-as
 import {
   countPendingImageSubmissions,
   getCustomerImageFile,
+  getImageSubmission,
   listCustomerImages,
   listImageSubmissionsForOps,
   reviewCustomerImage,
@@ -308,4 +309,25 @@ it("採用した画像を制作に固定し、取り下げると既存の制作�
   });
   expect(await deliveryImageAssetsValid(db, build!.id, deliveryId)).toBe(false);
   expect(await db.transaction((tx) => captureDeliveryImageAssets(tx, s.contract.id))).toEqual([]);
+});
+
+it("比較用の単体取得も会社と本人に限定し、権限停止後は拒否する", async () => {
+  const s = await setup(),
+    other = await setup(),
+    peer = await member(s);
+  const first = await submitCustomerImage(db, clock, s.actor, s.input);
+  const input = review(s, first.item.assetId);
+  await reviewCustomerImage(db, clock, s.ops, { ...input, decision: "needs_changes" });
+  for (const actor of [s.actor, s.ops]) {
+    const item = await getImageSubmission(db, actor, s.company.id, first.item.assetId);
+    expect(item).toMatchObject({ assetId: first.item.assetId, revision: 2, status: "needs_changes" });
+    expect(JSON.stringify(item)).not.toContain(png.toString("base64"));
+  }
+  for (const actor of [other.actor, peer.actor, s.sales, null])
+    await expect(getImageSubmission(db, actor, s.company.id, first.item.assetId)).rejects.toThrow();
+  await expect(getImageSubmission(db, s.ops, other.company.id, first.item.assetId)).rejects.toThrow();
+  await db.update(contentAccess).set({ status: "revoked" }).where(eq(contentAccess.id, s.access.id));
+  await expect(getImageSubmission(db, s.actor, s.company.id, first.item.assetId)).rejects.toThrow();
+  await db.update(users).set({ status: "suspended" }).where(eq(users.id, s.ops.userId));
+  await expect(getImageSubmission(db, s.ops, s.company.id, first.item.assetId)).rejects.toThrow();
 });
