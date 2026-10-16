@@ -8,7 +8,7 @@ import {
   type DeliveryBuildClaim,
   failDeliveryBuild,
   INTERRUPTED_BUILD_MESSAGE,
-  loadDeliverySource,
+  loadDeliveryInputSource,
   renewDeliveryBuild,
 } from "@siteoffer/core";
 import type { IntakePhase } from "@siteoffer/db";
@@ -187,7 +187,7 @@ async function processDelivery(
     status: "skipped",
     reason: "制作の実行権限が更新されたため、この結果は反映しません",
   });
-  const source = await loadDeliverySource(db, d.contractId);
+  const source = await loadDeliveryInputSource(db, d.id, claim.buildId);
   if (!source) return { deliveryId: d.id, status: "failed", reason: "契約と企業の情報を確認できません" };
   if (source.blockers.length) return { deliveryId: d.id, status: "failed", reason: source.blockers.join(" / ") };
   const { company, contract } = source;
@@ -236,6 +236,7 @@ async function processDelivery(
       ...input.context,
       deliveryContract: {
         contractId: contract.id,
+        preparationId: source.preparation?.id ?? null,
         proposalVersionId: source.proposal?.id ?? null,
         scope: source.scope?.scope ?? null,
         instruction:

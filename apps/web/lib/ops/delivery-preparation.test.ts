@@ -186,11 +186,12 @@ it("営業・停止運営・不正IDは制作準備を取得できない", async
   await db.update(users).set({ status: "suspended" }).where(eq(users.id, s.ops.userId));
   expect(await getDeliveryPreparation(db, s.ops, s.delivery.id)).toMatchObject({ ok: false, error: "forbidden" });
 });
-it("提案未紐付けの旧契約は同社の評価済み診断を使い、未記録の条件を明示する", async () => {
+it("提案未紐付けの旧契約は不足を明示して制作を止める", async () => {
   const s = await setup();
   await db.update(contracts).set({ proposalVersionId: null, snapshot: null }).where(eq(contracts.id, s.contract.id));
   const d = must(await getDeliveryPreparation(db, s.ops, s.delivery.id));
   expect(d.audit?.id).toBe(s.audit.id);
   expect(d.scope).toBeNull();
-  expect(d.notices).toHaveLength(3);
+  expect(d.blockers).toHaveLength(3);
+  expect(d.supplementation.needed).toBe(true);
 });

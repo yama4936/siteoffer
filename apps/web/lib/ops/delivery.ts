@@ -11,7 +11,7 @@ import {
   type DeliveryDetail,
   err,
   getDeliveryDetail,
-  loadDeliverySource,
+  loadDeliveryInputSource,
   ok,
   type Result,
   recordPublication,
@@ -117,7 +117,7 @@ export async function transitionDeliveryByOps(
   if (input.to === "building") {
     const detail = await getDeliveryDetail(db, g.value, input.deliveryId);
     if (!detail.ok) return detail;
-    const source = await loadDeliverySource(db, detail.value.contractId);
+    const source = await loadDeliveryInputSource(db, input.deliveryId);
     if (!source || source.blockers.length)
       return err("preparation_required", source?.blockers.join(" / ") ?? "制作の入力情報を確認してください");
   }

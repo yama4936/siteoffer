@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { DescriptionList } from "@/components/ui/page";
 import type { DeliveryPreparationData } from "@/lib/ops/delivery-preparation";
 import { DOMAIN_INTENT_LABEL, DOMAIN_MANAGER_LABEL, TRI_LABEL, yen } from "@/lib/ops/format";
+import { DeliverySupplement } from "./delivery-supplement";
 
 function scopeText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -20,9 +21,7 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="font-semibold">制作の準備</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            契約で選んだ提案・デザインと、現在の登録情報を確認します。
-          </p>
+          <p className="mt-1 text-sm text-muted-foreground">制作に使う提案・デザインと、現在の登録情報を確認します。</p>
         </div>
         <Badge variant={d.blockers.length ? "warning" : "success"}>
           {d.blockers.length ? `開始前の確認 ${d.blockers.length}件` : "制作入力の参照を確認済み"}
@@ -38,9 +37,17 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
           </ul>
         </div>
       )}
+      {d.supplementation.needed && (
+        <DeliverySupplement deliveryId={d.deliveryId} companyId={d.company.id} data={d.supplementation} />
+      )}
+      {d.supplement && (
+        <p className="text-sm text-muted-foreground">
+          納品用の補完 第{d.supplement.revision}版を使用します。契約原本は契約画面で確認できます。
+        </p>
+      )}
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="min-w-0 space-y-3 rounded-xl border p-4">
-          <h4 className="font-semibold text-sm">契約した制作範囲</h4>
+          <h4 className="font-semibold text-sm">制作に使う提供範囲</h4>
           <DescriptionList>
             <dt>商品・条件版</dt>
             <dd>
@@ -62,7 +69,7 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
           </Link>
         </section>
         <section className="min-w-0 space-y-3 rounded-xl border p-4">
-          <h4 className="font-semibold text-sm">契約したデザイン</h4>
+          <h4 className="font-semibold text-sm">制作に使うデザイン</h4>
           {d.design ? (
             <>
               <p className="text-sm">
@@ -73,12 +80,12 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
                   href={`/ops/designs/${d.design.id}/image`}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label="契約したデザイン画像を別タブで開く"
+                  aria-label="制作に使うデザイン画像を別タブで開く"
                 >
                   {/* biome-ignore lint/performance/noImgElement: 認証Cookieが必要な画像は直接取得する */}
                   <img
                     src={`/ops/designs/${d.design.id}/image`}
-                    alt={`契約したデザイン 第${d.design.version}版`}
+                    alt={`制作に使うデザイン 第${d.design.version}版`}
                     className="max-h-56 w-full rounded-lg border object-contain object-top"
                   />
                 </a>

@@ -2,7 +2,9 @@ import { index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from 
 import { createdAt, id, ts, updatedAt } from "./common.ts";
 import { contracts } from "./contract.ts";
 import { generationJobs } from "./generation.ts";
+import { proposalVersions } from "./proposal.ts";
 import { shareLinks } from "./share-link.ts";
+import { users } from "./users.ts";
 
 /** 納品の状態（18章「納品」） */
 export const deliveryStatus = pgEnum("delivery_status", [
@@ -35,6 +37,30 @@ export const deliveries = pgTable("deliveries", {
   updatedAt: updatedAt(),
 });
 
+/** 旧契約の不足した制作情報。契約履歴は変更せず、確認した版を追記する。 */
+export const deliveryPreparations = pgTable(
+  "delivery_preparations",
+  {
+    id: id(),
+    deliveryId: uuid("delivery_id")
+      .notNull()
+      .references(() => deliveries.id),
+    revision: integer("revision").notNull(),
+    requestId: uuid("request_id").notNull().unique(),
+    payloadHash: text("payload_hash").notNull(),
+    proposalVersionId: uuid("proposal_version_id")
+      .notNull()
+      .references(() => proposalVersions.id),
+    scope: jsonb("scope").notNull(),
+    reason: text("reason").notNull(),
+    confirmedBy: uuid("confirmed_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("delivery_preparations_revision").on(t.deliveryId, t.revision)],
+);
+
 export const deliveryBuildStatus = pgEnum("delivery_build_status", [
   "queued",
   "running",
@@ -50,6 +76,7 @@ export const deliveryBuilds = pgTable(
       .notNull()
       .references(() => deliveries.id),
     previousId: uuid("previous_id"),
+    preparationId: uuid("preparation_id").references(() => deliveryPreparations.id),
     status: deliveryBuildStatus("status").notNull().default("queued"),
     ownerId: uuid("owner_id"),
     leaseUntil: ts("lease_until"),

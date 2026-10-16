@@ -197,6 +197,13 @@
       "when": 1792180289814,
       "tag": "0027_sales_offer_changes",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792183381962,
+      "tag": "0028_delivery_preparations",
+      "breakpoints": true
     }
   ]
 }

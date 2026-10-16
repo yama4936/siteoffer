@@ -28,7 +28,17 @@ export function contractProductionScope(snapshot: unknown) {
 }
 
 /** 制作入力の参照元を契約から解決する。明示された参照が不正なら別の版へ自動で差し替えない。サーバー内部用。 */
-export async function loadDeliverySource(db: DbOrTx, contractId: string) {
+export function hasProductionScope(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.some(hasProductionScope);
+  if (value && typeof value === "object") return Object.values(value).some(hasProductionScope);
+  return typeof value === "number" || typeof value === "boolean";
+}
+export async function loadDeliverySource(
+  db: DbOrTx,
+  contractId: string,
+  supplement?: { proposalVersionId: string; scope: unknown },
+) {
   const [contract] = await db.select().from(contracts).where(eq(contracts.id, contractId));
   if (!contract) return null;
   const [company] = await db.select().from(companies).where(eq(companies.id, contract.companyId));
@@ -36,18 +46,18 @@ export async function loadDeliverySource(db: DbOrTx, contractId: string) {
   const blockers: string[] = [],
     notices: string[] = [];
   if (contract.status !== "completed") blockers.push("契約確認が完了していません。契約画面で確認してください。");
-  const [proposal] = contract.proposalVersionId
+  const selectedProposalId = supplement?.proposalVersionId ?? contract.proposalVersionId;
+  const [proposal] = selectedProposalId
     ? await db
         .select({ row: proposalVersions })
         .from(proposalVersions)
         .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
-        .where(and(eq(proposalVersions.id, contract.proposalVersionId), eq(proposals.companyId, company.id)))
+        .where(and(eq(proposalVersions.id, selectedProposalId!), eq(proposals.companyId, company.id)))
         .then((rows) => rows.map((r) => r.row))
     : [];
-  if (contract.proposalVersionId && proposal?.status !== "approved")
+  if (selectedProposalId && proposal?.status !== "approved")
     blockers.push("契約した提案版を確認できません。運営の承認状態と企業の紐付けを確認してください。");
-  if (!contract.proposalVersionId)
-    notices.push("契約に提案版が記録されていない旧案件です。最新の評価済み診断を使います。");
+  if (!selectedProposalId) blockers.push("制作に使う提案版が未記録です。納品用の制作情報を補完してください。");
   const [audit] = proposal?.auditId
     ? await db
         .select()
@@ -86,8 +96,33 @@ export async function loadDeliverySource(db: DbOrTx, contractId: string) {
       blockers.push(
         "契約した提案の承認済みデザイン画像を確認できません。画像・承認状態・診断の紐付けを確認してください。",
       );
-  } else notices.push("この提案にはデザイン画像の記録がありません。制作前に契約時の見た目・構成を確認してください。");
-  const scope = contractProductionScope(contract.snapshot);
-  if (!scope) notices.push("契約時の提供範囲が記録されていない旧案件です。契約資料で確認してください。");
-  return { company, contract, proposal: proposal ?? null, audit: audit ?? null, design, scope, blockers, notices };
+  } else blockers.push("承認済みデザインを持つ提案版が必要です。納品用の制作情報を補完してください。");
+  const originalScope = contractProductionScope(contract.snapshot);
+  const scopeMissing = !hasProductionScope(originalScope?.scope);
+  const scope =
+    supplement && scopeMissing
+      ? {
+          ...originalScope,
+          name: originalScope?.name ?? null,
+          version: originalScope?.version ?? null,
+          price: originalScope?.price ?? null,
+          monthlyFee: originalScope?.monthlyFee ?? null,
+          scope: supplement.scope,
+        }
+      : originalScope;
+  if (!hasProductionScope(scope?.scope))
+    blockers.push("提供範囲が未記録です。契約資料を確認して納品用の制作範囲を補完してください。");
+  const proposalMissing = !contract.proposalVersionId || (!!proposal && (designId === undefined || designId === null));
+  return {
+    company,
+    contract,
+    proposal: proposal ?? null,
+    audit: audit ?? null,
+    design,
+    scope,
+    blockers,
+    notices,
+    proposalMissing,
+    scopeMissing,
+  };
 }

@@ -30,6 +30,7 @@ import {
   generationJobs,
   proposals,
   proposalVersions,
+  siteAudits,
   users,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
@@ -529,8 +530,10 @@ it("受付上限を超える失敗・実行中案件があっても後続の待�
       if (!made.ok) throw Error(made.error);
       const started = await transitionDelivery(db, clock, b.ops, made.value.delivery.id, "building");
       if (!started.ok) throw Error(started.error);
-      if (i === 42) waiting = started.value.id;
-      else
+      if (i === 42) {
+        waiting = started.value.id;
+        await db.update(siteAudits).set({ status: "failed" }).where(eq(siteAudits.id, b.audit.id));
+      } else
         await db
           .update(deliveryBuilds)
           .set({

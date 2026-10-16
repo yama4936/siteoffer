@@ -19,6 +19,7 @@ import { type IssuedShareLink, type IssueShareLinkError, issueShareLink } from "
 import type { ShareTokenRecovery } from "../share-link/token.ts";
 import type { DeliveryBuildClaim } from "./build.ts";
 import { beginDeliveryBuild } from "./build-state.ts";
+import { loadDeliveryInputSource } from "./preparation.ts";
 
 /**
  * 納品（15・18章）。
@@ -272,7 +273,7 @@ export async function addDeliveryVersion(
  */
 export type SimpleTransitionTarget = "building" | "ops_review" | "delivered";
 
-export type TransitionError = "forbidden" | "not_found" | "invalid_transition" | "no_version";
+export type TransitionError = "forbidden" | "not_found" | "invalid_transition" | "no_version" | "preparation_required";
 
 export async function transitionDelivery(
   db: DbOrTx,
@@ -319,6 +320,11 @@ export async function transitionDelivery(
           .update(deliveryBuilds)
           .set({ status: "succeeded", leaseUntil: null, finishedAt: clock.now() })
           .where(eq(deliveryBuilds.id, build.id));
+    }
+    if (to === "building") {
+      const source = await loadDeliveryInputSource(tx, delivery.id);
+      if (!source || source.blockers.length)
+        return err("preparation_required", source?.blockers.join(" / ") ?? "制作情報を確認してください。");
     }
     const build = to === "building" ? await beginDeliveryBuild(tx, clock, delivery) : null;
     const [row] = await tx

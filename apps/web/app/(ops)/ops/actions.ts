@@ -511,6 +511,10 @@ export async function retryDiscoveryJobAction(fd: FormData) {
 export async function retryDeliveryBuildAction(deliveryId: string, buildId: string) {
   const actor = await getCurrentActor();
   const r = await retryDeliveryBuild(getDb(), systemClock, actor, deliveryId, buildId);
+  if (!r.ok && r.error === "preparation_required") {
+    refresh();
+    return { message: r.message ?? "制作の準備画面で不足情報を確認してください。" };
+  }
   if (!r.ok)
     return {
       message:

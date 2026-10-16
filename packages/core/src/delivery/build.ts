@@ -6,6 +6,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok } from "../common/result.ts";
 import { beginDeliveryBuild } from "./build-state.ts";
 import { addDeliveryVersion, transitionDelivery } from "./delivery.ts";
+import { loadDeliveryInputSource } from "./preparation.ts";
 
 export const DELIVERY_BUILD_LEASE_MS = 120000;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -193,6 +194,9 @@ export async function retryDeliveryBuild(
         .update(deliveryBuilds)
         .set({ status: "failed", error: INTERRUPTED_BUILD_MESSAGE, leaseUntil: null, finishedAt: clock.now() })
         .where(eq(deliveryBuilds.id, run.id));
+    const source = await loadDeliveryInputSource(tx, d.id);
+    if (!source || source.blockers.length)
+      return err("preparation_required", source?.blockers.join(" / ") ?? "制作情報を確認してください。");
     const next = await beginDeliveryBuild(tx, clock, d);
     await tx.update(deliveries).set({ updatedAt: clock.now() }).where(eq(deliveries.id, d.id));
     await recordEvent(tx, clock, {

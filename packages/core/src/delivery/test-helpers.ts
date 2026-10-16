@@ -1,5 +1,17 @@
 // テスト専用の準備関数。index.ts からは export しない（apps/web の顧客画面のテストからも使う）
-import { assignments, companies, contracts, type Db, users } from "@siteoffer/db";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  assignments,
+  companies,
+  contracts,
+  type Db,
+  designVersions,
+  proposals,
+  proposalVersions,
+  siteAudits,
+  users,
+  websites,
+} from "@siteoffer/db";
 import type { Actor } from "../common/actor.ts";
 
 let seq = 0;
@@ -34,6 +46,48 @@ export async function seedDeliveryBase(
       claimedAt: new Date("2026-10-01T00:00:00Z"),
     })
     .returning();
+  const [website] = await db
+    .insert(websites)
+    .values({
+      companyId: company!.id,
+      url: `https://fixture-${seq}.example.test`,
+      normalizedUrl: `fixture-${seq}.example.test`,
+      domain: `fixture-${seq}.example.test`,
+    })
+    .returning();
+  const [audit] = await db
+    .insert(siteAudits)
+    .values({ companyId: company!.id, websiteId: website!.id, targetUrl: website!.url, status: "evaluated" })
+    .returning();
+  const [proposal] = await db.insert(proposals).values({ companyId: company!.id }).returning();
+  const bytes = Buffer.from("fixture-design");
+  const [design] = await db
+    .insert(designVersions)
+    .values({
+      companyId: company!.id,
+      auditId: audit!.id,
+      version: 1,
+      requestKey: randomUUID(),
+      status: "approved",
+      buildRequestedAt: new Date("2026-10-02T00:00:00Z"),
+      brief: {},
+      companySnapshot: {},
+      prompt: "fixture",
+      source: "import",
+      imageBase64: bytes.toString("base64"),
+      imageSha256: createHash("sha256").update(bytes).digest("hex"),
+    })
+    .returning();
+  const [proposalVersion] = await db
+    .insert(proposalVersions)
+    .values({
+      proposalId: proposal!.id,
+      version: 1,
+      status: "approved",
+      auditId: audit!.id,
+      content: { designVersionId: design!.id },
+    })
+    .returning();
   const status = opts.contractStatus ?? "completed";
   const [contract] = await db
     .insert(contracts)
@@ -42,9 +96,19 @@ export async function seedDeliveryBase(
       assignmentId: assignment!.id,
       salesUserId: sales.userId,
       status,
+      proposalVersionId: proposalVersion!.id,
+      snapshot: { version: 1, terms: { scope: { description: "架空の会社案内2ページ" } } },
       reportedAt: new Date("2026-10-02T00:00:00Z"),
       completedAt: status === "completed" ? new Date("2026-10-03T00:00:00Z") : null,
     })
     .returning();
-  return { sales, ops, company: company!, contract: contract! };
+  return {
+    sales,
+    ops,
+    company: company!,
+    contract: contract!,
+    audit: audit!,
+    proposalVersion: proposalVersion!,
+    design: design!,
+  };
 }
