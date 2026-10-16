@@ -152,11 +152,16 @@ describe("改良資料", () => {
     expect(await readProposalMarkdown(path.join(tmp, "missing"))).toBeNull();
   });
 
-  it("成果物ディレクトリの外を指す proposal.md のリンクは読まない", async () => {
+  it("成果物ディレクトリの外を指す proposal.md のリンクは読まない", async (context) => {
     const dir = path.join(tmp, "x");
     await mkdir(dir);
     await writeFile(path.join(tmp, "outside.md"), "外のファイル");
-    await symlink(path.join(tmp, "outside.md"), path.join(dir, "proposal.md"));
+    try {
+      await symlink(path.join(tmp, "outside.md"), path.join(dir, "proposal.md"), "file");
+    } catch (error) {
+      if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      context.skip("Windows file symlink privilege unavailable");
+    }
     expect(await readProposalMarkdown(dir)).toBeNull();
   });
 
@@ -219,11 +224,21 @@ describe("改善後サイトの配信", () => {
     expect(parseSitePath("/a/./b")).toBeNull();
   });
 
-  it("site の外を指すシンボリックリンクはたどらない", async () => {
+  it("site の外を指すシンボリックリンクはたどらない", async (context) => {
     const dir = await artifact();
-    await symlink(path.join(dir, "proposal.md"), path.join(dir, "site", "leak.md"));
-    await symlink(dir, path.join(dir, "site", "up"));
+    try {
+      await symlink(path.join(dir, "proposal.md"), path.join(dir, "site", "leak.md"), "file");
+    } catch (error) {
+      if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      context.skip("Windows file symlink privilege unavailable");
+    }
     expect((await readSiteFile(dir, "/leak.md")).kind).toBe("not_found");
+  });
+
+  it("site の外を指すディレクトリリンクはたどらない", async () => {
+    const dir = await artifact();
+    await symlink(dir, path.join(dir, "site", "up"), process.platform === "win32" ? "junction" : "dir");
+
     expect((await readSiteFile(dir, "/up/proposal.md")).kind).toBe("not_found");
 
     // site 自体が外を指すリンクなら配信しない
@@ -232,7 +247,11 @@ describe("改善後サイトの配信", () => {
     await writeFile(path.join(other, "real", "index.html"), "x");
     const linked = path.join(tmp, "linked");
     await mkdir(linked);
-    await symlink(path.join(other, "real"), path.join(linked, "site"));
+    await symlink(
+      path.join(other, "real"),
+      path.join(linked, "site"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     expect((await readSiteFile(linked, "/index.html")).kind).toBe("not_found");
     expect(await getImprovementAvailability(linked)).toEqual({ hasProposal: false, hasSite: false });
   });

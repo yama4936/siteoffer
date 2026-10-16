@@ -56,7 +56,7 @@ export function defaultAuditOptions(
     psi: false,
     collectTimeoutMs: 10 * 60 * 1000,
     scriptTimeoutMs: 60 * 1000,
-    pythonBin: "python3",
+    pythonBin: env.SITEOFFER_PYTHON_BIN || (process.platform === "win32" ? "python" : "python3"),
     ...overrides,
     paths: { ...base, ...overrides.paths },
   };

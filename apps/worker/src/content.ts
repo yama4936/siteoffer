@@ -28,6 +28,8 @@ export interface ProposalContent {
   /** この版を作ったステップの冪等キー（同じキーの再試行で同じ版を使う） */
   idempotencyKey: string;
   auditId: string;
+  designVersionId?: string;
+  designSha256?: string | null;
   revision: string;
   [PROPOSAL_CONTENT_KEYS.proposalText]: ProposalText | null;
   [PROPOSAL_CONTENT_KEYS.callScript]: CallScript | null;

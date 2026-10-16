@@ -1,167 +1,100 @@
-import Link from "next/link";
-import { Flash, Forbidden, ReturnTo } from "@/components/ops/ui";
-import { inlineFormClass, StatusBadge } from "@/components/ops/ui-parts-1";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Muted, PageHeader, Section } from "@/components/ui/page";
-import { NativeSelect } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { notFound } from "next/navigation";
+import { ReadyCandidates } from "@/components/ops/ready-candidates";
+import { ReviewWorkspace } from "@/components/ops/review-workspace";
+import { Flash, Forbidden, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
-import { sellableIssueText } from "@/lib/ops/commands";
-import { fmtDate, label, PIPELINE_LABEL, PROPOSAL_STATUS_LABEL, rewardRuleText, yen } from "@/lib/ops/format";
-import { listReviewQueue } from "@/lib/ops/queries";
-import { sellableIssues } from "@/lib/ops/sellable";
+import { isUuid } from "@/lib/ops/form";
+import { getCompanyDetail, listCompanies, listReviewQueue } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
-import { makeSellableAction, reviewProposalAction } from "../actions";
 
 export default async function ReviewPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const r = await listReviewQueue(getDb(), await getCurrentActor());
-  if (!r.ok) return <Forbidden />;
-  const { inReview, readyCandidates, activeTerms } = r.value;
-  const here = "/ops/review";
+  const sp = await searchParams;
+  const actor = await getCurrentActor();
+  const db = getDb();
+  const queue = await listReviewQueue(db, actor);
+  const companies = await listCompanies(db, actor);
+  if (!queue.ok || !companies.ok) return <Forbidden />;
+  const requested = first(sp, "company");
+  if (requested && !isUuid(requested)) notFound();
+  const selectedId =
+    requested ??
+    queue.value.inReview[0]?.companyId ??
+    queue.value.readyCandidates[0]?.company.id ??
+    companies.value[0]?.id;
+  const detail = selectedId ? await getCompanyDetail(db, actor, selectedId) : null;
+  if (detail && (!detail.ok || !detail.value)) notFound();
+  const d = detail?.ok ? detail.value : null;
+  const selectedVersion = first(sp, "version");
+  if (selectedVersion && !d?.proposalVersions.some((v) => v.id === selectedVersion)) notFound();
+  const version = selectedVersion
+    ? d?.proposalVersions.find((v) => v.id === selectedVersion)
+    : (d?.proposalVersions.find((v) => v.status === "in_review") ?? d?.proposalVersions[0]);
+  const pending = new Set(queue.value.inReview.map((row) => row.companyId));
+  const items = companies.value
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      location: [c.prefecture, c.city].filter(Boolean).join(" "),
+      industry: c.industry,
+      status: c.pipelineStatus,
+      pending: pending.has(c.id),
+    }))
+    .sort((a, b) => Number(b.pending) - Number(a.pending));
   return (
     <>
-      <PageHeader title="2. 診断・生成・レビュー・営業可能化" />
-      <Flash searchParams={await searchParams} />
-
-      <Section
-        title={`運営確認待ちの提案版（${inReview.length}件）`}
-        description="診断の根拠・生成内容・デモは企業の詳細で確認できます。根拠のない実績等が含まれていないかを確かめてから承認します（AC-08）。"
-      >
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>企業</TableHead>
-              <TableHead>版</TableHead>
-              <TableHead>状態</TableHead>
-              <TableHead>生成日時</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {inReview.map(({ v, companyId, companyName }) => (
-              <TableRow key={v.id}>
-                <TableCell className="min-w-40 font-medium">
-                  <Link href={`/ops/companies/${companyId}?returnTo=${encodeURIComponent(here)}`}>{companyName}</Link>
-                </TableCell>
-                <TableCell className="tabular-nums">v{v.version}</TableCell>
-                <TableCell>
-                  <StatusBadge value={v.status} labels={PROPOSAL_STATUS_LABEL} />
-                </TableCell>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(v.createdAt)}</TableCell>
-                <TableCell className="min-w-80">
-                  <div className="grid gap-2">
-                    <form action={reviewProposalAction} className={inlineFormClass}>
-                      <ReturnTo path={here} />
-                      <input type="hidden" name="proposalVersionId" value={v.id} />
-                      <input type="hidden" name="decision" value="approved" />
-                      <Input name="note" placeholder="確認メモ（任意）" className="h-8 flex-1 basis-48" />
-                      <Button type="submit" variant="success" size="sm">
-                        承認
-                      </Button>
-                    </form>
-                    <form action={reviewProposalAction} className={inlineFormClass}>
-                      <ReturnTo path={here} />
-                      <input type="hidden" name="proposalVersionId" value={v.id} />
-                      <input type="hidden" name="decision" value="rejected" />
-                      <Input
-                        name="note"
-                        placeholder="差し戻しの理由（必須）"
-                        required
-                        className="h-8 flex-1 basis-48"
-                      />
-                      <Button type="submit" variant="outline" size="sm">
-                        差し戻し
-                      </Button>
-                    </form>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Section>
-
-      <Section title="営業可能化を待つ候補（承認済みの版がある）">
-        {activeTerms.length === 0 ? (
-          <Alert variant="warning">
-            <AlertDescription>
-              <p>
-                有効な販売条件・報酬条件の版がありません。<Link href="/ops/contracts">商品条件</Link>
-                で作成してください。
-              </p>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>企業</TableHead>
-              <TableHead>準備段階</TableHead>
-              <TableHead>最新の版</TableHead>
-              <TableHead>営業可能にできない理由</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {readyCandidates.map(({ company, latestVersion }) => {
-              const issues = sellableIssues({ company, latestVersion, terms: null }).filter(
-                (i) => i !== "terms_not_selected",
-              );
-              return (
-                <TableRow key={company.id}>
-                  <TableCell className="min-w-40 font-medium">
-                    <Link href={`/ops/companies/${company.id}?returnTo=${encodeURIComponent(here)}`}>
-                      {company.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge value={company.pipelineStatus} labels={PIPELINE_LABEL} />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {latestVersion
-                      ? `v${latestVersion.version}（${label(PROPOSAL_STATUS_LABEL, latestVersion.status)}）`
-                      : "—"}
-                  </TableCell>
-                  <TableCell className={issues.length > 0 ? "min-w-40 text-warning-foreground" : "min-w-40"}>
-                    {issues.map(sellableIssueText).join(" / ") || "—"}
-                  </TableCell>
-                  <TableCell className="min-w-72">
-                    <form action={makeSellableAction} className={inlineFormClass}>
-                      <ReturnTo path={here} />
-                      <input type="hidden" name="companyId" value={company.id} />
-                      <NativeSelect
-                        name="productTermsId"
-                        defaultValue=""
-                        aria-label="条件の版"
-                        className="h-8 w-auto max-w-full"
-                      >
-                        <option value="">条件の版を選ぶ</option>
-                        {activeTerms.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.version}：{yen(t.price)} / {rewardRuleText(t.rewardRule)}
-                          </option>
-                        ))}
-                      </NativeSelect>
-                      <Button type="submit" size="sm">
-                        営業可能にする
-                      </Button>
-                    </form>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-        <p>
-          <Muted>条件が未設定の版を選んだ場合や、最新の版が未承認の場合は、サーバー側で拒否されます。</Muted>
-        </p>
-      </Section>
+      <div className="review-flash">
+        <Flash searchParams={sp} />
+      </div>
+      <ReviewWorkspace
+        key={`${selectedId}-${version?.id ?? "none"}`}
+        items={items}
+        selected={
+          d
+            ? {
+                id: d.company.id,
+                pipelineStatus: d.company.pipelineStatus,
+                name: d.company.name,
+                location: [d.company.prefecture, d.company.city].filter(Boolean).join(" "),
+                industry: d.company.industry,
+                address: d.company.address,
+                phone: d.company.representativePhone,
+                officialStatus: d.company.officialSiteStatus,
+                website: d.websites.find((w) => w.isPrimary)?.url ?? d.websites[0]?.url ?? null,
+                assets: d.imageAssets.map(({ asset }) => ({
+                  id: asset.id,
+                  name: asset.label,
+                  allowed: asset.allowSalesDemo,
+                  confirmed: !!asset.confirmedAt,
+                })),
+                versions: d.proposalVersions.map((v) => ({
+                  id: v.id,
+                  version: v.version,
+                  status: v.status,
+                  note: v.reviewNote,
+                  date: v.createdAt.toISOString(),
+                })),
+                version: version
+                  ? {
+                      id: version.id,
+                      version: version.version,
+                      status: version.status,
+                      content: version.content,
+                      hasDemo: !!version.demoArtifactDir,
+                      note: version.reviewNote,
+                    }
+                  : null,
+              }
+            : null
+        }
+      />
+      <details className="review-ready">
+        <summary>販売条件を選んで営業可能にする · {queue.value.readyCandidates.length} 件</summary>
+        <ReadyCandidates />
+      </details>
     </>
   );
 }

@@ -140,3 +140,69 @@ export async function setupEnv(
 
 /** 収集条件：架空企業「株式会社あおば印刷」（公式サイトが確認済みになる）1社だけ */
 export const ONE_COMPANY_CRITERIA = { keywords: ["あおば印刷"] };
+
+/** Explicit human-review fixture for downstream regression tests; gate behavior is tested separately. */
+export async function drainWithDesignApproval(
+  e: Pick<TestEnv, "deps" | "queue" | "runtime">,
+  options: { maxRuns?: number } = {},
+) {
+  const { designVersions, users } = await import("@siteoffer/db");
+  const { attachDesignImage, reviewDesign } = await import("@siteoffer/core");
+  const { normalizeDesignImage } = await import("@siteoffer/generation/images");
+  const { eq } = await import("drizzle-orm");
+  const { default: sharp } = await import("sharp");
+  const { QUEUES, stepKeys } = await import("../src/queues.ts");
+  const results = await e.queue.drain(e.runtime, options);
+  const waiting = results.filter(
+    (r) => r.outcome.status === "succeeded" && (r.outcome.result as { status?: string })?.status === "awaiting_design",
+  );
+  if (!waiting.length) return results;
+  let [user] = await e.deps.db.select().from(users).where(eq(users.email, "fixture-review@example.test"));
+  if (!user)
+    [user] = await e.deps.db
+      .insert(users)
+      .values({
+        email: "fixture-review@example.test",
+        displayName: "Review fixture",
+        passwordHash: "not-a-login",
+        role: "ops",
+      })
+      .returning();
+  const actor = { kind: "ops", userId: user!.id } as const;
+  const image = await normalizeDesignImage(
+    await sharp({ create: { width: 800, height: 600, channels: 3, background: "#eee" } })
+      .png()
+      .toBuffer(),
+  );
+  for (const r of waiting) {
+    if (r.outcome.status !== "succeeded") continue;
+    const id = (r.outcome.result as { designVersionId: string }).designVersionId;
+    await attachDesignImage(e.deps.db, e.deps.clock, actor, id, image);
+    await reviewDesign(e.deps.db, e.deps.clock, actor, {
+      id,
+      approve: true,
+      note: "Downstream test fixture",
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+    });
+    const [d] = await e.deps.db.select().from(designVersions).where(eq(designVersions.id, id));
+    const original = [...e.queue.sent]
+      .reverse()
+      .find(
+        (s) =>
+          s.name === QUEUES.proposal &&
+          (s.data as { companyId?: string }).companyId === d!.companyId &&
+          (s.data as { auditId?: string }).auditId === d!.auditId,
+      );
+    const payload = {
+      ...original!.data,
+      companyId: d!.companyId,
+      auditId: d!.auditId,
+      revision: (original!.data as { revision?: string }).revision ?? "initial",
+      designVersionId: id,
+    };
+    await e.queue.send(QUEUES.proposal, payload, { singletonKey: stepKeys.proposal(payload) });
+  }
+  return [...results.filter((r) => !waiting.includes(r)), ...(await e.queue.drain(e.runtime, options))];
+}

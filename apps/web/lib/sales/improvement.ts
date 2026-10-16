@@ -88,7 +88,7 @@ async function realDirInside(rootReal: string, ...parts: string[]): Promise<stri
   const real = await realpathOrNull(path.join(rootReal, ...parts));
   if (!real || !isInside(rootReal, real)) return null;
   try {
-    return (await stat(real)).isDirectory() ? real : null;
+    return (await stat(/* turbopackIgnore: true */ real)).isDirectory() ? real : null;
   } catch {
     return null;
   }
@@ -102,7 +102,7 @@ async function openRegularFileInside(rootReal: string, candidate: string): Promi
   if (!real || !isInside(rootReal, real)) return { kind: "missing" };
   let handle: FileHandle;
   try {
-    handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(/* turbopackIgnore: true */ real, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch {
     return { kind: "missing" };
   }
@@ -120,7 +120,7 @@ async function artifactRoot(artifactDir: string): Promise<string | null> {
   const real = await realpathOrNull(artifactDir);
   if (!real) return null;
   try {
-    return (await stat(real)).isDirectory() ? real : null;
+    return (await stat(/* turbopackIgnore: true */ real)).isDirectory() ? real : null;
   } catch {
     return null;
   }
@@ -231,7 +231,7 @@ export async function readSiteFile(artifactDir: string, rawRest: string): Promis
   if (!isInside(root, real)) return notFound("outside_root");
 
   let target = real;
-  if ((await stat(real)).isDirectory()) {
+  if ((await stat(/* turbopackIgnore: true */ real)).isDirectory()) {
     if (!parsed.trailingSlash) return { kind: "redirect_index" };
     target = path.join(real, "index.html");
   } else if (parsed.trailingSlash) {

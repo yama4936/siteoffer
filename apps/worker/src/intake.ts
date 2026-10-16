@@ -3,9 +3,11 @@ import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
 import { type Actor, addDeliveryVersion, canTransition, transitionDelivery } from "@siteoffer/core";
 import {
   companies,
+  contentEntries,
   contracts,
   deliveries,
   deliveryVersions,
+  designVersions,
   discoveryJobs,
   proposalVersions,
   siteAudits,
@@ -14,6 +16,9 @@ import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
 import { and, asc, desc, eq, gte } from "drizzle-orm";
 import type { WorkerDeps } from "./deps.ts";
+import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
+import { readStepState } from "./ledger.ts";
+import { stopDiscoveryJob } from "./pipeline/discovery.ts";
 import { type DiscoveryPayload, QUEUES, stepKeys } from "./queues.ts";
 
 /**
@@ -42,13 +47,26 @@ export function createIntakeState(): IntakeState {
 /** status=queued の収集ジョブを収集キューへ送る。送ったジョブIDを返す */
 export async function intakeDiscoveryJobs(deps: WorkerDeps, state: IntakeState): Promise<string[]> {
   const rows = await deps.db
-    .select({ id: discoveryJobs.id })
+    .select({ id: discoveryJobs.id, provider: discoveryJobs.provider })
     .from(discoveryJobs)
     .where(eq(discoveryJobs.status, "queued"))
     .orderBy(asc(discoveryJobs.createdAt))
     .limit(BATCH);
   const sent: string[] = [];
   for (const r of rows) {
+    if (!deps.discovery.providers[r.provider]) {
+      await stopDiscoveryJob(
+        deps,
+        r.id,
+        `取得元「${r.provider}」はこのワーカーで有効になっていません。設定後に再試行してください`,
+      );
+      continue;
+    }
+    const ledger = await readStepState(deps.db, stepKeys.discovery({ discoveryJobId: r.id }));
+    if (ledger.gaveUp) {
+      await stopDiscoveryJob(deps, r.id, ledger.lastFailure ?? "前回の処理が停止しました。再試行してください");
+      continue;
+    }
     if (state.sentDiscovery.has(r.id)) continue;
     const payload: DiscoveryPayload = { discoveryJobId: r.id };
     await deps.queue.send(QUEUES.discovery, payload, { singletonKey: stepKeys.discovery(payload) });
@@ -132,7 +150,41 @@ async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string):
     ...(deps.generation.limits ? { limits: deps.generation.limits } : {}),
     ...(deps.generation.limiter ? { limiter: deps.generation.limiter } : {}),
   };
-  const input = await deps.buildGenerationInput(db, { company, audit });
+  let updatesUrl: string | undefined;
+  try {
+    updatesUrl = contentSiteUrl(company.id, "delivery");
+  } catch {
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "記事配信先の設定が不正です。SITEOFFER_CONTENT_ORIGIN を確認してください",
+    };
+  }
+  const [article] = await db
+    .select({ id: contentEntries.id })
+    .from(contentEntries)
+    .where(eq(contentEntries.companyId, company.id))
+    .limit(1);
+  if (article && !updatesUrl)
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "記事があるため、納品前に SITEOFFER_CONTENT_ORIGIN の設定が必要です",
+    };
+  let input = await deps.buildGenerationInput(db, { company, audit });
+  if (contract.proposalVersionId) {
+    const [selected] = await db
+      .select()
+      .from(proposalVersions)
+      .where(eq(proposalVersions.id, contract.proposalVersionId));
+    const designId = (selected?.content as { designVersionId?: string } | null)?.designVersionId;
+    if (designId) {
+      const [design] = await db.select().from(designVersions).where(eq(designVersions.id, designId));
+      if (!design || design.companyId !== company.id || design.status !== "approved")
+        return { deliveryId: d.id, status: "failed", reason: "契約した提案の承認済みデザインがありません" };
+      input = await withDesignReference(input, design, path.join(deps.deliveryArtifactRoot, d.id, "reference"));
+    }
+  }
   const gen = await runGenerationJob(genDeps, {
     idempotencyKey: `${round}:delivery_site`,
     companyId: company.id,
@@ -147,7 +199,10 @@ async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string):
 
   const workDir = path.join(deps.deliveryArtifactRoot, d.id, String(d.updatedAt.getTime()));
   const built = await deps.siteBuilder.buildDelivery({
-    siteInput: siteGenerationToSiteInput(output, { mode: "delivery" }),
+    siteInput: {
+      ...siteGenerationToSiteInput(output, { mode: "delivery" }),
+      updatesUrl,
+    },
     workDir,
   });
   if (!built.ok) {
@@ -215,6 +270,9 @@ async function findAuditForContract(deps: WorkerDeps, contract: typeof contracts
 
 /** 受付処理を1回実行する（収集 → 納品の順） */
 export async function runIntakeOnce(deps: WorkerDeps, state: IntakeState) {
+  if (deps.discoveryOnly) return { discovery: await intakeDiscoveryJobs(deps, state), deliveries: [] };
+  await intakeDesignBuilds(deps);
+  await processDesignJobs(deps);
   const discovery = await intakeDiscoveryJobs(deps, state);
   const deliveriesResult = await intakeDeliveries(deps, state);
   return { discovery, deliveries: deliveriesResult };

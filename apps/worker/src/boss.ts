@@ -23,10 +23,11 @@ const STEP_QUEUES: Record<StepKind, QueueName> = {
 export async function registerQueues(
   boss: BossLike,
   runtime: WorkerRuntime,
-  config: Pick<WorkerConfig, "policies" | "schedules" | "concurrency">,
+  config: Pick<WorkerConfig, "policies" | "schedules" | "concurrency"> & { discoveryOnly?: boolean },
   logger: Logger,
 ): Promise<void> {
   for (const [kind, name] of Object.entries(STEP_QUEUES) as [StepKind, QueueName][]) {
+    if (config.discoveryOnly && kind !== "discovery") continue;
     const policy = config.policies[kind];
     await boss.createQueue(name, {
       policy: "exclusive",

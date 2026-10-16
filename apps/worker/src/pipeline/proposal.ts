@@ -1,12 +1,14 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
-import { type Clock, recordEvent } from "@siteoffer/core";
-import { companies, type Db, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
+import { type Clock, createDesign, DEFAULT_DESIGN_BRIEF, recordEvent } from "@siteoffer/core";
+import { companies, type Db, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { findGenerationJob, type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { CallScript, Faq, GenerationInput, ProposalText, SiteGenerationOutput } from "@siteoffer/schemas";
 import { and, eq, max, sql } from "drizzle-orm";
 import { emptyProposalContent, type ProposalContent } from "../content.ts";
 import type { JobQueue } from "../deps.ts";
+import { contentSiteUrl, withDesignReference } from "../design.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
 import { type ProposalPayload, type ProposalPayloadInput, proposalPayloadSchema, QUEUES, stepKeys } from "../queues.ts";
 import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
@@ -39,7 +41,10 @@ export interface ProposalStepResult {
  * - 版はステップの冪等キーごとに1つ。再試行は同じ版を使い、成功済みの生成は再実行しない。
  * - 再生成（revision が新しい値）は新しい版になり、既存の版（契約で選ばれた版を含む）は変えない。
  */
-export const proposalStep: StepDefinition<ProposalPayload, ProposalStepResult> = {
+export const proposalStep: StepDefinition<
+  ProposalPayload,
+  ProposalStepResult | { status: "awaiting_design"; designVersionId: string }
+> = {
   queue: QUEUES.proposal,
   kind: "proposal",
   key: stepKeys.proposal,
@@ -55,6 +60,23 @@ export const proposalStep: StepDefinition<ProposalPayload, ProposalStepResult> =
       throw new PreconditionError(`診断の判定が create ではない（${audit.status} / ${audit.decision ?? "なし"}）`);
     }
 
+    if (!payload.designVersionId) {
+      const model = process.env.SITEOFFER_IMAGE_MODEL?.trim();
+      const design = await createDesign(db, clock, PIPELINE_ACTOR, {
+        companyId: company.id,
+        auditId: audit.id,
+        requestKey: `initial:${createHash("sha256").update(key).digest("hex")}`,
+        brief: DEFAULT_DESIGN_BRIEF,
+        source: model && process.env.OPENAI_API_KEY ? "openai" : "import",
+        ...(model ? { model } : {}),
+      });
+      return { status: "awaiting_design", designVersionId: design.id };
+    }
+    const [design] = await db.select().from(designVersions).where(eq(designVersions.id, payload.designVersionId));
+    if (!design || design.companyId !== company.id || design.auditId !== audit.id || design.status !== "approved") {
+      throw new PreconditionError("同じ企業・診断の承認済みデザインが必要です");
+    }
+
     const version = await ensureProposalVersion(db, clock, {
       companyId: company.id,
       auditId: audit.id,
@@ -65,7 +87,17 @@ export const proposalStep: StepDefinition<ProposalPayload, ProposalStepResult> =
       throw new PreconditionError(`提案版 ${version.id} はすでに ${version.status}`);
     }
 
-    const input = await deps.buildGenerationInput(db, { company, audit });
+    await db
+      .update(proposalVersions)
+      .set({
+        content: { ...(version.content as object), designVersionId: design.id, designSha256: design.imageSha256 },
+      })
+      .where(eq(proposalVersions.id, version.id));
+    const input = await withDesignReference(
+      await deps.buildGenerationInput(db, { company, audit }),
+      design,
+      path.join(deps.demoArtifactRoot, company.id, version.id, "reference"),
+    );
     const genDeps: GenerationDeps = {
       db,
       clock,
@@ -93,6 +125,8 @@ export const proposalStep: StepDefinition<ProposalPayload, ProposalStepResult> =
 
     const content: ProposalContent = {
       ...emptyProposalContent({ idempotencyKey: key, auditId: audit.id, revision: payload.revision }),
+      designVersionId: design.id,
+      designSha256: design.imageSha256,
       proposalText: out.proposal_text,
       callScript: out.call_script,
       faq: out.faq,
@@ -104,7 +138,10 @@ export const proposalStep: StepDefinition<ProposalPayload, ProposalStepResult> =
     if (ctx.signal.aborted) throw new Error("制限時間を過ぎたため中断した");
     const workDir = path.join(deps.demoArtifactRoot, company.id, version.id);
     const built = await deps.siteBuilder.buildDemo({
-      siteInput: siteGenerationToSiteInput(out.demo_site, { mode: "demo" }),
+      siteInput: {
+        ...siteGenerationToSiteInput(out.demo_site, { mode: "demo" }),
+        updatesUrl: contentSiteUrl(company.id, "demo"),
+      },
       workDir,
     });
     if (!built.ok) {
@@ -153,7 +190,10 @@ export const proposalStep: StepDefinition<ProposalPayload, ProposalStepResult> =
       reason: `提案の生成が止まった：${reason}`.slice(0, 500),
     });
   },
-  summarize: (r) => ({ proposalVersionId: r.proposalVersionId, version: r.version, status: r.status }),
+  summarize: (r) =>
+    r.status === "awaiting_design"
+      ? r
+      : { proposalVersionId: r.proposalVersionId, version: r.version, status: r.status },
 };
 
 /** 生成を1件実行する。前の試行で成功した同じ用途の生成があれば、それを使う（再実行しない） */

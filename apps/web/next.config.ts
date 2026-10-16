@@ -8,6 +8,11 @@ const rootEnv = fileURLToPath(new URL("../../.env", import.meta.url));
 if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 const config: NextConfig = {
+  // Keep the local demo focused on the application. Compile/runtime errors still surface.
+  devIndicators: false,
+  distDir: process.env.SITEOFFER_NEXT_DIST_DIR || ".next",
+  experimental: { serverActions: { bodySizeLimit: "16mb" } },
+  outputFileTracingIncludes: { "/*": ["./assets/fonts/noto-sans-jp.ttf"] },
   // ワークスペースのパッケージはTypeScriptのまま読み込む
   transpilePackages: [
     "@siteoffer/core",
@@ -16,7 +21,7 @@ const config: NextConfig = {
     "@siteoffer/astro-site",
     "@siteoffer/discovery",
   ],
-  serverExternalPackages: ["pg", "@electric-sql/pglite"],
+  serverExternalPackages: ["pg", "@electric-sql/pglite", "sharp", "@pdf-lib/fontkit"],
 };
 
 export default config;

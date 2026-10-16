@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { OpsShell } from "@/components/ops/ui";
 import { requireUser } from "@/lib/session";
+import "@/components/ops/workspace.css";
 
 export const metadata = { title: "SiteOffer 運営" };
 

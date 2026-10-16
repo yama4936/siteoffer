@@ -172,7 +172,7 @@ describe("runCodexTurn（コンテナ内の処理。SDKの偽物で確認）", (
     expect(seen.turn?.outputSchema).toEqual({ type: "object" });
     expect(seen.input).toEqual([
       { type: "text", text: "p" },
-      { type: "local_image", path: "/work/input/files/shot.png" },
+      { type: "local_image", path: path.resolve("/work/input/files/shot.png") },
     ]);
   });
 

@@ -62,6 +62,7 @@ const copyright = input.footer?.copyright ?? input.company.name;
         </a>
         <nav aria-label="ページ内リンク">
           <ul class="nav-list">
+            {input.updatesUrl && <li><a href={input.updatesUrl}>お知らせ・ブログ</a></li>}
             {sections.map((s) => (
               <li>
                 <a href={`#${s.id}`}><T text={s.heading} /></a>
@@ -149,6 +150,7 @@ const copyright = input.footer?.copyright ?? input.company.name;
           </div>
         </section>
       ))}
+      {input.updatesUrl && <section class="section"><div class="container"><h2>お知らせ・ブログ</h2><p>最新の情報はこちらからご覧いただけます。</p><a href={input.updatesUrl}>お知らせ・ブログを見る</a></div></section>}
     </main>
 
     <footer class="site-footer">

@@ -59,7 +59,7 @@ export default async function DeliveryPage({
 
   return (
     <>
-      <PageHeader title="5. 制作・顧客確認・ドメイン希望" />
+      <PageHeader title="制作・公開" description="制作の進行と顧客確認、公開までを管理します。" />
       <Flash searchParams={await searchParams} />
 
       <Section

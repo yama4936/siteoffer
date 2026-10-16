@@ -3,13 +3,16 @@ import {
   FileSignature,
   LayoutDashboard,
   LogOut,
+  Newspaper,
   PackageCheck,
+  Palette,
   Search,
   Settings,
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
+import { OpsFrame } from "@/components/ops/frame";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -18,73 +21,58 @@ import { Button } from "@/components/ui/button";
 /** 運営画面の共通部品（Tailwind ＋ shadcn/ui） */
 
 export const NAV_ITEMS = [
-  { href: "/ops", label: "概要", icon: LayoutDashboard, exact: true },
-  { href: "/ops/discovery", label: "収集・候補", icon: Search },
-  { href: "/ops/review", label: "診断・レビュー・営業可能化", icon: ClipboardCheck },
-  { href: "/ops/assignments", label: "担当・営業拒否・引き継ぎ", icon: Users },
-  { href: "/ops/contracts", label: "商品条件・契約・入金・報酬", icon: FileSignature },
-  { href: "/ops/delivery", label: "制作・ドメイン希望", icon: PackageCheck },
+  { href: "/ops", label: "今日の仕事", icon: LayoutDashboard, exact: true },
+  { href: "/ops/discovery", label: "企業・案件", icon: Search },
+  { href: "/ops/designs", label: "デザイン・提案書", icon: Palette },
+  { href: "/ops/review", label: "提案レビュー", icon: ClipboardCheck },
+  { href: "/ops/content", label: "お知らせ・ブログ", icon: Newspaper },
+  { href: "/ops/delivery", label: "制作・公開", icon: PackageCheck },
+  { href: "/ops/assignments", label: "担当・引き継ぎ", icon: Users },
+  { href: "/ops/contracts", label: "契約・報酬", icon: FileSignature },
   { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
 ] as const;
 
-const linkBase =
-  "flex items-center gap-2.5 whitespace-nowrap rounded-md px-3 py-2 text-sm no-underline transition-colors hover:no-underline [&_svg]:size-4 [&_svg]:shrink-0";
-
 export function OpsShell({ userName, children }: { userName: string; children: ReactNode }) {
   return (
-    <div className="min-h-dvh lg:grid lg:grid-cols-[16rem_1fr]">
-      <aside className="sticky top-0 z-20 bg-sidebar text-sidebar-foreground lg:h-dvh lg:overflow-y-auto">
-        <div className="flex items-center justify-between gap-2 px-4 py-3 lg:py-5">
-          <Brand label="運営" />
-          <form action={logoutAction} className="lg:hidden">
-            <Button
-              type="submit"
-              variant="ghost"
-              size="sm"
-              className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            >
-              <LogOut />
-              ログアウト
-            </Button>
-          </form>
-        </div>
-        <nav aria-label="運営メニュー" className="flex gap-1 overflow-x-auto px-2 pb-2 lg:flex-col lg:px-3">
-          {NAV_ITEMS.map((item, i) => (
-            <NavLink
-              key={item.href}
-              href={item.href}
-              exact={"exact" in item && item.exact}
-              className={`${linkBase} text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground`}
-              activeClassName="bg-sidebar-accent font-medium text-sidebar-foreground"
-            >
-              <item.icon aria-hidden="true" />
-              <span>
-                {i > 0 ? <span className="mr-1 tabular-nums opacity-60">{i}.</span> : null}
-                {item.label}
-              </span>
-            </NavLink>
-          ))}
-        </nav>
-        <div className="hidden border-sidebar-accent border-t px-4 py-4 lg:block">
-          <div className="mb-2 text-sidebar-muted text-xs">ログイン中</div>
-          <div className="mb-3 truncate text-sm">{userName}（運営）</div>
-          <form action={logoutAction}>
-            <Button
-              type="submit"
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            >
-              <LogOut />
-              ログアウト
-            </Button>
-          </form>
-        </div>
-      </aside>
-      <main className="min-w-0 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
-        <div className="mx-auto max-w-7xl">{children}</div>
-      </main>
-    </div>
+    <OpsFrame
+      userName={userName}
+      sidebar={
+        <>
+          <div className="ops-brand">
+            <Brand />
+            <span>運営ワークスペース</span>
+          </div>
+          <nav aria-label="運営メニュー" className="ops-nav">
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.href}
+                href={item.href}
+                exact={"exact" in item && item.exact}
+                className="ops-nav-link"
+                activeClassName="is-active"
+              >
+                <item.icon aria-hidden="true" />
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+          <div className="ops-account">
+            <span className="ops-avatar">{userName.slice(0, 1)}</span>
+            <div>
+              <strong>{userName}</strong>
+              <small>運営担当</small>
+            </div>
+            <form action={logoutAction}>
+              <Button type="submit" variant="ghost" size="icon" aria-label="ログアウト">
+                <LogOut />
+              </Button>
+            </form>
+          </div>
+        </>
+      }
+    >
+      {children}
+    </OpsFrame>
   );
 }
 

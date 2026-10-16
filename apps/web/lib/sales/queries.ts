@@ -313,6 +313,8 @@ export interface CompanyDetail {
     version: number;
     /** 改善デモの成果物があるか。企業に見せるURLは共有リンク（lib/sales/share.ts）で発行する */
     hasDemo: boolean;
+    hasDesignPdf: boolean;
+    isMock: boolean;
     proposalText: ProposalText | null;
     callScript: CallScript | null;
   } | null;
@@ -468,6 +470,8 @@ export async function getCompanyDetail(
           versionId: pv.id,
           version: pv.version,
           hasDemo: pv.demoArtifactDir !== null,
+          isMock: (pv.content as { generator?: string } | null)?.generator === "mock",
+          hasDesignPdf: typeof (pv.content as { designVersionId?: unknown } | null)?.designVersionId === "string",
           proposalText: pickContent(pv.content, ["proposalText"], proposalTextSchema),
           callScript: pickContent(pv.content, ["callScript"], callScriptSchema),
         }

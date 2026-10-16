@@ -13,7 +13,13 @@ export interface MockSearchResult {
 const DEFAULT_FIXTURE = new URL("../../../../fixtures/discovery/search-results.json", import.meta.url);
 
 export function loadMockSearchResults(path: URL | string = DEFAULT_FIXTURE): Record<string, MockSearchResult[]> {
-  return (JSON.parse(readFileSync(path, "utf8")) as { results: Record<string, MockSearchResult[]> }).results;
+  return (
+    JSON.parse(
+      path === DEFAULT_FIXTURE
+        ? readFileSync(DEFAULT_FIXTURE, "utf8")
+        : readFileSync(/* turbopackIgnore: true */ path, "utf8"),
+    ) as { results: Record<string, MockSearchResult[]> }
+  ).results;
 }
 
 /**

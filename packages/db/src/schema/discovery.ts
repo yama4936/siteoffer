@@ -13,6 +13,7 @@ export const discoveryJobStatus = pgEnum("discovery_job_status", [
 
 export const discoveryJobs = pgTable("discovery_jobs", {
   id: id(),
+  retryOfJobId: uuid("retry_of_job_id").unique(),
   provider: text("provider").notNull(),
   /** 都道府県・市区町村・業種・キーワード・上限など */
   criteria: jsonb("criteria").notNull(),
@@ -53,3 +54,11 @@ export const discoverySources = pgTable(
   },
   (t) => [uniqueIndex("discovery_sources_provider_external").on(t.provider, t.externalId)],
 );
+
+/** Only public capabilities and liveness; never credentials or connection strings. */
+export const workerRuntimes = pgTable("worker_runtimes", {
+  id: uuid("id").primaryKey(),
+  providers: jsonb("providers").$type<string[]>().notNull(),
+  mode: text("mode").notNull(),
+  heartbeatAt: ts("heartbeat_at").notNull(),
+});

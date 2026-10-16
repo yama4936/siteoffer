@@ -30,6 +30,7 @@ let versionAOld: string;
 let tokenA: string;
 let tokenB: string;
 let tokenDelivery: string;
+let fileSymlinks = true;
 
 interface Res {
   status: number;
@@ -85,9 +86,15 @@ beforeAll(async () => {
   await writeFile(dir("a", "images", "logo.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>");
   await writeFile(dir("a", "unknown.bin"), "BIN");
   await writeFile(dir("a", ".env"), "SECRET=1");
-  await symlink(dir("b", "index.html"), dir("a", "link-out")); // 外への絶対リンク
-  await symlink("../b", dir("a", "dir-out")); // 外への相対リンク（ディレクトリ）
-  await symlink("style.css", dir("a", "link-in")); // 中へのリンク（許可）
+  await mkdir(dir("b"), { recursive: true });
+  await symlink(dir("b"), dir("a", "dir-out"), process.platform === "win32" ? "junction" : "dir");
+  try {
+    await symlink(dir("b", "index.html"), dir("a", "link-out"), "file");
+    await symlink("style.css", dir("a", "link-in"), "file");
+  } catch (error) {
+    if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    fileSymlinks = false;
+  }
   // 企業Aの別の版（承認されていない）
   await mkdir(dir("a-old"), { recursive: true });
   await writeFile(dir("a-old", "index.html"), "OLD-VERSION-A");
@@ -150,7 +157,8 @@ describe("配信", () => {
     expect((await send(`/s/${tokenA}/style.css?v=1`)).body).toBe("body{color:red}");
   });
 
-  it("成果物ディレクトリの中を指すシンボリックリンクはたどれる", async () => {
+  it("成果物ディレクトリの中を指すシンボリックリンクはたどれる", async (context) => {
+    if (!fileSymlinks) context.skip("Windows file symlink privilege unavailable");
     expect((await send(`/s/${tokenA}/link-in`)).body).toBe("body{color:red}");
   });
 
@@ -201,7 +209,8 @@ describe("他企業・他の版・成果物の外に到達できない（AC-14�
     "/%c0%ae%c0%ae/b/index.html",
   ];
 
-  it.each(traversals)("%s は 404", async (p) => {
+  it.for(traversals)("%s は 404", async (p, context) => {
+    if (p === "/link-out" && !fileSymlinks) context.skip("Windows file symlink privilege unavailable");
     const n = logs.length;
     const r = await send(`/s/${tokenA}${p}`);
     expect(r.status).toBe(404);

@@ -34,7 +34,14 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
     let status: DiscoveryStepResult["status"] = "already_succeeded";
     if (job.status !== "succeeded") {
       const provider = deps.discovery.providers[job.provider];
-      if (!provider) throw new PreconditionError(`取得元「${job.provider}」はこのワーカーで有効になっていない`);
+      if (!provider) {
+        await stopDiscoveryJob(
+          deps,
+          job.id,
+          `取得元「${job.provider}」はこのワーカーで有効になっていません。設定後に再試行してください`,
+        );
+        throw new PreconditionError(`取得元「${job.provider}」はこのワーカーで有効になっていない`);
+      }
       if (job.status === "running" && ctx.attempt > 1) {
         // このステップの前回の試行が途中で止まり、running のまま残っている
         await failRunningDiscoveryJob(db, clock, {
@@ -64,6 +71,7 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
     const auditQueued = await advanceConfirmedCompanies(deps, job.id);
     return { discoveryJobId: job.id, status, ...counts, auditQueued };
   },
+  onGiveUp: (deps, payload, reason) => stopDiscoveryJob(deps, payload.discoveryJobId, reason),
   summarize: (r) => r,
 };
 
@@ -72,6 +80,7 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
  * すでに site_confirmed の企業（前回の試行で進めたが送る前に止まった等）も送る。診断側の冪等キーで二重実行しない。
  */
 export async function advanceConfirmedCompanies(deps: WorkerDeps, discoveryJobId: string): Promise<string[]> {
+  if (deps.discoveryOnly) return [];
   const { db, clock } = deps;
   const sources = await db
     .selectDistinct({ companyId: discoverySources.companyId })
@@ -156,4 +165,22 @@ export async function recoverStaleDiscoveryJobs(db: Db, clock: Clock, staleAfter
     if (r.ok) recovered.push(j.id);
   }
   return recovered;
+}
+
+export async function stopDiscoveryJob(deps: Pick<WorkerDeps, "db" | "clock">, id: string, reason: string) {
+  await deps.db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(discoveryJobs)
+      .set({ status: "failed", error: reason.slice(0, 1000), finishedAt: deps.clock.now() })
+      .where(and(eq(discoveryJobs.id, id), inArray(discoveryJobs.status, ["queued", "running"])))
+      .returning({ id: discoveryJobs.id });
+    if (row)
+      await recordEvent(tx, deps.clock, {
+        actor: { kind: "system", job: "discovery-recovery" },
+        action: "discovery.job_stopped",
+        targetType: "discovery_job",
+        targetId: id,
+        after: { reason: reason.slice(0, 1000) },
+      });
+  });
 }

@@ -41,6 +41,7 @@ export type DiscoveryProviderName = "fixture" | "nta";
 export interface WorkerConfig {
   /** pg-boss とDBの接続先。値はログに出さない */
   databaseUrl: string | null;
+  discoveryOnly: boolean;
   generator: GeneratorConfig;
   discoveryProviders: DiscoveryProviderName[];
   auditCollector: { kind: "fixture"; collectedPath: string } | { kind: "python" };
@@ -100,6 +101,11 @@ export function resolveWorkerConfig(
     problems.push(`SITEOFFER_GENERATOR は mock か codex（${genKind}）`);
   }
 
+  if (v("NODE_ENV") === "production" && generator.kind === "mock" && v("SITEOFFER_ALLOW_MOCK_DEMO") !== "true")
+    problems.push(
+      "本番モードでは実生成の設定が必要です。公開検証デモの場合だけ SITEOFFER_ALLOW_MOCK_DEMO=true を明示してください",
+    );
+
   const discoveryProviders: DiscoveryProviderName[] = [];
   for (const name of (v("SITEOFFER_DISCOVERY_PROVIDERS") ?? "fixture").split(",").map((s) => s.trim())) {
     if (name === "fixture") discoveryProviders.push("fixture");
@@ -150,6 +156,7 @@ export function resolveWorkerConfig(
   if (problems.length) return err("invalid_config", problems.join("。"));
   return ok({
     databaseUrl: v("DATABASE_URL") ?? null,
+    discoveryOnly: v("SITEOFFER_DISCOVERY_ONLY") === "true",
     generator,
     discoveryProviders,
     auditCollector,
@@ -200,10 +207,11 @@ export function buildWorkerDeps(
       : createFixtureCollector(config.auditCollector.collectedPath);
   return {
     ...base,
+    discoveryOnly: config.discoveryOnly,
     discovery: {
       providers,
       // 検索系APIの製品は未決（24.6）。実装はモックだけ
-      search: new MockSearchProvider(),
+      ...(config.discoveryProviders.every((name) => name === "fixture") ? { search: new MockSearchProvider() } : {}),
     },
     audit: {
       collector,
@@ -228,6 +236,7 @@ export function describeConfig(config: WorkerConfig): Record<string, unknown> {
     generator: config.generator.kind,
     requestedModel: config.generator.kind === "codex" ? config.generator.model : null,
     discoveryProviders: config.discoveryProviders,
+    discoveryOnly: config.discoveryOnly,
     auditCollector: config.auditCollector.kind,
     generationInput: config.generationInput,
     evaluationConfig: path.relative(REPO_ROOT, config.auditOptions.paths.configPath),

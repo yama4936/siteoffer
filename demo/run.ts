@@ -11,9 +11,16 @@
  *   pnpm demo:reset     .data/demo を消してから起動（作り直し）
  */
 import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import net from "node:net";
+import path from "node:path";
 import { DEMO_DATABASE_URL, DEMO_PATHS, DEMO_PORTS, REPO_ROOT } from "./paths.ts";
+
+const realDiscovery = process.argv.includes("--real-discovery");
+if (realDiscovery && existsSync(path.join(REPO_ROOT, ".env"))) process.loadEnvFile(path.join(REPO_ROOT, ".env"));
+if (realDiscovery && !process.env.NTA_APPLICATION_ID?.trim())
+  throw new Error("NTA_APPLICATION_ID を .env に設定してください。既存データは変更していません");
 
 const reset = process.argv.includes("--reset");
 
@@ -37,27 +44,46 @@ function baseEnv(): NodeJS.ProcessEnv {
     "NTA_APPLICATION_ID",
     "PSI_API_KEY",
     "OPENAI_API_KEY",
+    "SITEOFFER_IMAGE_MODEL",
     "CODEX_API_KEY",
     "SITEOFFER_CODEX_AUTH_FILE",
     "SITEOFFER_CODEX_IMAGE",
     "SITEOFFER_CODEX_NETWORK",
     "SITEOFFER_CODEX_MODEL",
   ]) {
-    delete env[k];
+    // An empty value also prevents Next.js from reloading a real key from the root .env.
+    env[k] = "";
   }
+  if (realDiscovery) env.NTA_APPLICATION_ID = process.env.NTA_APPLICATION_ID;
+  env.SITEOFFER_DEMO_MODE = realDiscovery ? "false" : "true";
+  env.SITEOFFER_DISCOVERY_ONLY = realDiscovery ? "true" : "false";
   env.DATABASE_URL = DEMO_DATABASE_URL;
   return env;
 }
 
 function start(name: string, cmd: string, args: string[], env: NodeJS.ProcessEnv): Proc {
   // 子プロセスはそれぞれ別のプロセスグループにする（pnpm・next の孫プロセスまでまとめて止めるため）
-  const child = spawn(cmd, args, { cwd: REPO_ROOT, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  // Windowsではpnpm.cmdを直接spawnできないため、起動元のpnpm CLIをNodeで実行する。
+  const pnpmCli = cmd === "pnpm" ? process.env.npm_execpath : undefined;
+  const child = spawn(pnpmCli ? process.execPath : cmd, pnpmCli ? [pnpmCli, ...args] : args, {
+    cwd: REPO_ROOT,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+    windowsHide: true,
+  });
   const prefix = (chunk: Buffer, out: NodeJS.WriteStream) => {
     for (const line of chunk.toString().split(/\r?\n/)) if (line.trim()) out.write(`[${name}] ${line}\n`);
   };
   child.stdout?.on("data", (c: Buffer) => prefix(c, process.stdout));
   child.stderr?.on("data", (c: Buffer) => prefix(c, process.stderr));
-  const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+  const exited = new Promise<number | null>((resolve) => {
+    child.on("exit", (code) => resolve(code));
+    child.on("error", (error) => {
+      log(`${name} の起動に失敗：${error.message}`);
+      resolve(1);
+    });
+  });
   const p = { name, child, exited };
   procs.push(p);
   exited.then((code) => {
@@ -71,6 +97,14 @@ function start(name: string, cmd: string, args: string[], env: NodeJS.ProcessEnv
 
 function signalGroup(p: Proc, sig: NodeJS.Signals) {
   if (p.child.pid === undefined || p.child.exitCode !== null) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill.exe", ["/PID", String(p.child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.on("error", () => p.child.kill());
+    return;
+  }
   try {
     process.kill(-p.child.pid, sig);
   } catch {
@@ -79,7 +113,7 @@ function signalGroup(p: Proc, sig: NodeJS.Signals) {
 }
 
 async function stopProc(p: Proc, timeoutMs = 20_000) {
-  if (p.child.exitCode !== null || p.child.signalCode !== null) return;
+  if (p.child.pid === undefined || p.child.exitCode !== null || p.child.signalCode !== null) return;
   signalGroup(p, "SIGTERM");
   const timer = setTimeout(() => {
     log(`${p.name} が ${timeoutMs / 1000} 秒で止まらないため強制終了する`);
@@ -123,7 +157,8 @@ async function waitPort(port: number, what: string, timeoutMs: number) {
 
 function runOnce(name: string, cmd: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: REPO_ROOT, env, stdio: "inherit" });
+    const child = spawn(cmd, args, { cwd: REPO_ROOT, env, stdio: "inherit", windowsHide: true });
+    child.on("error", reject);
     child.on("exit", (code) =>
       code === 0 ? resolve() : reject(new Error(`${name} が失敗した（終了コード ${code}）`)),
     );
@@ -153,7 +188,7 @@ async function main() {
   const node = process.execPath;
 
   start("db", node, ["--import", "tsx", "demo/db-server.ts"], env);
-  await waitPort(DEMO_PORTS.db, "デモ用DB", 120_000);
+  await waitPort(DEMO_PORTS.db, "デモ用DB", process.platform === "win32" ? 600_000 : 120_000);
   await runOnce("seed", node, ["--import", "tsx", "demo/seed.ts"], env);
 
   // トンネル等で外から見せるときは、公開URLを DEMO_PUBLIC_PREVIEW_URL で渡す（web側は WEB_BASE_URL、
@@ -170,7 +205,7 @@ async function main() {
   start("worker", "pnpm", ["--filter", "@siteoffer/worker", "start"], {
     ...env,
     SITEOFFER_GENERATOR: "mock",
-    SITEOFFER_DISCOVERY_PROVIDERS: "fixture",
+    SITEOFFER_DISCOVERY_PROVIDERS: realDiscovery ? "nta" : "fixture",
     SITEOFFER_AUDIT_COLLECTOR: "fixture",
     SITEOFFER_EVAL_CONFIG: DEMO_PATHS.evalConfig,
     SITEOFFER_GENERATION_INPUT: "fixture",
@@ -208,7 +243,7 @@ async function main() {
   await waitPort(DEMO_PORTS.web, "web", 180_000);
   log(
     [
-      "起動した（モック・ローカルのみ）",
+      realDiscovery ? "起動した（国税庁の実収集のみ。サイト診断・制作は停止）" : "起動した（モック・ローカルのみ）",
       `  ログイン：http://localhost:${DEMO_PORTS.web}/login`,
       "  デモ用アカウント：別の端末で pnpm demo:users",
       `  プレビュー：${previewOrigin}（共有リンクからだけ閲覧できる。/ は404が正常）`,

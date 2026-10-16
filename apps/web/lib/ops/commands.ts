@@ -38,18 +38,26 @@ import {
 } from "@siteoffer/core";
 import {
   appSettings,
+  auditEvents,
   companies,
   type DbOrTx,
+  designVersions,
+  discoveryJobs,
   imageAssets,
   productTerms,
   proposals,
   proposalVersions,
   websites,
 } from "@siteoffer/db";
-import { createDiscoveryJob } from "@siteoffer/discovery";
-import { and, desc, eq, inArray } from "drizzle-orm";
-import { type OpsActor, requireOps } from "./guard";
-import { type SellableIssue, sellableIssues } from "./sellable";
+import {
+  createDiscoveryJob,
+  discoveryAvailability,
+  discoveryCriteriaSchema,
+  NtaCorporateNumberProvider,
+} from "@siteoffer/discovery";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { type OpsActor, requireOps } from "./guard.ts";
+import { type SellableIssue, sellableIssues } from "./sellable.ts";
 
 export interface OpsDeps {
   db: DbOrTx;
@@ -136,6 +144,17 @@ export async function createDiscoveryJobByOps(
   if (!(DISCOVERY_PROVIDERS as readonly string[]).includes(input.provider)) {
     return err("invalid_provider", "取得元が不正です");
   }
+  const parsed = discoveryCriteriaSchema.safeParse(input.criteria);
+  if (!parsed.success)
+    return err("invalid_criteria", "収集条件が不正です。市区町村を指定する場合は都道府県も入力してください");
+  if (input.provider === "nta-corporate-number") {
+    if (parsed.data.industry)
+      return err("invalid_criteria", "国税庁APIでは業種で絞り込めません。業種を空欄にしてください");
+    const request = new NtaCorporateNumberProvider().buildRequests(parsed.data, clock.now());
+    if (!request.ok) return err(request.error, request.message);
+  }
+  const capability = (await discoveryAvailability(db, clock)).find((p) => p.provider === input.provider);
+  if (!capability?.ready) return err("provider_unavailable", capability?.reason ?? "取得元を確認できません");
   const r = await createDiscoveryJob(db, clock, {
     provider: input.provider,
     criteria: input.criteria,
@@ -144,6 +163,58 @@ export async function createDiscoveryJobByOps(
   });
   if (!r.ok) return err(r.error, r.message ?? "収集条件が不正です");
   return ok({ jobId: r.value.jobId });
+}
+
+/** Keep failed history and use a fresh queue key. Lock and unique parent prevent double-click duplicates. */
+export async function retryDiscoveryJobByOps(
+  deps: OpsDeps,
+  actor: Actor | null,
+  jobId: string,
+): Promise<Result<{ jobId: string }, string>> {
+  const auth = requireOps(actor);
+  if (!auth.ok) return auth;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(jobId)) return err("not_found");
+  return deps.db.transaction(async (tx) => {
+    const key = `discovery:${jobId}`;
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${key}`}))`);
+    const [old] = await tx.select().from(discoveryJobs).where(eq(discoveryJobs.id, jobId)).for("update");
+    if (!old) return err("not_found");
+    if (old.status !== "failed") return err("invalid_state", "失敗した収集ジョブだけを再試行できます");
+    const [existing] = await tx
+      .select({ jobId: discoveryJobs.id })
+      .from(discoveryJobs)
+      .where(eq(discoveryJobs.retryOfJobId, jobId));
+    if (existing) return ok(existing);
+    const events = await tx
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.targetType, "worker_step"), eq(auditEvents.targetId, key)));
+    const started = events.filter((e) => e.action === "worker.step_started").length;
+    const finished = events.filter((e) => ["worker.step_failed", "worker.step_succeeded"].includes(e.action)).length;
+    if (started > finished) return err("invalid_state", "自動再試行が実行中です。完了してから再試行してください");
+    const next = await createDiscoveryJobByOps({ db: tx, clock: deps.clock }, actor, {
+      provider: old.provider,
+      criteria: old.criteria,
+    });
+    if (!next.ok) return next;
+    // Retire the old queue key before creating an independent retry chain.
+    await recordEvent(tx, deps.clock, {
+      actor: auth.value,
+      action: "worker.step_failed",
+      targetType: "worker_step",
+      targetId: key,
+      after: { queue: "discovery", attempt: started, final: true, reason: "運営による再試行ジョブに引き継ぎました" },
+    });
+    await tx.update(discoveryJobs).set({ retryOfJobId: jobId }).where(eq(discoveryJobs.id, next.value.jobId));
+    await recordEvent(tx, deps.clock, {
+      actor: auth.value,
+      action: "discovery.job_retried",
+      targetType: "discovery_job",
+      targetId: jobId,
+      after: { newJobId: next.value.jobId },
+    });
+    return next;
+  });
 }
 
 export interface CandidatePatch {
@@ -420,6 +491,34 @@ export async function reviewProposalVersion(
     if (!auth.ok) return fail(auth.error, auth.message);
     const before = row.version;
     if (before.status !== "in_review") return fail("invalid_state", "運営確認待ちの版だけをレビューできます");
+    if (input.decision === "approved") {
+      const content = before.content as {
+        designVersionId?: string;
+        designSha256?: string;
+        demoCheck?: { ok?: boolean };
+      } | null;
+      if (content?.designVersionId) {
+        const [design] = await tx.select().from(designVersions).where(eq(designVersions.id, content.designVersionId));
+        if (
+          design?.status !== "approved" ||
+          design.companyId !== row.companyId ||
+          design.auditId !== before.auditId ||
+          design.imageSha256 !== content.designSha256
+        )
+          return fail("design_not_approved", "この提案版のデザイン承認を確認できません");
+        if (!content.demoCheck?.ok || !before.demoArtifactDir)
+          return fail("quality_check_failed", "サイトのビルド・検査を完了してください");
+        const required = [
+          "会社情報の確認",
+          "画像の利用許諾",
+          "PC・スマホの表示",
+          "リンク・問い合わせ導線",
+          "既存機能の引き継ぎ",
+        ];
+        if (!note?.startsWith("確認済み：") || required.some((check) => !note.split("\n")[0]?.includes(check)))
+          return fail("review_incomplete", "公開前の5項目を確認してください");
+      }
+    }
     const now = clock.now();
     const [after] = await tx
       .update(proposalVersions)

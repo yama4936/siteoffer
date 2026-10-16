@@ -19,15 +19,15 @@ const run = (exitCode: number | null, extra: Partial<{ stderr: string; timedOut:
 describe("設定", () => {
   it("成果物の既定の保存先は reports/app（Gitに入らない）。環境変数で変えられる", () => {
     const d = defaultAuditOptions({}, { paths: { repoRoot: "/repo" } });
-    expect(d.paths.artifactRoot).toBe("/repo/reports/app");
-    expect(d.paths.configPath).toBe("/repo/config/site-evaluation.json");
+    expect(d.paths.artifactRoot).toBe(path.join("/repo", "reports/app"));
+    expect(d.paths.configPath).toBe(path.join("/repo", "config/site-evaluation.json"));
     expect(d.psi).toBe(false);
     const e = defaultAuditOptions({ SITEOFFER_AUDIT_ARTIFACT_DIR: "/data/audits" }, { paths: { repoRoot: "/repo" } });
     expect(e.paths.artifactRoot).toBe("/data/audits");
   });
 
   it("Pythonは常に -I（隔離モード）で起動する", () => {
-    expect(pythonArgv("/s/collect.py", ["a"])).toEqual(["-I", "/s/collect.py", "a"]);
+    expect(pythonArgv("/s/collect.py", ["a"])).toEqual(["-I", "-X", "utf8", "/s/collect.py", "a"]);
   });
 });
 
@@ -53,7 +53,7 @@ describe("parseCollectRun", () => {
   it("成功：collected.json を返す", () => {
     const r = parseCollectRun(run(0), JSON.stringify({ target_url: "https://a.example/" }), "/o");
     expect(r.ok && r.value.kind).toBe("collected");
-    if (r.ok && r.value.kind === "collected") expect(r.value.collectedPath).toBe("/o/collected.json");
+    if (r.ok && r.value.kind === "collected") expect(r.value.collectedPath).toBe(path.join("/o", "collected.json"));
   });
 
   it("fatal は評価不能の材料として返す（終了コード2〜4）", () => {
@@ -109,7 +109,7 @@ describe("artifactDirFor", () => {
 
   it("ドメイン・時刻・診断IDの単位で分け、www. を除く", () => {
     expect(artifactDirFor("/root", "https://www.Kakuu-Koumuten.example/a", id, at)).toBe(
-      "/root/kakuu-koumuten.example/20261014T060000Z-0123abcd",
+      path.resolve("/root", "kakuu-koumuten.example", "20261014T060000Z-0123abcd"),
     );
   });
 
@@ -122,7 +122,7 @@ describe("artifactDirFor", () => {
 
   it("保存先の外に出ない（IPv6などパスに使えない文字は置き換える）", () => {
     const d = artifactDirFor("/root", "http://[::1]:8080/", id, at);
-    expect(d.startsWith("/root/")).toBe(true);
+    expect(d.startsWith(path.resolve("/root") + path.sep)).toBe(true);
     expect(path.relative("/root", d).split(path.sep)).toHaveLength(2);
   });
 });

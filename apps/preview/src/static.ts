@@ -71,7 +71,7 @@ async function openRegularFile(rootReal: string, candidate: string): Promise<Res
   if (!isInside(rootReal, real)) return notFound("outside_root");
   let handle: FileHandle;
   try {
-    handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(/* turbopackIgnore: true */ real, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch {
     return notFound("open_failed");
   }
@@ -92,15 +92,15 @@ export async function resolveArtifactFile(artifactDir: string, rawRest: string):
   if (!parsed) return notFound("bad_path");
   const rootReal = await realpathOrNull(artifactDir);
   if (!rootReal) return notFound("root_missing");
-  const rootStat = await stat(rootReal);
+  const rootStat = await stat(/* turbopackIgnore: true */ rootReal);
   if (!rootStat.isDirectory()) return notFound("root_not_dir");
 
-  const candidate = path.join(rootReal, ...parsed.segments);
+  const candidate = path.join(/* turbopackIgnore: true */ rootReal, ...parsed.segments);
   const real = await realpathOrNull(candidate);
   if (!real) return notFound("missing");
   if (!isInside(rootReal, real)) return notFound("outside_root");
 
-  const s = await stat(real);
+  const s = await stat(/* turbopackIgnore: true */ real);
   if (s.isDirectory()) {
     if (!parsed.trailingSlash && parsed.segments.length > 0) return { kind: "redirect_dir" };
     return openRegularFile(rootReal, path.join(real, "index.html"));

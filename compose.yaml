@@ -36,10 +36,14 @@ services:
     environment:
       DATABASE_URL: postgres://siteoffer:${POSTGRES_PASSWORD}@db:5432/siteoffer
       NEXT_TELEMETRY_DISABLED: "1"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SITEOFFER_IMAGE_MODEL: ${SITEOFFER_IMAGE_MODEL:-}
       PREVIEW_ORIGIN: http://localhost:${PREVIEW_PORT:-3200}
     command: ["pnpm", "--filter", "@siteoffer/web", "exec", "next", "dev", "--hostname", "0.0.0.0", "--port", "3100"]
     ports:
       - "127.0.0.1:${WEB_PORT:-3100}:3100"
+    volumes:
+      - ./reports:/app/reports:ro
     depends_on:
       init:
         condition: service_completed_successfully
@@ -57,6 +61,9 @@ services:
     environment:
       DATABASE_URL: postgres://siteoffer:${POSTGRES_PASSWORD}@db:5432/siteoffer
       SITEOFFER_GENERATOR: mock
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SITEOFFER_IMAGE_MODEL: ${SITEOFFER_IMAGE_MODEL:-}
+      SITEOFFER_CONTENT_ORIGIN: ${SITEOFFER_CONTENT_ORIGIN:-}
       SITEOFFER_DISCOVERY_PROVIDERS: fixture
       SITEOFFER_AUDIT_COLLECTOR: fixture
       SITEOFFER_DEMO_ARTIFACT_DIR: /app/reports/app/demos

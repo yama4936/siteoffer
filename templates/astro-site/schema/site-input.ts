@@ -170,6 +170,11 @@ export const SiteInputSchema = z
     /** デモ表示の宛名（「〇〇様向け」）。省略時は company.name。 */
     demo: z.object({ recipientName: z.string().min(1).optional() }).optional(),
     /** フッターの著作権表記の名義。省略時は company.name。 */
+    updatesUrl: z
+      .string()
+      .url()
+      .refine((v) => /^https?:\/\//.test(v), "HTTP(S) URLが必要")
+      .optional(),
     footer: z.object({ copyright: z.string().min(1).optional() }).optional(),
   })
   .superRefine((v, ctx) => {

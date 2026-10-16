@@ -34,7 +34,7 @@ export default async function SettingsPage({
 
   return (
     <>
-      <PageHeader title="6. 設定・操作履歴" />
+      <PageHeader title="設定・操作履歴" description="運用ルールと変更の履歴を確認します。" />
       <Flash searchParams={sp} />
 
       <Section

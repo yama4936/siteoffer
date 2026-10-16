@@ -1,5 +1,9 @@
+import { systemClock } from "@siteoffer/core";
+import { discoveryAvailability } from "@siteoffer/discovery";
 import { Filter, Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
+import { DiscoveryStatus } from "@/components/ops/discovery-status";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
 import { StatusBadge } from "@/components/ops/ui-parts-1";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -52,10 +56,13 @@ export default async function DiscoveryPage({
   ).toString();
   const here = `/ops/discovery${qs ? `?${qs}` : ""}`;
 
+  const capabilities = await discoveryAvailability(getDb(), systemClock);
   return (
     <>
-      <PageHeader title="1. 収集条件・ジョブ・候補" />
+      <PageHeader title="企業・案件" description="候補の収集と企業情報を管理します。" />
       <Flash searchParams={sp} />
+      <DiscoveryRefresh />
+      <DiscoveryStatus capabilities={capabilities} />
 
       <Card className="mb-8 max-w-3xl">
         <CardHeader>
@@ -72,9 +79,16 @@ export default async function DiscoveryPage({
             <ReturnTo path="/ops/discovery" />
             <Label className="grid gap-1.5 sm:col-span-2">
               取得元
-              <NativeSelect name="provider" defaultValue="fixture" className="font-normal">
+              <NativeSelect
+                name="provider"
+                defaultValue={capabilities.find((p) => p.ready)?.provider ?? ""}
+                className="font-normal"
+              >
+                <option value="" disabled>
+                  利用できる取得元を選択
+                </option>
                 {DISCOVERY_PROVIDERS.map((p) => (
-                  <option key={p} value={p}>
+                  <option key={p} value={p} disabled={!capabilities.find((c) => c.provider === p)?.ready}>
                     {p === "fixture" ? "fixture（架空企業・開発用）" : `${p}（国税庁法人番号API）`}
                   </option>
                 ))}
@@ -105,7 +119,7 @@ export default async function DiscoveryPage({
               <Input name="limit" type="number" min={1} max={1000} className="font-normal" />
             </Label>
             <div className="sm:col-span-2">
-              <Button type="submit">
+              <Button type="submit" disabled={!capabilities.some((p) => p.ready)}>
                 <Plus />
                 ジョブを登録
               </Button>
@@ -124,8 +138,8 @@ export default async function DiscoveryPage({
         }
       >
         <p className="text-muted-foreground text-sm">
-          登録したジョブ（待機）はワーカーが拾って実行します（数秒〜）。実行後は状態が「成功」などに変わり、
-          収集した企業が下の候補一覧に増えます。診断・提案の生成もワーカーが続けて行い、企業の状態が進みます。
+          収集結果と停止理由は自動更新されます。成功しても0件の場合があります。
+          国税庁の収集結果は法人情報です。公式サイトの確認・診断・デザイン承認は、それぞれの段階で進めます。
           {jobs.value.some((j) => j.status === "queued" || j.status === "running") ? (
             <strong className="font-medium text-warning-foreground"> 処理中のジョブがあります。</strong>
           ) : null}

@@ -75,6 +75,24 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
     return { boss, queues, handlers, schedules };
   }
 
+  it("収集専用モードは診断・制作のキューを購読しない", async () => {
+    const f = fakeBoss();
+    await registerQueues(
+      f.boss,
+      { run: async () => ({ status: "invalid_payload", reason: "unused" }) },
+      {
+        policies: DEFAULT_POLICIES,
+        schedules: { ...DEFAULT_SCHEDULES },
+        concurrency: { discovery: 1, audit: 1, proposal: 1 },
+        discoveryOnly: true,
+      },
+      silentLogger,
+    );
+    expect(f.handlers[QUEUES.discovery]).toBeDefined();
+    expect(f.handlers[QUEUES.audit]).toBeUndefined();
+    expect(f.handlers[QUEUES.proposal]).toBeUndefined();
+  });
+
   it("処理のキューは exclusive・再試行上限・制限時間付きで作り、retry の結果は例外にして再試行させる", async () => {
     const f = fakeBoss();
     let next: RunOutcome = { status: "retry", key: "k", attempt: 1, reason: "一時的な失敗" };

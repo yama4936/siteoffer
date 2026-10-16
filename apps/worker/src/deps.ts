@@ -28,6 +28,7 @@ export const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () 
 
 /** ワーカーの処理が使う部品。設定（config.ts）から組み立てる。テストでは個別に差し替える */
 export interface WorkerDeps {
+  discoveryOnly?: boolean;
   db: Db;
   clock: Clock;
   queue: JobQueue;

@@ -1,11 +1,8 @@
-import { ChevronRight, Info } from "lucide-react";
 import Link from "next/link";
-import { SharedStateBadges } from "@/components/sales/views";
+import { CompanyDirectory } from "@/components/sales/directory";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Field } from "@/components/ui/label";
-import { EmptyState, Muted, PageHeader } from "@/components/ui/page";
 import { NativeSelect } from "@/components/ui/select";
 import { getDb } from "@/lib/db";
 import { getCompanyFilterOptions, listSellableCompanies, parseCompanySort } from "@/lib/sales/queries";
@@ -18,7 +15,7 @@ type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
 /** 一覧での総合点の表示。点数のない企業は低評価に見せない */
-const scoreLabel = (c: { totalScore: string | null; scoreConfirmed: boolean | null }) =>
+const _scoreLabel = (c: { totalScore: string | null; scoreConfirmed: boolean | null }) =>
   c.totalScore === null ? "総合点なし" : `総合点 ${c.totalScore}${c.scoreConfirmed === false ? "（未確定）" : ""}`;
 
 /**
@@ -41,109 +38,65 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Se
   ]);
   const cities = options.cities.filter((c) => !filter.prefecture || c.prefecture === filter.prefecture);
 
-  return (
-    <>
-      <PageHeader title="企業一覧" />
-      <Alert variant="info" className="mb-6">
-        <Info />
-        <AlertDescription>
-          ここに掲載している企業は、運営がホームページを調査して用意した営業候補です。企業からの発注ではなく、成約を約束するものでもありません。
-        </AlertDescription>
-      </Alert>
-
-      <Card className="mb-6 py-4">
-        <CardContent className="px-4">
-          <form
-            method="get"
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr_auto] lg:items-end"
-            aria-label="絞り込み"
-          >
-            <Field label="都道府県" htmlFor="filter-prefecture">
-              <NativeSelect id="filter-prefecture" name="prefecture" defaultValue={filter.prefecture}>
-                <option value="">すべて</option>
-                {options.prefectures.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Field>
-            <Field label="市区町村" htmlFor="filter-city">
-              <NativeSelect id="filter-city" name="city" defaultValue={filter.city}>
-                <option value="">すべて</option>
-                {cities.map((c) => (
-                  <option key={`${c.prefecture}/${c.city}`} value={c.city}>
-                    {filter.prefecture ? c.city : `${c.prefecture ?? ""} ${c.city}`}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Field>
-            <Field label="業種" htmlFor="filter-industry">
-              <NativeSelect id="filter-industry" name="industry" defaultValue={filter.industry}>
-                <option value="">すべて</option>
-                {options.industries.map((i) => (
-                  <option key={i} value={i}>
-                    {i}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Field>
-            <Field label="並び順" htmlFor="filter-sort">
-              <NativeSelect id="filter-sort" name="sort" defaultValue={filter.sort}>
-                <option value="score_asc">評価点の低い順</option>
-                <option value="score_desc">評価点の高い順</option>
-                <option value="region">地域順</option>
-              </NativeSelect>
-            </Field>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="submit">絞り込む</Button>
-              <Link href="/sales/companies" className={buttonVariants({ variant: "ghost" })}>
-                条件をクリア
-              </Link>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      {!list.ok ? (
-        <Alert variant="destructive" role="alert">
-          <AlertDescription>一覧を表示できませんでした。</AlertDescription>
-        </Alert>
-      ) : list.value.length === 0 ? (
-        <EmptyState>条件に合う営業候補はありません。</EmptyState>
-      ) : (
-        <>
-          <Muted className="mb-3 block">{list.value.length}件</Muted>
-          <ul className="grid gap-3 md:grid-cols-2">
-            {list.value.map((c) => (
-              <li
-                key={c.id}
-                className="flex flex-col gap-2 rounded-xl border bg-card p-4 shadow-xs transition-colors hover:border-primary/40"
-              >
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                  <Link href={`/sales/companies/${c.id}`} className="font-semibold text-base hover:underline">
-                    <strong>{c.name}</strong>
-                  </Link>{" "}
-                  <SharedStateBadges assignment={c.assignment} suppression={c.suppression} />
-                </div>
-                <div className="text-muted-foreground text-sm">
-                  {[c.prefecture, c.city].filter(Boolean).join(" ") || "地域不明"} ／ {c.industry ?? "業種不明"}
-                </div>
-                <div className="text-sm tabular-nums">{scoreLabel(c)}</div>
-                {c.myAssignmentId && (
-                  <Link
-                    href={`/sales/assignments/${c.myAssignmentId}`}
-                    className={buttonVariants({ variant: "outline", size: "sm", className: "mt-1 w-fit" })}
-                  >
-                    担当案件を開く
-                    <ChevronRight />
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </>
+  return !list.ok ? (
+    <Alert variant="destructive">
+      <AlertDescription>一覧を表示できませんでした。</AlertDescription>
+    </Alert>
+  ) : (
+    <CompanyDirectory
+      items={list.value}
+      initialQuery={one(sp.q)}
+      filters={
+        <form
+          method="get"
+          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr_auto] lg:items-end"
+          aria-label="絞り込み"
+        >
+          <Field label="都道府県" htmlFor="filter-prefecture">
+            <NativeSelect id="filter-prefecture" name="prefecture" defaultValue={filter.prefecture}>
+              <option value="">すべて</option>
+              {options.prefectures.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="市区町村" htmlFor="filter-city">
+            <NativeSelect id="filter-city" name="city" defaultValue={filter.city}>
+              <option value="">すべて</option>
+              {cities.map((c) => (
+                <option key={`${c.prefecture}/${c.city}`} value={c.city}>
+                  {filter.prefecture ? c.city : `${c.prefecture ?? ""} ${c.city}`}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="業種" htmlFor="filter-industry">
+            <NativeSelect id="filter-industry" name="industry" defaultValue={filter.industry}>
+              <option value="">すべて</option>
+              {options.industries.map((i) => (
+                <option key={i} value={i}>
+                  {i}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="並び順" htmlFor="filter-sort">
+            <NativeSelect id="filter-sort" name="sort" defaultValue={filter.sort}>
+              <option value="score_asc">評価点の低い順</option>
+              <option value="score_desc">評価点の高い順</option>
+              <option value="region">地域順</option>
+            </NativeSelect>
+          </Field>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit">絞り込む</Button>
+            <Link href="/sales/companies" className={buttonVariants({ variant: "ghost" })}>
+              条件をクリア
+            </Link>
+          </div>
+        </form>
+      }
+    />
   );
 }

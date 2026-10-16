@@ -15,6 +15,7 @@ import { discoveryStep } from "../src/pipeline/discovery.ts";
 import { proposalStep, requestRegeneration } from "../src/pipeline/proposal.ts";
 import { QUEUES, stepKeys } from "../src/queues.ts";
 import {
+  drainWithDesignApproval,
   fakeSiteBuilder,
   generationShapedEvaluation,
   ONE_COMPANY_CRITERIA,
@@ -53,7 +54,7 @@ describe("パイプラインを最後まで通す", () => {
     const fake = fakeSiteBuilder();
     env = await setupEnv({ threshold: 100, siteBuilder: fake.builder });
     const jobId = await startDiscovery(env);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
 
     expect(results.map((r) => [r.name, r.outcome.status])).toEqual([
       [QUEUES.discovery, "succeeded"],
@@ -113,7 +114,7 @@ describe("パイプラインを最後まで通す", () => {
     const fake = fakeSiteBuilder();
     env = await setupEnv({ threshold: null, siteBuilder: fake.builder });
     await startDiscovery(env);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     expect(results.map((r) => r.name)).toEqual([QUEUES.discovery, QUEUES.audit]);
     const audit = results[1]!.outcome;
     expect(audit).toMatchObject({ status: "succeeded", result: { decision: "hold", proposalQueued: false } });
@@ -130,7 +131,7 @@ describe("パイプラインを最後まで通す", () => {
   it("hold の診断で生成を直接投入しても、生成しない（再試行もしない）", async () => {
     env = await setupEnv({ threshold: null });
     await startDiscovery(env);
-    await env.queue.drain(env.runtime);
+    await drainWithDesignApproval(env);
     const c = await company(env);
     const [audit] = await env.db.select().from(siteAudits).where(eq(siteAudits.companyId, c.id));
     const r = await executeStep(env.deps, proposalStep, { companyId: c.id, auditId: audit!.id, revision: "initial" });
@@ -143,7 +144,7 @@ describe("パイプラインを最後まで通す", () => {
   it("公式サイトが確認済みでない企業は診断へ送らない", async () => {
     env = await setupEnv({ threshold: 100 });
     await startDiscovery(env, { prefecture: "愛知県" });
-    const results = await env.queue.drain(env.runtime, { maxRuns: 200 });
+    const results = await drainWithDesignApproval(env, { maxRuns: 200 });
     const audited = new Set(
       results
         .filter((r) => r.name === QUEUES.audit)
@@ -169,7 +170,7 @@ describe("二重投入", () => {
     // キュー側：同じ singletonKey の未処理ジョブは1件に保つ
     await env.queue.send(QUEUES.discovery, { discoveryJobId: jobId }, { singletonKey: `discovery:${jobId}` });
     expect(env.queue.size).toBe(1);
-    await env.queue.drain(env.runtime);
+    await drainWithDesignApproval(env);
 
     // 処理側：キューを通らない二重実行も冪等キーで止める
     const again = await executeStep(env.deps, discoveryStep, { discoveryJobId: jobId });
@@ -229,7 +230,7 @@ describe("失敗・再試行・上限", () => {
     });
     env = await setupEnv({ threshold: 100, generator });
     await startDiscovery(env);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     expect(results.map((r) => `${r.name}:${r.outcome.status}`)).toEqual([
       `${QUEUES.discovery}:succeeded`,
       `${QUEUES.audit}:succeeded`,
@@ -246,7 +247,12 @@ describe("失敗・再試行・上限", () => {
     expect((vs[0]!.content as ProposalContent).failure).toContain("proposal_text");
 
     const [audit] = await env.db.select().from(siteAudits).where(eq(siteAudits.companyId, c.id));
-    const key = stepKeys.proposal({ companyId: c.id, auditId: audit!.id, revision: "initial" });
+    const key = stepKeys.proposal({
+      companyId: c.id,
+      auditId: audit!.id,
+      revision: "initial",
+      designVersionId: (vs[0]!.content as ProposalContent).designVersionId,
+    });
     const state = await readStepState(env.db, key);
     expect(state).toMatchObject({ attempts: 3, gaveUp: true, succeeded: false, running: false });
     expect(state.lastFailure).toContain("schema_violation");
@@ -267,6 +273,7 @@ describe("失敗・再試行・上限", () => {
 
     // 上限に達したキーは、もう一度投入しても実行しない
     const again = await executeStep(env.deps, proposalStep, {
+      designVersionId: (vs[0]!.content as ProposalContent).designVersionId,
       companyId: c.id,
       auditId: audit!.id,
       revision: "initial",
@@ -278,7 +285,7 @@ describe("失敗・再試行・上限", () => {
     const fake = fakeSiteBuilder({ ok: false, retryable: true });
     env = await setupEnv({ threshold: 100, siteBuilder: fake.builder, policies: { proposal: { maxAttempts: 2 } } });
     await startDiscovery(env);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     expect(results.slice(-2).map((r) => r.outcome.status)).toEqual(["retry", "failed"]);
     expect(fake.calls).toHaveLength(2);
     const jobs = await env.db.select().from(generationJobs);
@@ -294,7 +301,7 @@ describe("失敗・再試行・上限", () => {
       policies: { proposal: { timeoutMs: 200, maxAttempts: 1 } },
     });
     await startDiscovery(env);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     const last = results.at(-1)!.outcome;
     expect(last.status).toBe("failed");
     if (last.status === "failed") expect(last.reason).toContain("StepTimeoutError");
@@ -304,7 +311,7 @@ describe("失敗・再試行・上限", () => {
     const fake = fakeSiteBuilder({ ok: false, retryable: false });
     env = await setupEnv({ threshold: 100, siteBuilder: fake.builder });
     await startDiscovery(env);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     expect(results.at(-1)!.outcome).toMatchObject({ status: "failed", attempt: 1 });
     expect((await versions(env))[0]!.status).toBe("failed");
   });
@@ -314,7 +321,7 @@ describe("再生成", () => {
   it("再生成は新しい版として保存し、契約で使われた版（承認済み）は変えない", async () => {
     env = await setupEnv({ threshold: 100 });
     await startDiscovery(env);
-    await env.queue.drain(env.runtime);
+    await drainWithDesignApproval(env);
     const c = await company(env);
     const [v1] = await versions(env);
     // 運営が承認し、営業可能にした（契約で選ばれる版）
@@ -323,7 +330,7 @@ describe("再生成", () => {
 
     const payload = await requestRegeneration(env.queue, { companyId: c.id, auditId: v1!.auditId! });
     expect(payload.revision).toMatch(/^regen:/);
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     expect(results.map((r) => r.outcome.status)).toEqual(["succeeded"]);
 
     const vs = await versions(env);

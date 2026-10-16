@@ -21,14 +21,16 @@ export interface PythonRunner {
 
 const MAX_OUTPUT = 1_000_000;
 /** 子プロセスへ引き継ぐ環境変数。APIキー等の秘密値を既定で渡さないため、許可リストにする */
-const PASS_ENV = ["PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR"];
+const PASS_ENV = ["PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SystemRoot", "TEMP", "TMP"];
 
 /** 引数の組み立て。常に -I（隔離モード：PYTHONPATH・ユーザーsite・カレントディレクトリを読まない）で起動する */
 export function pythonArgv(script: string, args: string[]): string[] {
-  return ["-I", script, ...args];
+  return ["-I", "-X", "utf8", script, ...args];
 }
 
-export function createPythonRunner(pythonBin = "python3"): PythonRunner {
+export function createPythonRunner(
+  pythonBin = process.env.SITEOFFER_PYTHON_BIN?.trim() || (process.platform === "win32" ? "python" : "python3"),
+): PythonRunner {
   return {
     run(script, args, opts) {
       return new Promise((resolve) => {

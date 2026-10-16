@@ -27,6 +27,7 @@ import {
   recordPaymentByOps,
   rejectContractByOps,
   releaseAssignmentByOps,
+  retryDiscoveryJobByOps,
   reviewProposalVersion,
   scheduleRewardByOps,
   setOfficialSiteStatus,
@@ -86,7 +87,7 @@ export async function createDiscoveryJobAction(fd: FormData) {
   await run(
     fd,
     (d, a) => createDiscoveryJobByOps(d, a, { provider: str(fd, "provider"), criteria }),
-    "収集ジョブを登録しました。ワーカーが処理します（数秒〜）。この画面を再読み込みすると、ジョブの状態と候補の企業が最新になります",
+    "稼働中の収集ワーカーを確認して登録しました。状態は自動更新されます。処理時間は取得元と件数によって変わります",
   );
 }
 
@@ -471,5 +472,13 @@ export async function reactivateUserAction(fd: FormData) {
     fd,
     (d, a) => reactivateSalesUser(d, a, { userId: str(fd, "userId"), reason: str(fd, "reason") }),
     "利用停止を解除しました",
+  );
+}
+
+export async function retryDiscoveryJobAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => retryDiscoveryJobByOps(d, a, str(fd, "jobId")),
+    "同じ条件の再試行ジョブを登録しました。収集一覧で新しいジョブを確認できます",
   );
 }

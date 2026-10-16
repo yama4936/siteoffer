@@ -1,0 +1,68 @@
+"use client";
+
+import { ChevronRight, Search } from "lucide-react";
+import { usePathname } from "next/navigation";
+import type { ReactNode } from "react";
+
+const titles: Record<string, string> = {
+  discovery: "企業・案件",
+  companies: "企業・案件",
+  review: "提案レビュー",
+  designs: "デザイン・提案書",
+  content: "お知らせ・ブログ",
+  assignments: "担当・引き継ぎ",
+  contracts: "契約・報酬",
+  delivery: "制作・公開",
+  settings: "設定・操作履歴",
+};
+
+export function OpsFrame({
+  userName,
+  sidebar,
+  children,
+  workspaceRole = "ops",
+}: {
+  userName: string;
+  sidebar: ReactNode;
+  children: ReactNode;
+  workspaceRole?: "ops" | "sales";
+}) {
+  const pathname = usePathname();
+  const sales = workspaceRole === "sales";
+  const review = pathname === "/ops/review" || (sales && /^\/sales\/companies\/[^/]+$/.test(pathname));
+  const salesTitles: Record<string, string> = {
+    companies: review ? "提案・サイト比較" : "企業・案件",
+    assignments: "担当案件",
+    earnings: "実績・報酬",
+  };
+  const title = (sales ? salesTitles : titles)[pathname.split("/")[2] ?? ""] ?? "今日の仕事";
+  return (
+    <div className={`ops-app ${sales ? "sales-app" : ""}`}>
+      <a href="#ops-main" className="ops-skip">
+        本文へ移動
+      </a>
+      <aside className="ops-sidebar">{sidebar}</aside>
+      <div className="ops-body">
+        <header className="ops-topbar">
+          <div className="ops-breadcrumb">
+            <span>{sales ? "営業ワークスペース" : "ワークスペース"}</span>
+            <ChevronRight size={14} />
+            <strong>{title}</strong>
+          </div>
+          <form action={sales ? "/sales/companies" : "/ops/discovery"} className="ops-search">
+            <Search size={17} />
+            <input name="q" aria-label="企業・案件を検索" placeholder="企業名・案件を検索" />
+            <button type="submit">検索</button>
+          </form>
+          <div className="ops-top-user">
+            <span className="ops-avatar">{userName.slice(0, 1)}</span>
+            <span>{userName}</span>
+          </div>
+        </header>
+        <main id="ops-main" className={review ? "ops-main ops-main-review" : "ops-main"}>
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

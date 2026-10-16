@@ -13,7 +13,7 @@ import { afterAll, expect, it } from "vitest";
 import type { ProposalContent } from "../src/content.ts";
 import { QUEUES } from "../src/queues.ts";
 import { createAstroSiteBuilder } from "../src/site-builder.ts";
-import { ONE_COMPANY_CRITERIA, setupEnv, type TestEnv } from "./helpers.ts";
+import { drainWithDesignApproval, ONE_COMPANY_CRITERIA, setupEnv, type TestEnv } from "./helpers.ts";
 
 let env: TestEnv | undefined;
 afterAll(async () => {
@@ -25,7 +25,7 @@ it("収集 → 診断（create）→ 生成 → Astroでデモをビルド・検
   const job = await createDiscoveryJob(env.db, env.clock, { provider: "fixture", criteria: ONE_COMPANY_CRITERIA });
   if (!job.ok) throw new Error(job.error);
   await env.queue.send(QUEUES.discovery, { discoveryJobId: job.value.jobId }, { singletonKey: "d" });
-  const results = await env.queue.drain(env.runtime);
+  const results = await drainWithDesignApproval(env);
   const last = results.at(-1)!;
   if (last.outcome.status !== "succeeded") throw new Error(JSON.stringify(last.outcome));
   expect(results.map((r) => r.outcome.status)).toEqual(["succeeded", "succeeded", "succeeded"]);

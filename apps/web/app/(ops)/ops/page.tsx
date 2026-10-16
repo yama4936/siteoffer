@@ -25,7 +25,7 @@ export default async function OpsHome({
   ];
   return (
     <>
-      <PageHeader title="運営の概要" description="対応が必要な件数と、各画面への入り口です。" />
+      <PageHeader title="今日の仕事" description="確認待ちの案件から、次の一歩へ。" />
       <Flash searchParams={await searchParams} />
       <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {rows.map(([label, n, href]) => (

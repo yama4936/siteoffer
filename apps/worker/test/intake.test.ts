@@ -11,6 +11,7 @@ import { createDeliveryForContract, fixedClock, transitionDelivery } from "@site
 import {
   assignments,
   companies,
+  contentEntries,
   contracts,
   type Db,
   deliveries,
@@ -23,7 +24,7 @@ import {
 import { createTestDb } from "@siteoffer/db/testing";
 import { createDiscoveryJob } from "@siteoffer/discovery";
 import { asc, eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildWorkerDeps, resolveWorkerConfig } from "../src/config.ts";
 import { silentLogger, type WorkerDeps } from "../src/deps.ts";
 import {
@@ -35,7 +36,7 @@ import {
 } from "../src/intake.ts";
 import { createWorkerRuntime, InMemoryQueue } from "../src/runtime.ts";
 import { createAstroSiteBuilder } from "../src/site-builder.ts";
-import { fakeSiteBuilder } from "./helpers.ts";
+import { drainWithDesignApproval, fakeSiteBuilder } from "./helpers.ts";
 
 const DEMO_ENV = {
   SITEOFFER_GENERATOR: "mock",
@@ -47,13 +48,17 @@ describe("設定", () => {
   it("SITEOFFER_EVAL_CONFIG で評価設定を差し替えられる。既定は config/site-evaluation.json", () => {
     const def = resolveWorkerConfig({});
     if (!def.ok) throw new Error(def.message);
-    expect(def.value.auditOptions.paths.configPath.endsWith("config/site-evaluation.json")).toBe(true);
+    expect(def.value.auditOptions.paths.configPath.replaceAll("\\", "/").endsWith("config/site-evaluation.json")).toBe(
+      true,
+    );
     expect(def.value.generationInput).toBe("default");
     expect(def.value.intakeIntervalMs).toBe(5000);
 
     const demo = resolveWorkerConfig({ ...DEMO_ENV, SITEOFFER_INTAKE_INTERVAL_MS: "2000" });
     if (!demo.ok) throw new Error(demo.message);
-    expect(demo.value.auditOptions.paths.configPath.endsWith("config/site-evaluation.demo.json")).toBe(true);
+    expect(
+      demo.value.auditOptions.paths.configPath.replaceAll("\\", "/").endsWith("config/site-evaluation.demo.json"),
+    ).toBe(true);
     expect(demo.value.generationInput).toBe("fixture");
     expect(demo.value.intakeIntervalMs).toBe(2000);
   });
@@ -135,7 +140,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     await intakeDiscoveryJobs(env.deps, createIntakeState());
     expect(env.queue.size).toBe(1);
 
-    const results = await env.queue.drain(env.runtime);
+    const results = await drainWithDesignApproval(env);
     expect(results.every((r) => r.outcome.status === "succeeded")).toBe(true);
     const [j] = await db.select().from(discoveryJobs).where(eq(discoveryJobs.id, job.value.jobId));
     expect(j!.status).toBe("succeeded");
@@ -244,6 +249,15 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     const [d] = await db.select().from(deliveries).limit(1);
     clock.advance(1000);
     const deps = { ...env.deps, siteBuilder: createAstroSiteBuilder({ timeoutMs: 240_000 }) };
+    const [contract] = await db.select().from(contracts).where(eq(contracts.id, d!.contractId));
+    await db
+      .insert(contentEntries)
+      .values({ companyId: contract!.companyId, slug: "delivery-news", updatedAt: clock.now() });
+    vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "");
+    expect(await intakeDeliveries(deps, createIntakeState())).toMatchObject([
+      { status: "failed", reason: expect.stringContaining("SITEOFFER_CONTENT_ORIGIN") },
+    ]);
+    vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "https://cms.example.test");
     // 前のテストでビルドに失敗した回（building のまま）を、ワーカーの再起動後（状態なし）として拾い直す。生成は前回の結果を使う
     const r = await intakeDeliveries(deps, createIntakeState());
     expect(r).toMatchObject([{ deliveryId: d!.id, status: "version_added", movedToOpsReview: true }]);
@@ -258,6 +272,8 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     const page = await readFile(path.join(dist, "index.html"), "utf8");
     // 納品サイトにはデモの「非公式」表示を入れない
     expect(page).not.toContain("非公式");
+    expect(page).toContain(`https://cms.example.test/published/${contract!.companyId}/news`);
+    vi.unstubAllEnvs();
   }, 300_000);
 });
 

@@ -1,3 +1,4 @@
+export * from "./availability.ts";
 export * from "./judge.ts";
 export * from "./providers/fixture.ts";
 export * from "./providers/nta.ts";

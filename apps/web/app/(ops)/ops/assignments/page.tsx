@@ -47,7 +47,7 @@ export default async function AssignmentsPage({
 
   return (
     <>
-      <PageHeader title="3. 担当状況・営業拒否・引き継ぎ" />
+      <PageHeader title="担当・引き継ぎ" description="営業の担当状況と運営への相談を確認します。" />
       <Flash searchParams={sp} />
 
       <Section

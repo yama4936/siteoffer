@@ -27,7 +27,9 @@ const { drizzle } = fromDb("drizzle-orm/pglite") as DrizzleModule;
 const { migrate } = fromDb("drizzle-orm/pglite/migrator") as MigratorModule;
 
 mkdirSync(DEMO_PATHS.pglite, { recursive: true, mode: 0o700 });
+console.log("[db] PGliteのデータを開いています");
 const db = await PGlite.create(DEMO_PATHS.pglite);
+console.log("[db] マイグレーションを適用しています");
 await migrate(drizzle(db), { migrationsFolder: DEMO_PATHS.migrations });
 // web・プレビュー・ワーカー（pg-boss を含む）の接続を受ける。PGlite は1セッションで、
 // 問い合わせの単位（Syncまで）・トランザクションの単位で1つの接続に専有させる（pglite-server.ts）

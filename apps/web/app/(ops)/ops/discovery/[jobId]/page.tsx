@@ -1,9 +1,16 @@
+import { systemClock } from "@siteoffer/core";
+import { discoveryJobs } from "@siteoffer/db";
+import { discoveryAvailability } from "@siteoffer/discovery";
+import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Forbidden, Json } from "@/components/ops/ui";
+import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
+import { DiscoveryStatus } from "@/components/ops/discovery-status";
+import { Flash, Forbidden, Json, ReturnTo } from "@/components/ops/ui";
 import { StatusBadge } from "@/components/ops/ui-parts-1";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DescriptionList, PageHeader, Section } from "@/components/ui/page";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -12,14 +19,27 @@ import { isUuid } from "@/lib/ops/form";
 import { fmtDate, JOB_STATUS_LABEL } from "@/lib/ops/format";
 import { getDiscoveryJob } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
+import { retryDiscoveryJobAction } from "../../actions";
 
-export default async function DiscoveryJobPage({ params }: { params: Promise<{ jobId: string }> }) {
+export default async function DiscoveryJobPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ jobId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { jobId } = await params;
   if (!isUuid(jobId)) notFound();
   const r = await getDiscoveryJob(getDb(), await getCurrentActor(), jobId);
   if (!r.ok) return <Forbidden />;
   if (!r.value) notFound();
   const { job, sources } = r.value;
+  const capabilities = await discoveryAvailability(getDb(), systemClock);
+  const ready = capabilities.find((p) => p.provider === job.provider)?.ready;
+  const [retry] = await getDb()
+    .select({ id: discoveryJobs.id })
+    .from(discoveryJobs)
+    .where(eq(discoveryJobs.retryOfJobId, job.id));
   const failures = Array.isArray(job.failures)
     ? (job.failures as { externalId?: string | null; stage?: string; reason?: string }[])
     : [];
@@ -37,11 +57,42 @@ export default async function DiscoveryJobPage({ params }: { params: Promise<{ j
           </>
         }
       />
+      <Flash searchParams={await searchParams} />
+      <DiscoveryRefresh />
+      <DiscoveryStatus capabilities={capabilities} />
+      {job.retryOfJobId && (
+        <p className="mb-4">
+          <Link href={`/ops/discovery/${job.retryOfJobId}`}>元の失敗ジョブを確認</Link>
+        </p>
+      )}
+      {retry ? (
+        <p className="mb-4">
+          <Link href={`/ops/discovery/${retry.id}`}>再試行ジョブを開く</Link>
+        </p>
+      ) : (
+        job.status === "failed" && (
+          <form action={retryDiscoveryJobAction} className="mb-6">
+            <ReturnTo path={`/ops/discovery/${job.id}`} />
+            <input type="hidden" name="jobId" value={job.id} />
+            <Button type="submit" disabled={!ready}>
+              同じ条件で再試行
+            </Button>
+            {!ready && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                上の設定を確認し、取得元が受付可能になると再試行できます。
+              </p>
+            )}
+          </form>
+        )
+      )}
       {job.status === "queued" || job.status === "running" ? (
         <Alert variant="warning" className="mb-6">
           <AlertDescription>
             <p>
-              ワーカーが処理します（数秒〜）。<a href={`/ops/discovery/${job.id}`}>再読み込み</a>
+              {ready
+                ? "収集ワーカーに処理を依頼しています。"
+                : "収集ワーカーを確認できないため、今は処理が進みません。上の状態を確認してください。"}
+              <a href={`/ops/discovery/${job.id}`}>再読み込み</a>
               すると状態と件数が最新になります。
             </p>
           </AlertDescription>

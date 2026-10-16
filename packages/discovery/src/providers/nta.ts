@@ -79,11 +79,15 @@ export const PREFECTURE_CODES: Record<string, string> = {
   沖縄県: "47",
 };
 
-export type FetchLike = (url: string) => Promise<{ status: number; text(): Promise<string> }>;
+export type FetchLike = (
+  url: string,
+  init?: { signal: AbortSignal },
+) => Promise<{ status: number; text(): Promise<string> }>;
 
 export interface NtaOptions {
   /** 既定は process.env。テストで差し替える */
   env?: Record<string, string | undefined>;
+  requestTimeoutMs?: number;
   /** 既定は globalThis.fetch。テストでは記録済み応答を返す関数を渡す */
   fetch?: FetchLike;
   /** 取得期間指定のときに遡る日数（最大50。仕様の上限） */
@@ -186,9 +190,11 @@ export class NtaCorporateNumberProvider implements DiscoveryProvider {
   private readonly diffWindowDays: number;
   private readonly kinds: string[];
   private readonly maxDivides: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: NtaOptions = {}) {
     this.env = options.env ?? process.env;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.fetchFn = options.fetch ?? (globalThis.fetch as FetchLike | undefined);
     this.diffWindowDays = Math.min(Math.max(options.diffWindowDays ?? 30, 1), 50);
     this.kinds = options.kinds ?? ["03"];
@@ -281,18 +287,38 @@ export class NtaCorporateNumberProvider implements DiscoveryProvider {
   private async fetchOne(url: string): Promise<Result<NtaResponse, DiscoveryProviderError>> {
     let status: number;
     let body: string;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const res = await this.fetchFn!(url);
-      status = res.status;
-      body = await res.text();
-    } catch (e) {
-      return err("network_error", `国税庁APIへの接続に失敗：${(e as Error).message}`);
+      const result = await Promise.race([
+        (async () => {
+          const res = await this.fetchFn!(url, { signal: controller.signal });
+          return { status: res.status, body: await res.text() };
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error("timeout"));
+          }, this.requestTimeoutMs);
+        }),
+      ]);
+      status = result.status;
+      body = result.body;
+    } catch {
+      return err(
+        "network_error",
+        "国税庁APIへの接続に失敗、または制限時間を超過しました。通信環境を確認して再試行してください",
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     if (status === 200) return parseNtaXml(body);
     if (status === 400) {
       // エラーコード・メッセージがCSVで返る（列の並びは仕様書で例示されていないため、そのまま要約して残す）
-      const line = body.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
-      return err("nta_bad_request", `国税庁APIがリクエストを拒否（400）：${line.slice(0, 200)}`);
+      return err(
+        "nta_bad_request",
+        "国税庁APIがリクエストを拒否しました（400）。所在地・法人名の条件を確認してください",
+      );
     }
     if (status === 403) return err("nta_rate_limited", "国税庁APIのアクセス制限（403）。間隔を空けて再試行する");
     if (status === 404) return err("nta_invalid_application_id", "アプリケーションIDが未登録または無効（404）");

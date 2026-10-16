@@ -52,7 +52,7 @@ export default async function ContractsPage({
 
   return (
     <>
-      <PageHeader title="4. 商品条件・契約確認・入金・報酬" />
+      <PageHeader title="契約・報酬" description="販売条件から契約確認、入金、報酬まで。" />
       <Flash searchParams={await searchParams} />
 
       <Section
