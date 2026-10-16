@@ -165,71 +165,86 @@ export async function claimStep(
     actor: Actor;
     queueClaim?: QueueClaim;
     payload?: unknown;
+    /** 上限に達した古い試行の後始末。外部処理をせず、渡されたtxだけで更新する。 */
+    onFinalFailure?: (tx: DbOrTx, reason: string) => Promise<void>;
   },
 ): Promise<ClaimResult> {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${input.key}`}))`);
-    if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
-      return { kind: "superseded" };
-    const rows = await tx
-      .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
-      .from(auditEvents)
-      .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, input.key)));
-    const state = foldStepEvents(rows);
-    if (state.succeeded) return { kind: "duplicate", state: "succeeded", attempts: state.attempts };
-    if (state.gaveUp) return { kind: "duplicate", state: "gave_up", attempts: state.attempts };
+  return db
+    .transaction(async (tx): Promise<ClaimResult> => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${input.key}`}))`);
+      if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+        return { kind: "superseded" };
+      const rows = await tx
+        .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
+        .from(auditEvents)
+        .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, input.key)));
+      const state = foldStepEvents(rows);
+      if (state.succeeded) return { kind: "duplicate", state: "succeeded", attempts: state.attempts };
+      if (state.gaveUp) return { kind: "duplicate", state: "gave_up", attempts: state.attempts };
 
-    let recoveredStale = false;
-    if (state.running) {
-      const startedAt = state.lastStartedAt?.getTime() ?? 0;
-      const previous = rows.find(
-        (r) => r.action === STEP_ACTIONS.started && (r.after as StepEventAfter)?.attempt === state.attempts,
-      );
-      const oldClaim = parseQueueClaim((previous?.after as StepEventAfter)?.queueClaim);
-      const takeover =
-        oldClaim &&
-        input.queueClaim &&
-        oldClaim.id === input.queueClaim.id &&
-        oldClaim.retryCount < input.queueClaim.retryCount;
-      if (!takeover && clock.now().getTime() - startedAt < input.staleAfterMs) {
-        return { kind: "duplicate", state: "running", attempts: state.attempts };
+      let recoveredStale = false;
+      if (state.running) {
+        const startedAt = state.lastStartedAt?.getTime() ?? 0;
+        const previous = rows.find(
+          (r) => r.action === STEP_ACTIONS.started && (r.after as StepEventAfter)?.attempt === state.attempts,
+        );
+        const oldClaim = parseQueueClaim((previous?.after as StepEventAfter)?.queueClaim);
+        const takeover =
+          oldClaim &&
+          input.queueClaim &&
+          oldClaim.id === input.queueClaim.id &&
+          oldClaim.retryCount < input.queueClaim.retryCount;
+        if (!takeover && clock.now().getTime() - startedAt < input.staleAfterMs) {
+          return { kind: "duplicate", state: "running", attempts: state.attempts };
+        }
+        // 実行中のまま残った試行（プロセスの停止など）を失敗として閉じる
+        const final = state.attempts >= input.maxAttempts;
+        const reason = takeover
+          ? "interrupted: キューが停止した試行を回復し、再試行を開始した"
+          : "stale: 実行中のまま制限時間を過ぎた（ワーカーの停止などで中断された）";
+        if (final) await input.onFinalFailure?.(tx, reason);
+        if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+          throw new StepOwnershipLost();
+        await recordEvent(tx, clock, {
+          actor: input.actor,
+          action: STEP_ACTIONS.failed,
+          targetType: STEP_TARGET,
+          targetId: input.key,
+          after: {
+            queue: input.queue,
+            attempt: state.attempts,
+            reason,
+            final,
+          } satisfies StepEventAfter,
+        });
+        if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+          throw new StepOwnershipLost();
+        if (final) return { kind: "duplicate", state: "gave_up", attempts: state.attempts, closedStale: true };
+        recoveredStale = true;
+      } else if (state.attempts >= input.maxAttempts) {
+        return { kind: "duplicate", state: "gave_up", attempts: state.attempts };
       }
-      // 実行中のまま残った試行（プロセスの停止など）を失敗として閉じる
-      const final = state.attempts >= input.maxAttempts;
+
+      const attempt = state.attempts + 1;
       await recordEvent(tx, clock, {
         actor: input.actor,
-        action: STEP_ACTIONS.failed,
+        action: STEP_ACTIONS.started,
         targetType: STEP_TARGET,
         targetId: input.key,
         after: {
           queue: input.queue,
-          attempt: state.attempts,
-          reason: takeover
-            ? "interrupted: キューが停止した試行を回復し、再試行を開始した"
-            : "stale: 実行中のまま制限時間を過ぎた（ワーカーの停止などで中断された）",
-          final,
+          attempt,
+          ...(input.queueClaim ? { queueClaim: input.queueClaim, payload: input.payload } : {}),
         } satisfies StepEventAfter,
       });
-      if (final) return { kind: "duplicate", state: "gave_up", attempts: state.attempts, closedStale: true };
-      recoveredStale = true;
-    } else if (state.attempts >= input.maxAttempts) {
-      return { kind: "duplicate", state: "gave_up", attempts: state.attempts };
-    }
-
-    const attempt = state.attempts + 1;
-    await recordEvent(tx, clock, {
-      actor: input.actor,
-      action: STEP_ACTIONS.started,
-      targetType: STEP_TARGET,
-      targetId: input.key,
-      after: {
-        queue: input.queue,
-        attempt,
-        ...(input.queueClaim ? { queueClaim: input.queueClaim, payload: input.payload } : {}),
-      } satisfies StepEventAfter,
+      if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+        throw new StepOwnershipLost();
+      return { kind: "claimed", attempt, recoveredStale };
+    })
+    .catch((error: unknown): ClaimResult => {
+      if (error instanceof StepOwnershipLost) return { kind: "superseded" };
+      throw error;
     });
-    return { kind: "claimed", attempt, recoveredStale };
-  });
 }
 
 export async function finishStep(
@@ -242,39 +257,51 @@ export async function finishStep(
     actor: Actor;
     queueClaim?: QueueClaim;
     outcome: { ok: true; summary?: unknown } | { ok: false; reason: string; final: boolean };
+    /** 最終失敗の後始末を終了記録と一緒に確定する。外部処理は禁止。 */
+    onFinalFailure?: (tx: DbOrTx, reason: string) => Promise<void>;
   },
 ): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${input.key}`}))`);
-    const rows = await tx
-      .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
-      .from(auditEvents)
-      .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, input.key)));
-    const state = foldStepEvents(rows);
-    if (!state.running || state.attempts !== input.attempt) return false;
-    if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned) return false;
-    if (input.outcome.ok) {
-      await recordEvent(tx, clock, {
-        actor: input.actor,
-        action: STEP_ACTIONS.succeeded,
-        targetType: STEP_TARGET,
-        targetId: input.key,
-        after: { queue: input.queue, attempt: input.attempt, summary: input.outcome.summary ?? null },
-      });
-    } else {
-      await recordEvent(tx, clock, {
-        actor: input.actor,
-        action: STEP_ACTIONS.failed,
-        targetType: STEP_TARGET,
-        targetId: input.key,
-        after: {
-          queue: input.queue,
-          attempt: input.attempt,
-          reason: input.outcome.reason.slice(0, 2000),
-          final: input.outcome.final,
-        } satisfies StepEventAfter,
-      });
-    }
-    return true;
-  });
+  return db
+    .transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${input.key}`}))`);
+      const rows = await tx
+        .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
+        .from(auditEvents)
+        .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, input.key)));
+      const state = foldStepEvents(rows);
+      if (!state.running || state.attempts !== input.attempt) return false;
+      if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned) return false;
+      if (input.outcome.ok) {
+        await recordEvent(tx, clock, {
+          actor: input.actor,
+          action: STEP_ACTIONS.succeeded,
+          targetType: STEP_TARGET,
+          targetId: input.key,
+          after: { queue: input.queue, attempt: input.attempt, summary: input.outcome.summary ?? null },
+        });
+      } else {
+        if (input.outcome.final) await input.onFinalFailure?.(tx, input.outcome.reason);
+        if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+          throw new StepOwnershipLost();
+        await recordEvent(tx, clock, {
+          actor: input.actor,
+          action: STEP_ACTIONS.failed,
+          targetType: STEP_TARGET,
+          targetId: input.key,
+          after: {
+            queue: input.queue,
+            attempt: input.attempt,
+            reason: input.outcome.reason.slice(0, 2000),
+            final: input.outcome.final,
+          } satisfies StepEventAfter,
+        });
+      }
+      if (input.queueClaim && !(await lockQueueClaim(tx, input.queue, input.queueClaim))?.owned)
+        throw new StepOwnershipLost();
+      return true;
+    })
+    .catch((error: unknown) => {
+      if (error instanceof StepOwnershipLost) return false;
+      throw error;
+    });
 }

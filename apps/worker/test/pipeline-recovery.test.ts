@@ -73,6 +73,31 @@ async function seedAudit() {
 }
 
 describe("キューと親試行の所有権", () => {
+  it.each(["finish", "stale"])("%sの後始末中に実行期限を失った場合は業務更新と終了記録を戻す", async (mode) => {
+    const claim = await queueClaim();
+    const input = { ...claimInput("audit:cleanup-lease", QUEUES.audit, claim), maxAttempts: 1 };
+    await claimStep(e.db, e.clock, input);
+    const onFinalFailure = async (tx: typeof e.db) => {
+      await tx.insert(companies).values({ name: "保存しない後始末" });
+      await tx.execute(sql`update pgboss.job set heartbeat_on = clock_timestamp() - interval '121 seconds'`);
+    };
+    if (mode === "finish") {
+      expect(
+        await finishStep(e.db, e.clock, {
+          ...input,
+          attempt: 1,
+          outcome: { ok: false, reason: "stop", final: true },
+          onFinalFailure,
+        }),
+      ).toBe(false);
+    } else {
+      e.clock.advance(3_600_001);
+      expect(await claimStep(e.db, e.clock, { ...input, onFinalFailure })).toMatchObject({ kind: "superseded" });
+    }
+    expect(await e.db.select().from(companies)).toHaveLength(0);
+    expect(await readStepState(e.db, input.key)).toMatchObject({ running: true, gaveUp: false });
+  });
+
   it("キューの再取得を確認した場合だけ、1時間を待たず次の親試行を開始する", async () => {
     const claim = await queueClaim();
     const input = claimInput("audit:takeover", QUEUES.audit, claim);

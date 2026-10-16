@@ -38,7 +38,7 @@ export interface StepDefinition<P, R> {
   kind: StepKind;
   key(payload: P): string;
   run(deps: WorkerDeps, payload: P, ctx: StepContext): Promise<R>;
-  /** 上限到達・再試行不能で止まったときの後始末（企業の pipelineStatus を failed にする等） */
+  /** 上限到達時の後始末。終了記録と同じトランザクションのdeps.dbを使い、外部処理は行わない。 */
   onGiveUp?(deps: WorkerDeps, payload: P, reason: string): Promise<void>;
   /** 成功時に台帳へ残す要約 */
   summarize?(result: R): unknown;
@@ -81,14 +81,11 @@ export async function executeStep<P, R>(
     staleAfterMs: policy.timeoutMs,
     actor: WORKER_ACTOR,
     ...(options.queueClaim ? { queueClaim: options.queueClaim, payload } : {}),
+    onFinalFailure: (tx, reason) => def.onGiveUp?.({ ...deps, db: tx }, payload, reason) ?? Promise.resolve(),
   });
   if (claim.kind === "superseded") return { status: "superseded", key, attempt: 0 };
   if (claim.kind === "duplicate") {
     deps.logger.info("同じキーのステップは実行しない", { queue: def.queue, key, state: claim.state });
-    if (claim.closedStale) {
-      // 実行中のまま残った最後の試行を閉じた結果、上限に達した場合も後始末を行う
-      await def.onGiveUp?.(deps, payload, "stale: 実行中のまま制限時間を過ぎ、試行回数の上限に達した");
-    }
     return { status: "duplicate", key, state: claim.state, attempts: claim.attempts };
   }
 
@@ -156,11 +153,16 @@ export async function executeStep<P, R>(
       actor: WORKER_ACTOR,
       ...(options.queueClaim ? { queueClaim: options.queueClaim } : {}),
       outcome: { ok: false, reason, final },
+      ...(e instanceof PreconditionError
+        ? {}
+        : {
+            onFinalFailure: (tx: DbOrTx, failure: string) =>
+              def.onGiveUp?.({ ...deps, db: tx }, payload, failure) ?? Promise.resolve(),
+          }),
     });
     if (!recorded) return { status: "superseded", key, attempt };
     if (final) {
       deps.logger.warn("ステップを止めた", { queue: def.queue, key, attempt, reason });
-      if (!(e instanceof PreconditionError)) await def.onGiveUp?.(deps, payload, reason);
       return { status: "failed", key, attempt, reason };
     }
     deps.logger.warn("ステップが失敗した（再試行する）", { queue: def.queue, key, attempt, reason });

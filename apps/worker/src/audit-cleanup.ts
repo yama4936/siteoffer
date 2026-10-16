@@ -8,7 +8,7 @@ export async function closeStepAudits(db: DbOrTx, clock: Clock, key: string) {
     .update(siteAudits)
     .set({
       status: "failed",
-      failureReason: "診断処理の接続が途切れました。元の依頼の再試行・停止状況を確認してください。",
+      failureReason: "診断処理が中断されました。元の依頼の再試行・停止状況を確認してください。",
       updatedAt: clock.now(),
     })
     .where(
