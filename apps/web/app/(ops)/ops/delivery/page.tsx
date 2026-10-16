@@ -413,7 +413,10 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
                   完了すると新しい版が運営確認へ進みます。再登録は不要です。
                 </p>
               )}
-              <Link href="/ops/processing" className="text-sm text-primary underline">
+              <Link
+                href={`/ops/processing?company=${d.companyId}#processing-deliveries`}
+                className="text-sm text-primary underline"
+              >
                 ワーカーの状態を確認
               </Link>
               {hasRevision && d.build?.status !== "running" && (

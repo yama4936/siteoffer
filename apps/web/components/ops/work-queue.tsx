@@ -81,7 +81,7 @@ export function WorkQueue({
           すべて <b>{total}</b>
         </button>
         {groups
-          .filter((g) => g.count > 0)
+          .filter((g) => g.count > 0 || g.key === group)
           .map((g) => (
             <button key={g.key} type="button" aria-pressed={group === g.key} onClick={() => setGroup(g.key)}>
               {g.label} <b>{g.count}</b>

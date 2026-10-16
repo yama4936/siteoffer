@@ -1,14 +1,18 @@
 import { type Actor, type Clock, err, ok } from "@siteoffer/core";
 import {
   companies,
+  contracts,
   type DbOrTx,
+  deliveries,
+  deliveryBuilds,
   designVersions,
   discoveryJobs,
   proposalVersions,
   users,
   workerRuntimes,
 } from "@siteoffer/db";
-import { and, asc, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { currentDeliveryBuild, deliveryNeedsAttention, deliveryProcessingState } from "./delivery-processing";
 import { isUuid } from "./form";
 
 export const PROCESSING_LIMIT = 20;
@@ -114,7 +118,8 @@ export async function getProcessingOverview(
   clock: Clock,
   actor: Actor | null,
   companyId?: string,
-  requestedPages: Partial<Record<"discovery" | "images" | "sites", number>> = {},
+  requestedPages: Partial<Record<"discovery" | "images" | "sites" | "deliveries", number>> = {},
+  deliveryState: "all" | "stopped" = "all",
 ) {
   if (actor?.kind !== "ops" || !isUuid(actor.userId)) return err("forbidden");
   const [u] = await db
@@ -123,6 +128,7 @@ export async function getProcessingOverview(
     .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")));
   if (!u) return err("forbidden");
   if (companyId && !isUuid(companyId)) return err("invalid_input");
+  const now = clock.now();
   const total = sql<number>`count(*) over ()`.mapWith(Number);
   const proposalState = sql<
     string | null
@@ -138,7 +144,14 @@ export async function getProcessingOverview(
     sql`(${proposalState} is null or ${proposalState} = 'generating')`,
     companyId ? eq(companies.id, companyId) : undefined,
   );
-  const [dc, ic, sc] = await Promise.all([
+  const deliveryWhere = and(
+    eq(deliveries.status, "building"),
+    eq(contracts.status, "completed"),
+    isNull(deliveries.lockedVersionId),
+    companyId ? eq(companies.id, companyId) : undefined,
+    deliveryState === "stopped" ? deliveryNeedsAttention(now) : undefined,
+  );
+  const [dc, ic, sc, bc] = await Promise.all([
     companyId
       ? Promise.resolve([{ total: 0 }])
       : db.select({ total: count() }).from(discoveryJobs).where(discoveryWhere),
@@ -152,6 +165,13 @@ export async function getProcessingOverview(
       .from(designVersions)
       .innerJoin(companies, eq(companies.id, designVersions.companyId))
       .where(siteWhere),
+    db
+      .select({ total: count() })
+      .from(deliveries)
+      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+      .innerJoin(companies, eq(companies.id, contracts.companyId))
+      .leftJoin(deliveryBuilds, currentDeliveryBuild)
+      .where(deliveryWhere),
   ]);
   const pagination = (total: number, requested: number | undefined) => {
     const pages = Math.max(1, Math.ceil(total / PROCESSING_LIMIT));
@@ -161,8 +181,9 @@ export async function getProcessingOverview(
     discovery: pagination(dc[0]?.total ?? 0, requestedPages.discovery),
     images: pagination(ic[0]?.total ?? 0, requestedPages.images),
     sites: pagination(sc[0]?.total ?? 0, requestedPages.sites),
+    deliveries: pagination(bc[0]?.total ?? 0, requestedPages.deliveries),
   };
-  const [runtime, discovery, images, sites, company] = await Promise.all([
+  const [runtime, discovery, images, sites, deliveryRows, company] = await Promise.all([
     db.select().from(workerRuntimes).orderBy(desc(workerRuntimes.heartbeatAt)),
     companyId
       ? Promise.resolve([])
@@ -214,18 +235,43 @@ export async function getProcessingOverview(
       .orderBy(asc(designVersions.buildRequestedAt), asc(designVersions.id))
       .limit(PROCESSING_LIMIT)
       .offset((paging.sites.page - 1) * PROCESSING_LIMIT),
+    db
+      .select({
+        id: deliveries.id,
+        companyId: companies.id,
+        companyName: companies.name,
+        status: deliveryBuilds.status,
+        leaseUntil: deliveryBuilds.leaseUntil,
+        since:
+          sql<Date>`case when ${deliveryBuilds.status} = 'running' and (${deliveryNeedsAttention(now)}) then coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}, ${deliveries.updatedAt}) else coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}, ${deliveries.updatedAt}) end`.mapWith(
+            deliveries.updatedAt,
+          ),
+        total,
+      })
+      .from(deliveries)
+      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+      .innerJoin(companies, eq(companies.id, contracts.companyId))
+      .leftJoin(deliveryBuilds, currentDeliveryBuild)
+      .where(deliveryWhere)
+      .orderBy(asc(deliveries.updatedAt), asc(deliveries.id))
+      .limit(PROCESSING_LIMIT)
+      .offset((paging.deliveries.page - 1) * PROCESSING_LIMIT),
     companyId
       ? db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId))
       : Promise.resolve([]),
   ]);
   if (companyId && !company.length) return err("not_found");
   return ok({
-    ...assessWorkers(runtime, clock.now()),
+    ...assessWorkers(runtime, now),
     discovery,
     images,
     sites,
+    deliveries: deliveryRows.map(({ status, leaseUntil, ...row }) => ({
+      ...row,
+      state: deliveryProcessingState(status, leaseUntil, now),
+    })),
     paging,
     companyName: company[0]?.name ?? null,
-    updatedAt: clock.now().toISOString(),
+    updatedAt: now.toISOString(),
   });
 }

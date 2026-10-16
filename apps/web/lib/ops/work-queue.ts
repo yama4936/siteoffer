@@ -1,4 +1,4 @@
-import { type Actor, ok } from "@siteoffer/core";
+import { type Actor, type Clock, err, ok, systemClock } from "@siteoffer/core";
 import {
   assignments,
   companies,
@@ -6,6 +6,7 @@ import {
   contracts,
   type DbOrTx,
   deliveries,
+  deliveryBuilds,
   designVersions,
   discoveryJobs,
   domainPreferences,
@@ -13,10 +14,13 @@ import {
   proposalVersions,
   salesActivities,
   siteAudits,
+  users,
 } from "@siteoffer/db";
 import { discoveryCriteriaSchema } from "@siteoffer/discovery";
 import { and, asc, eq, gt, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { currentDeliveryBuild, deliveryNeedsAttention } from "./delivery-processing";
+import { isUuid } from "./form";
 import { requireOps } from "./guard";
 
 export const WORK_GROUPS = {
@@ -28,6 +32,7 @@ export const WORK_GROUPS = {
   contract: { label: "契約確認", href: "/ops/contracts" },
   delivery_start: { label: "制作の着手", href: "/ops/delivery#delivery-start" },
   domain: { label: "ドメイン確認", href: "/ops/delivery#domain-preferences" },
+  delivery_recovery: { label: "制作の復旧", href: "/ops/processing?deliveryState=stopped#processing-deliveries" },
   delivery: { label: "制作・公開", href: "/ops/delivery" },
   website: { label: "公式サイト確認", href: "/ops/discovery?pipeline=collected" },
   preparation: { label: "デザインの準備", href: "/ops/designs" },
@@ -47,9 +52,16 @@ const PER_GROUP = 20;
 const total = sql<number>`count(*) over ()`.mapWith(Number);
 
 /** Only current, actionable versions enter the queue. Large image/PDF bodies are never selected. */
-export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null) {
+export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Clock = systemClock) {
   const auth = requireOps(actor);
   if (!auth.ok) return auth;
+  if (!isUuid(auth.value.userId)) return err("forbidden");
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, auth.value.userId), eq(users.role, "ops"), eq(users.status, "active")));
+  if (!user) return err("forbidden");
+  const now = clock.now();
   const newerDesign = alias(designVersions, "newer_design");
   const newerProposal = alias(proposalVersions, "newer_proposal");
   const retried = alias(discoveryJobs, "retried");
@@ -66,6 +78,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null) {
     deliveryStart,
     domain,
     consultation,
+    deliveryRecovery,
   ] = await Promise.all([
     db
       .select({
@@ -267,8 +280,51 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null) {
         asc(salesActivities.id),
       )
       .limit(PER_GROUP),
+    db
+      .select({
+        id: deliveries.id,
+        name: companies.name,
+        status: deliveryBuilds.status,
+        since:
+          sql<Date>`case when ${deliveryBuilds.status} = 'failed' then coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.createdAt}) else coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}) end`.mapWith(
+            deliveryBuilds.createdAt,
+          ),
+        total,
+      })
+      .from(deliveries)
+      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+      .innerJoin(companies, eq(companies.id, contracts.companyId))
+      .innerJoin(deliveryBuilds, currentDeliveryBuild)
+      .where(
+        and(
+          eq(contracts.status, "completed"),
+          eq(deliveries.status, "building"),
+          isNull(deliveries.lockedVersionId),
+          deliveryNeedsAttention(now),
+        ),
+      )
+      .orderBy(
+        asc(
+          sql`case when ${deliveryBuilds.status} = 'failed' then coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.createdAt}) else coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}) end`,
+        ),
+        asc(deliveries.id),
+      )
+      .limit(PER_GROUP),
   ]);
   const items: WorkItem[] = [
+    ...deliveryRecovery.map((r) => ({
+      id: r.id,
+      group: "delivery_recovery" as const,
+      title: r.name,
+      reason:
+        r.status === "failed"
+          ? "納品サイトの制作が停止しています。停止理由を確認して再試行できます。"
+          : "納品サイトの制作処理との接続が途切れました。ワーカーの状態を確認して再試行できます。",
+      action: "停止理由・再試行を確認",
+      href: `/ops/delivery?focus=${r.id}#delivery-${r.id}`,
+      since: r.since.toISOString(),
+      priority: 0,
+    })),
     ...failed.map((r) => ({
       id: r.id,
       group: "discovery" as const,
@@ -410,6 +466,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null) {
     assignment,
     consultation,
     contract,
+    delivery_recovery: deliveryRecovery,
     delivery_start: deliveryStart,
     domain,
     delivery,

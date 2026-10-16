@@ -19,12 +19,22 @@ export default async function ProcessingPage({
   const sp = await searchParams;
   const company = typeof sp.company === "string" ? sp.company : undefined;
   if (sp.company !== undefined && !company) notFound();
+  const deliveryState = sp.deliveryState ?? "all";
+  if (deliveryState !== "all" && deliveryState !== "stopped") notFound();
   const db = getDb();
-  const result = await getProcessingOverview(db, systemClock, user.actor, company, {
-    discovery: Number(sp.discoveryPage),
-    images: Number(sp.imagesPage),
-    sites: Number(sp.sitesPage),
-  });
+  const result = await getProcessingOverview(
+    db,
+    systemClock,
+    user.actor,
+    company,
+    {
+      discovery: Number(sp.discoveryPage),
+      images: Number(sp.imagesPage),
+      sites: Number(sp.sitesPage),
+      deliveries: Number(sp.deliveriesPage),
+    },
+    deliveryState,
+  );
   if (!result.ok) notFound();
   const d = result.value;
   const discovery = await discoveryAvailability(db, systemClock);
@@ -65,12 +75,37 @@ export default async function ProcessingPage({
         href: `/ops/designs?company=${j.companyId}&design=${j.id}`,
       })),
     },
+    {
+      name: "納品サイトの制作",
+      kind: "deliveries",
+      ...d.paging.deliveries,
+      rows: d.deliveries.map((j) => ({
+        id: j.id,
+        title: j.companyName,
+        attention: j.state === "failed" || j.state === "interrupted",
+        status: {
+          queued: "開始待ち",
+          running: "制作・検査中",
+          failed: "停止中・再試行が必要",
+          interrupted: "接続が途切れています・再試行が必要",
+          unknown: "制作状態の確認が必要",
+        }[j.state],
+        since: j.since,
+        href: `/ops/delivery?focus=${j.id}#delivery-${j.id}`,
+      })),
+    },
   ];
   function pageHref(kind: string, page: number) {
     const q = new URLSearchParams();
     if (company) q.set("company", company);
+    if (deliveryState === "stopped") q.set("deliveryState", "stopped");
     for (const [key, value] of Object.entries(d.paging)) q.set(`${key}Page`, String(key === kind ? page : value.page));
     return `/ops/processing?${q}#processing-${kind}`;
+  }
+  function deliveryFilterHref(state: "all" | "stopped") {
+    const url = new URL(pageHref("deliveries", 1), "http://local.invalid");
+    url.searchParams.set("deliveryState", state);
+    return `${url.pathname}${url.search}${url.hash}`;
   }
   function workerNotice(w: (typeof d.workers)[number]) {
     return (
@@ -139,7 +174,7 @@ export default async function ProcessingPage({
         )}
       </section>
       <p className="mb-4 text-sm text-muted-foreground">
-        待機中・実行中を古い順に20件ずつ表示します。経過時間だけで失敗には変更しません。失敗した処理の再試行は、各案件の内容と履歴を確認してから行ってください。
+        待機中・実行中を古い順に20件ずつ表示します。納品サイトの制作は停止した依頼も表示します。再試行は案件の内容と停止理由を確認してから行ってください。
       </p>
       {groups
         .filter((g) => !company || g.name !== "収集")
@@ -148,14 +183,32 @@ export default async function ProcessingPage({
             key={g.name}
             id={`processing-${g.kind}`}
             className="mb-6 scroll-mt-24"
-            aria-label={`${g.name}の待機・実行中`}
+            aria-label={g.kind === "deliveries" ? "納品サイトの制作状況" : `${g.name}の待機・実行中`}
           >
             <h2 className="mb-3 text-lg font-semibold">
               {g.name} · {g.total}件
             </h2>
+            {g.kind === "deliveries" && (
+              <nav className="mb-3 flex flex-wrap gap-2 text-sm" aria-label="納品制作の表示対象">
+                {(["all", "stopped"] as const).map((state) => (
+                  <Link
+                    key={state}
+                    href={deliveryFilterHref(state)}
+                    aria-current={deliveryState === state ? "page" : undefined}
+                    className={`rounded-md border px-3 py-2 ${deliveryState === state ? "bg-primary text-primary-foreground" : "text-primary"}`}
+                  >
+                    {state === "all" ? "待機・実行・停止" : "停止した制作だけ"}
+                  </Link>
+                ))}
+              </nav>
+            )}
             {!g.rows.length && (
               <p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
-                待機中・実行中の依頼はありません。
+                {g.kind === "deliveries"
+                  ? deliveryState === "stopped"
+                    ? "停止した制作はありません。"
+                    : "制作中・停止中の納品サイトはありません。"
+                  : "待機中・実行中の依頼はありません。"}
               </p>
             )}
             <ul className="space-y-2">
@@ -166,12 +219,14 @@ export default async function ProcessingPage({
                 >
                   <div className="min-w-0">
                     <h3 className="break-words font-semibold">{j.title}</h3>
-                    <p className="mt-1 text-muted-foreground">
+                    <p
+                      className={`mt-1 ${"attention" in j && j.attention ? "font-medium text-amber-800" : "text-muted-foreground"}`}
+                    >
                       {j.status} · {fmtDate(j.since)}から
                     </p>
                   </div>
                   <Link className="rounded-md border px-3 py-2 text-primary" href={j.href}>
-                    依頼・結果を確認
+                    {"attention" in j && j.attention ? "停止理由・再試行を確認" : "依頼・結果を確認"}
                   </Link>
                 </li>
               ))}
