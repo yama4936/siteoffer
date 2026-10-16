@@ -1,8 +1,6 @@
 "use server";
-import { randomUUID } from "node:crypto";
 import {
   attachDesignImage,
-  createDesign,
   DesignError,
   requestDesignBuild,
   retryDesignBuild,
@@ -13,6 +11,8 @@ import { normalizeDesignImage } from "@siteoffer/generation/images";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
+import type { DesignCreateResult, DesignDraftResult, DesignDraftScope } from "@/lib/ops/design-draft-types";
+import { createDesignFromDraft, DesignDraftConflict, DesignDraftError, saveDesignDraft } from "@/lib/ops/design-drafts";
 import { isUuid } from "@/lib/ops/form";
 import { getCurrentActor } from "@/lib/session";
 
@@ -41,30 +41,59 @@ async function run(
   query.set(error ? "error" : "msg", error || "保存しました");
   redirect(`/ops/designs?${query}`);
 }
-export async function createDesignAction(fd: FormData) {
-  return run(fd, async (actor) => {
-    const source = value(fd, "source") === "openai" ? "openai" : "import";
+function draftError(e: unknown): Exclude<DesignDraftResult, { status: "ok" }> {
+  if (e instanceof DesignDraftConflict) return { status: "conflict", snapshot: e.snapshot };
+  return {
+    status: "error",
+    message:
+      e instanceof DesignDraftError || e instanceof DesignError
+        ? e.message
+        : "保存できませんでした。入力は残っています。接続を確認して再試行してください",
+  };
+}
+export async function saveDesignDraftAction(
+  scope: DesignDraftScope,
+  revision: number,
+  values: unknown,
+): Promise<DesignDraftResult> {
+  try {
+    return {
+      status: "ok",
+      snapshot: await saveDesignDraft(getDb(), systemClock, await getCurrentActor(), scope, revision, values),
+    };
+  } catch (e) {
+    return draftError(e);
+  }
+}
+export async function createDesignAction(
+  scope: DesignDraftScope,
+  input: {
+    revision: number;
+    brief: unknown;
+    requestKey: string;
+    source: "openai" | "import";
+  },
+): Promise<DesignCreateResult> {
+  try {
+    const actor = await getCurrentActor();
+    if (actor?.kind !== "ops") throw new DesignDraftError("運営としてログインしてください");
     const model = process.env.SITEOFFER_IMAGE_MODEL?.trim();
-    if (source === "openai" && (!model || !process.env.OPENAI_API_KEY))
+    if (input.source === "openai" && (!model || !process.env.OPENAI_API_KEY))
       throw new DesignError(
         "画像APIが未設定です。管理者がAPIキーと画像モデルを設定するか、imagegenで作った画像を取り込んでください",
       );
-    const auditId = value(fd, "auditId");
-    if (!isUuid(auditId)) throw new DesignError("対象の診断がありません");
-    const brief = Object.fromEntries(
-      ["objective", "audience", "direction", "scope", "updatePlan"].map((k) => [k, value(fd, k)]),
-    );
-    const key = value(fd, "requestKey") || randomUUID();
-    const row = await createDesign(getDb(), systemClock, actor, {
-      companyId: value(fd, "companyId"),
-      auditId,
-      requestKey: key,
-      brief,
-      source,
+    const id = await createDesignFromDraft(getDb(), systemClock, actor, scope, {
+      ...input,
       ...(model ? { model } : {}),
     });
-    return row.id;
-  });
+    revalidatePath("/ops", "layout");
+    return {
+      status: "ok",
+      url: `/ops/designs?${new URLSearchParams({ company: scope.companyId, design: id, msg: "制作条件を新しい版に保存しました" })}`,
+    };
+  } catch (e) {
+    return draftError(e);
+  }
 }
 export async function uploadDesignAction(fd: FormData) {
   return run(fd, async (actor) => {

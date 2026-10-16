@@ -4,6 +4,7 @@ export * from "./content.ts";
 export * from "./contract.ts";
 export * from "./delivery.ts";
 export * from "./design.ts";
+export * from "./design-draft.ts";
 export * from "./discovery.ts";
 export * from "./domain-preference.ts";
 export * from "./events.ts";

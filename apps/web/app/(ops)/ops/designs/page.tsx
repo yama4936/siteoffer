@@ -1,38 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_DESIGN_BRIEF, DESIGN_LABELS, type DesignBrief } from "@siteoffer/core";
-import { companies, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
-import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
-import { ArrowRight, Download, ImagePlus, Palette, Sparkles } from "lucide-react";
+import { companies, designBriefDrafts, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
+import { and, desc, eq, getTableColumns, isNotNull, sql } from "drizzle-orm";
+import { ArrowRight, Download, Palette } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { DesignBriefForm } from "@/components/ops/design-brief-form";
 import { DesignRefresh, DesignSubmit } from "@/components/ops/design-controls";
 import { Flash, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
+import { loadDesignDraft } from "@/lib/ops/design-drafts";
 import { isUuid } from "@/lib/ops/form";
 import { requireUser } from "@/lib/session";
-import {
-  buildDesignAction,
-  createDesignAction,
-  retryDesignBuildAction,
-  reviewDesignAction,
-  uploadDesignAction,
-} from "./actions";
+import { buildDesignAction, retryDesignBuildAction, reviewDesignAction, uploadDesignAction } from "./actions";
 import "./studio.css";
 
-const fields: [keyof DesignBrief, string][] = [
-  ["objective", "サイトで実現したいこと"],
-  ["audience", "想定するお客様"],
-  ["direction", "デザインの方向性"],
-  ["scope", "制作範囲・確認事項"],
-  ["updatePlan", "更新機能・既存データの引き継ぎ"],
-];
 export default async function DesignPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireUser("ops");
+  const user = await requireUser("ops");
   const db = getDb();
   const sp = await searchParams;
   const candidates = await db
@@ -51,17 +40,38 @@ export default async function DesignPage({
     .from(designVersions)
     .where(eq(designVersions.companyId, companyId))
     .orderBy(desc(designVersions.version));
-  const selectedId = first(sp, "design");
-  const selected = selectedId ? versions.find((d) => d.id === selectedId) : versions[0];
-  if (selectedId && !selected) notFound();
-  const [audit] = await db
-    .select({ id: siteAudits.id })
-    .from(siteAudits)
-    .where(
-      and(eq(siteAudits.companyId, companyId), eq(siteAudits.status, "evaluated"), eq(siteAudits.decision, "create")),
-    )
-    .orderBy(desc(siteAudits.createdAt))
-    .limit(1);
+  const selectedId = first(sp, "design") ?? versions[0]?.id ?? "new";
+  const selected = selectedId === "new" ? undefined : versions.find((d) => d.id === selectedId);
+  if (selectedId !== "new" && !selected) notFound();
+  const auditParam = first(sp, "audit");
+  if (auditParam && auditParam !== "none" && !isUuid(auditParam)) notFound();
+  const [auditRecord] =
+    auditParam === "none"
+      ? []
+      : await db
+          .select({ id: siteAudits.id, status: siteAudits.status, decision: siteAudits.decision })
+          .from(siteAudits)
+          .where(
+            and(
+              eq(siteAudits.companyId, companyId),
+              auditParam
+                ? eq(siteAudits.id, auditParam)
+                : and(eq(siteAudits.status, "evaluated"), eq(siteAudits.decision, "create")),
+            ),
+          )
+          .orderBy(desc(siteAudits.createdAt))
+          .limit(1);
+  if (auditParam && auditParam !== "none" && !auditRecord) notFound();
+  // Pin both source version and diagnosis. Background work must not replace an open working copy.
+  if (!first(sp, "design") || !auditParam) {
+    const query = new URLSearchParams({ company: companyId, design: selectedId, audit: auditRecord?.id ?? "none" });
+    for (const key of ["error", "msg"]) {
+      const message = first(sp, key);
+      if (message) query.set(key, message);
+    }
+    redirect(`/ops/designs?${query}`);
+  }
+  const audit = auditRecord?.status === "evaluated" && auditRecord.decision === "create" ? auditRecord : undefined;
   const [proposal] = selected
     ? await db
         .select({ id: proposalVersions.id, status: proposalVersions.status, version: proposalVersions.version })
@@ -77,6 +87,30 @@ export default async function DesignPage({
         .limit(1)
     : [];
   const brief = (selected?.brief ?? DEFAULT_DESIGN_BRIEF) as DesignBrief;
+  const draftScope = { companyId, designId: selected?.id ?? null, auditId: auditRecord?.id ?? null };
+  const draft = await loadDesignDraft(db, user.actor, draftScope);
+  const recentDrafts =
+    user.actor.kind === "ops"
+      ? await db
+          .select({ context: designBriefDrafts.context, updatedAt: designBriefDrafts.updatedAt })
+          .from(designBriefDrafts)
+          .where(
+            and(
+              eq(designBriefDrafts.userId, user.actor.userId),
+              eq(designBriefDrafts.companyId, companyId),
+              isNotNull(designBriefDrafts.values),
+            ),
+          )
+          .orderBy(desc(designBriefDrafts.updatedAt))
+          .limit(20)
+      : [];
+  const draftTime = new Intl.DateTimeFormat("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Tokyo",
+  });
   const configured = !!(process.env.SITEOFFER_IMAGE_MODEL && process.env.OPENAI_API_KEY);
   const busy =
     selected?.status === "queued" ||
@@ -122,48 +156,44 @@ export default async function DesignPage({
         <ArrowRight size={16} />
         <span className={proposal ? "active" : ""}>04　サイト制作・提案PDF</span>
       </div>
-      <div className="design-grid">
+      <div className={`design-grid ${selected?.imageSha256 ? "" : "no-design-image"}`}>
         <section className="design-card design-brief">
           <h2>
             <Palette size={19} />
             制作条件
           </h2>
           <h3>{company.name}</h3>
-          <form action={createDesignAction}>
-            {hidden}
-            <input type="hidden" name="auditId" value={audit?.id ?? ""} />
-            <input type="hidden" name="requestKey" value={randomUUID()} />
-            {fields.map(([key, label]) => (
-              <label key={key}>
-                {label}
-                <textarea
-                  name={key}
-                  required
-                  maxLength={1600}
-                  rows={key === "direction" || key === "updatePlan" ? 3 : 2}
-                  defaultValue={brief[key]}
-                />
-              </label>
-            ))}
-            {selected?.reviewNote && <p className="design-note">前回の確認メモ：{selected.reviewNote}</p>}
-            <div className="design-actions">
-              <DesignSubmit name="source" value="openai" disabled={!audit || !configured}>
-                <Sparkles size={16} />
-                画像を生成
-              </DesignSubmit>
-              <DesignSubmit name="source" value="import" secondary disabled={!audit}>
-                <ImagePlus size={16} />
-                画像を取り込む版を作成
-              </DesignSubmit>
-            </div>
-            <p className="design-muted">変更・再生成は新しい版として保存します。承認済みの画像は変更されません。</p>
-            {!configured && (
-              <p className="design-note">
-                画像APIは未設定です。imagegenで生成した画像を取り込めます。APIを設定すると、この画面から生成できます。
-              </p>
-            )}
-            {!audit && <p className="design-note">改善提案の対象と判定された診断が必要です。</p>}
-          </form>
+          {recentDrafts.length > 0 && (
+            <details className="design-personal-drafts">
+              <summary>この案件の自分の下書き（最近20件まで）</summary>
+              <ul>
+                {recentDrafts.map((item) => {
+                  const [sourceDesign, sourceAudit] = item.context.split(":");
+                  const source = versions.find((v) => v.id === sourceDesign);
+                  return (
+                    <li key={item.context}>
+                      <Link
+                        href={`/ops/designs?${new URLSearchParams({ company: companyId, design: sourceDesign!, audit: sourceAudit! })}`}
+                      >
+                        {source ? `第${source.version}版をもとにした条件` : "新しい条件"} ·{" "}
+                        {draftTime.format(item.updatedAt)}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+          <DesignBriefForm
+            key={`${user.actor.kind === "ops" ? user.actor.userId : ""}:${companyId}:${selected?.id ?? "new"}:${auditRecord?.id ?? "none"}`}
+            scope={draftScope}
+            initial={draft}
+            defaults={brief}
+            configured={configured}
+            canCreate={!!audit}
+            requestKey={randomUUID()}
+            reviewNote={selected?.reviewNote}
+          />
         </section>
         <section className="design-card design-canvas">
           <div className="design-section-heading">
@@ -176,6 +206,9 @@ export default async function DesignPage({
           </div>
           {versions.length > 0 && (
             <nav className="design-versions" aria-label="デザインの版">
+              <Link className={!selected ? "selected" : ""} href={`/ops/designs?company=${companyId}&design=new`}>
+                新しい条件<span>元の版を使わず作成</span>
+              </Link>
               {versions.map((d) => (
                 <Link
                   key={d.id}
