@@ -62,12 +62,14 @@ export async function listContractsAwaitingDelivery(db: DbOrTx, actor: Actor | n
 export async function listDeliveryDetails(
   db: DbOrTx,
   actor: Actor | null,
+  filter: { id?: string } = {},
 ): Promise<Result<DeliveryDetail[], "forbidden">> {
   const g = requireOps(actor);
   if (!g.ok) return g;
   const ids = await db
     .select({ id: deliveries.id })
     .from(deliveries)
+    .where(filter.id ? eq(deliveries.id, filter.id) : undefined)
     .orderBy(desc(deliveries.updatedAt))
     .limit(LIST_LIMIT);
   const out: DeliveryDetail[] = [];

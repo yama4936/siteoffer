@@ -1,5 +1,6 @@
 import { isTermsReadyForSales } from "@siteoffer/core";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import type * as React from "react";
 import { Flash, Forbidden, Json, ReturnTo } from "@/components/ops/ui";
 import { detailsClass, inlineFormClass, StatusBadge, stackFormClass, summaryClass } from "@/components/ops/ui-parts-2";
@@ -13,6 +14,7 @@ import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { getDb } from "@/lib/db";
+import { isUuid } from "@/lib/ops/form";
 import {
   CONTRACT_STATUS_LABEL,
   fmtDate,
@@ -45,14 +47,28 @@ export default async function ContractsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const sp = await searchParams;
+  const focus = typeof sp.focus === "string" ? sp.focus : undefined;
+  if (focus && !isUuid(focus)) notFound();
   const db = getDb();
   const actor = await getCurrentActor();
-  const [terms, list] = await Promise.all([listProductTerms(db, actor), listContractsOverview(db, actor)]);
+  const [terms, list] = await Promise.all([
+    listProductTerms(db, actor),
+    listContractsOverview(db, actor, { id: focus }),
+  ]);
   if (!terms.ok || !list.ok) return <Forbidden />;
 
   return (
     <>
       <PageHeader title="契約・報酬" description="販売条件から契約確認、入金、報酬まで。" />
+      {focus && (
+        <p className="mb-4 text-sm">
+          今日の仕事から選んだ案件を表示中です。{" "}
+          <Link href="/ops/contracts" className="text-primary underline">
+            全件を表示
+          </Link>
+        </p>
+      )}
       <Flash searchParams={await searchParams} />
 
       <Section
@@ -162,7 +178,7 @@ export default async function ContractsPage({
         {list.value.length === 0 ? <EmptyState>契約はまだありません</EmptyState> : null}
         <div className="grid gap-4">
           {list.value.map(({ c, companyName, salesName, payments, reward }) => (
-            <Card key={c.id} className="gap-3">
+            <Card id={`contract-${c.id}`} key={c.id} className="gap-3">
               <CardHeader>
                 <CardTitle>
                   <h3>

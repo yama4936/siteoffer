@@ -267,7 +267,7 @@ export async function listProductTerms(db: DbOrTx, actor: Actor | null) {
 export async function listAssignmentsOverview(
   db: DbOrTx,
   actor: Actor | null,
-  filter: { includeClosed?: boolean } = {},
+  filter: { includeClosed?: boolean; id?: string } = {},
 ) {
   const g = guard(actor);
   if (!g.ok) return g;
@@ -282,7 +282,12 @@ export async function listAssignmentsOverview(
     .from(assignments)
     .innerJoin(companies, eq(companies.id, assignments.companyId))
     .innerJoin(users, eq(users.id, assignments.userId))
-    .where(filter.includeClosed ? undefined : inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES]))
+    .where(
+      and(
+        filter.id ? eq(assignments.id, filter.id) : undefined,
+        filter.includeClosed ? undefined : inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES]),
+      ),
+    )
     .orderBy(desc(assignments.claimedAt))
     .limit(LIST_LIMIT);
   return ok(rows);
@@ -341,7 +346,7 @@ export async function listActiveSalesUsers(db: DbOrTx, actor: Actor | null) {
 
 // ───────────── 4. 契約確認・入金・報酬 ─────────────
 
-export async function listContractsOverview(db: DbOrTx, actor: Actor | null) {
+export async function listContractsOverview(db: DbOrTx, actor: Actor | null, filter: { id?: string } = {}) {
   const g = guard(actor);
   if (!g.ok) return g;
   const rows = await db
@@ -349,6 +354,7 @@ export async function listContractsOverview(db: DbOrTx, actor: Actor | null) {
     .from(contracts)
     .innerJoin(companies, eq(companies.id, contracts.companyId))
     .innerJoin(users, eq(users.id, contracts.salesUserId))
+    .where(filter.id ? eq(contracts.id, filter.id) : undefined)
     .orderBy(desc(contracts.reportedAt))
     .limit(LIST_LIMIT);
   const ids = rows.map((r) => r.c.id);

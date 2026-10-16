@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
 import { inlineFormClass, StatusBadge } from "@/components/ops/ui-parts-1";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { PageHeader, Section } from "@/components/ui/page";
 import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
+import { isUuid } from "@/lib/ops/form";
 import { ACTIVITY_LABEL, ASSIGNMENT_STATUS_LABEL, fmtDate, label, SUPPRESSION_LABEL } from "@/lib/ops/format";
 import {
   listActiveSalesUsers,
@@ -29,11 +31,13 @@ export default async function AssignmentsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
+  const focus = first(sp, "focus");
+  if (focus && !isUuid(focus)) notFound();
   const includeClosed = first(sp, "all") === "1";
   const db = getDb();
   const actor = await getCurrentActor();
   const [list, salesUsers, suppressed, consultations] = await Promise.all([
-    listAssignmentsOverview(db, actor, { includeClosed }),
+    listAssignmentsOverview(db, actor, { includeClosed, id: focus }),
     listActiveSalesUsers(db, actor),
     listSuppressedCompanies(db, actor),
     listConsultations(db, actor),
@@ -48,6 +52,14 @@ export default async function AssignmentsPage({
   return (
     <>
       <PageHeader title="担当・引き継ぎ" description="営業の担当状況と運営への相談を確認します。" />
+      {focus && (
+        <p className="mb-4 text-sm">
+          今日の仕事から選んだ案件を表示中です。{" "}
+          <Link href="/ops/assignments" className="text-primary underline">
+            全件を表示
+          </Link>
+        </p>
+      )}
       <Flash searchParams={sp} />
 
       <Section
@@ -79,7 +91,11 @@ export default async function AssignmentsPage({
             {rows.map(({ a, companyName, suppression, userName, userStatus }) => {
               const active = !["completed", "released", "lost"].includes(a.status);
               return (
-                <TableRow key={a.id} className={a.status === "awaiting_ops" ? "bg-warning/5" : undefined}>
+                <TableRow
+                  id={`assignment-${a.id}`}
+                  key={a.id}
+                  className={a.status === "awaiting_ops" ? "bg-warning/5" : undefined}
+                >
                   <TableCell className="min-w-40">
                     <Link href={`/ops/companies/${a.companyId}`} className="font-medium">
                       {companyName}

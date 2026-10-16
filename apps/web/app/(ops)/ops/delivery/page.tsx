@@ -5,6 +5,7 @@ import {
   NEW_DOMAIN_AVAILABILITY_NOTICE,
 } from "@siteoffer/core";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
 import { Flash, Forbidden, ReturnTo } from "@/components/ops/ui";
 import {
@@ -24,6 +25,7 @@ import { EmptyState, PageHeader, Section } from "@/components/ui/page";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { listContractsAwaitingDelivery, listDeliveryDetails } from "@/lib/ops/delivery";
+import { isUuid } from "@/lib/ops/form";
 import {
   DELIVERY_STATUS_LABEL,
   DOMAIN_INTENT_LABEL,
@@ -47,12 +49,15 @@ export default async function DeliveryPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const sp = await searchParams;
+  const focus = typeof sp.focus === "string" ? sp.focus : undefined;
+  if (focus && !isUuid(focus)) notFound();
   const db = getDb();
   const actor = await getCurrentActor();
   const [prefs, awaiting, details] = await Promise.all([
     listDomainPreferencesForOps(db, actor),
     listContractsAwaitingDelivery(db, actor),
-    listDeliveryDetails(db, actor),
+    listDeliveryDetails(db, actor, { id: focus }),
   ]);
   if (!prefs.ok || !awaiting.ok || !details.ok) return <Forbidden />;
   const here = "/ops/delivery";
@@ -60,6 +65,14 @@ export default async function DeliveryPage({
   return (
     <>
       <PageHeader title="制作・公開" description="制作の進行と顧客確認、公開までを管理します。" />
+      {focus && (
+        <p className="mb-4 text-sm">
+          今日の仕事から選んだ案件を表示中です。{" "}
+          <Link href="/ops/delivery" className="text-primary underline">
+            全件を表示
+          </Link>
+        </p>
+      )}
       <Flash searchParams={await searchParams} />
 
       <Section
@@ -240,7 +253,11 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
   const steps = DELIVERY_STATUSES.map((st) => ({ key: st, label: label(DELIVERY_STATUS_LABEL, st) }));
 
   return (
-    <details open={status !== "delivered"} className="group rounded-xl border bg-card shadow-sm">
+    <details
+      id={`delivery-${delivery.id}`}
+      open={status !== "delivered"}
+      className="group rounded-xl border bg-card shadow-sm"
+    >
       <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm">
         <strong className="font-semibold text-base">{d.companyName}</strong>
         <span className="inline-flex items-center gap-1.5">
