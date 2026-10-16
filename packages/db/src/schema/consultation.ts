@@ -1,4 +1,4 @@
-import { index, integer, pgEnum, pgTable, primaryKey, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgEnum, pgTable, primaryKey, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { salesActivities } from "./assignment.ts";
 import { createdAt, id, updatedAt } from "./common.ts";
 import { users } from "./users.ts";
@@ -51,6 +51,23 @@ export const consultationReads = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     revision: integer("revision").notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.activityId] })],
+);
+
+/** 回答・追加相談の本人専用下書き。消去時も版番号を残して古いタブによる復活を防ぐ。 */
+export const consultationDrafts = pgTable(
+  "consultation_drafts",
+  {
+    activityId: uuid("activity_id")
+      .notNull()
+      .references(() => salesActivities.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull(),
+    values: jsonb("values").$type<{ note: string; mode: "reply" | "resolve"; caseRevision: string }>(),
     updatedAt: updatedAt(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.activityId] })],

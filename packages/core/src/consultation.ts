@@ -3,6 +3,7 @@ import {
   assignments,
   companies,
   consultationCases,
+  consultationDrafts,
   consultationEvents,
   consultationReads,
   type DbOrTx,
@@ -37,7 +38,10 @@ export const CONSULTATION_OPERATION_LABEL: Record<ConsultationOperation, string>
   reopen: "対応を再開しました",
   follow_up: "追加の相談",
 };
-async function authorize(db: DbOrTx, actor: Actor | null): Promise<Result<UserActor, ConsultationError>> {
+export async function authorizeConsultationActor(
+  db: DbOrTx,
+  actor: Actor | null,
+): Promise<Result<UserActor, ConsultationError>> {
   if (!actor || (actor.kind !== "ops" && actor.kind !== "sales") || !uuid.test(actor.userId)) return err("forbidden");
   const [u] = await db
     .select({ id: users.id })
@@ -50,7 +54,7 @@ const statusExpr = sql<ConsultationStatus>`coalesce(${consultationCases.status},
 const updatedExpr = sql<Date>`coalesce(${consultationCases.updatedAt}, ${salesActivities.createdAt})`.mapWith(
   salesActivities.createdAt,
 );
-function visible(actor: UserActor) {
+export function consultationVisibleTo(actor: UserActor) {
   return and(
     eq(salesActivities.consultOps, true),
     actor.kind === "sales" ? eq(assignments.userId, actor.userId) : undefined,
@@ -69,11 +73,16 @@ function unreadExpr(actor: UserActor) {
       where ${consultationEvents.activityId} = ${salesActivities.id} and ${consultationEvents.actorId} <> ${actor.userId}), -1))
     > ${readRevisionExpr(actor)}`;
 }
+function hasDraftExpr(actor: UserActor) {
+  return sql<boolean>`exists(select 1 from ${consultationDrafts} where ${consultationDrafts.activityId} = ${salesActivities.id}
+    and ${consultationDrafts.userId} = ${actor.userId} and ${consultationDrafts.values} is not null)`;
+}
 function selectCases(db: DbOrTx, actor: UserActor) {
   return db
     .select({
       activityId: salesActivities.id,
       unread: unreadExpr(actor),
+      hasDraft: hasDraftExpr(actor),
       readRevision: readRevisionExpr(actor),
       assignmentId: salesActivities.assignmentId,
       companyId: companies.id,
@@ -100,12 +109,13 @@ export interface ConsultationFilter {
   status?: "pending" | "resolved" | "all";
   mine?: boolean;
   unread?: boolean;
+  drafts?: boolean;
   q?: string;
   page?: number;
   assignmentId?: string;
 }
 export async function listConsultationCases(db: DbOrTx, actor: Actor | null, filter: ConsultationFilter = {}) {
-  const auth = await authorize(db, actor);
+  const auth = await authorizeConsultationActor(db, actor);
   if (!auth.ok) return auth;
   const user = auth.value;
   if (filter.assignmentId && !uuid.test(filter.assignmentId)) return err("invalid_input");
@@ -115,8 +125,9 @@ export async function listConsultationCases(db: DbOrTx, actor: Actor | null, fil
     .slice(0, 100)
     .replace(/[\\%_]/g, "\\$&");
   const where = and(
-    visible(user),
+    consultationVisibleTo(user),
     filter.unread ? unreadExpr(user) : undefined,
+    filter.drafts ? hasDraftExpr(user) : undefined,
     status === "pending"
       ? sql`${statusExpr} <> 'resolved'`
       : status === "resolved"
@@ -153,10 +164,12 @@ export async function listConsultationCases(db: DbOrTx, actor: Actor | null, fil
   return ok({ rows, total, page, pages });
 }
 export async function getConsultationCase(db: DbOrTx, actor: Actor | null, activityId: string) {
-  const auth = await authorize(db, actor);
+  const auth = await authorizeConsultationActor(db, actor);
   if (!auth.ok) return auth;
   if (!uuid.test(activityId)) return err("not_found");
-  const [row] = await selectCases(db, auth.value).where(and(visible(auth.value), eq(salesActivities.id, activityId)));
+  const [row] = await selectCases(db, auth.value).where(
+    and(consultationVisibleTo(auth.value), eq(salesActivities.id, activityId)),
+  );
   if (!row) return err("not_found");
   const events = await db
     .select({
@@ -175,6 +188,10 @@ export async function getConsultationCase(db: DbOrTx, actor: Actor | null, activ
     .orderBy(asc(consultationEvents.revision));
   return ok({ ...row, events });
 }
+/** 共通の送信受付キー。本文をキーや操作ログに含めない。 */
+export function consultationReceiptKey(userId: string, requestKey: string) {
+  return createHash("sha256").update(`${userId}:${requestKey}`).digest("hex");
+}
 export interface ConsultationCommand {
   activityId: string;
   revision: number;
@@ -188,7 +205,7 @@ export async function updateConsultationCase(
   actor: Actor | null,
   input: ConsultationCommand,
 ): Promise<Result<{ revision: number; status: ConsultationStatus }, ConsultationError>> {
-  const auth = await authorize(db, actor);
+  const auth = await authorizeConsultationActor(db, actor);
   if (!auth.ok) return auth;
   const user = auth.value;
   if (
@@ -208,7 +225,7 @@ export async function updateConsultationCase(
     return err("invalid_input", "パスワード・移管コード・鍵などの秘密情報は記録できません");
   if ((user.kind === "sales") !== (input.operation === "follow_up")) return err("forbidden");
   const hash = (v: string) => createHash("sha256").update(v).digest("hex");
-  const receiptKey = hash(`${user.userId}:${input.requestKey}`);
+  const receiptKey = consultationReceiptKey(user.userId, input.requestKey);
   const payloadHash = hash(JSON.stringify([input.activityId, input.revision, input.operation, note]));
   return db.transaction(async (tx) => {
     // 活動の行を共通ロックにし、最初の受付（ケースが未作成）も一つの順序で処理する。
@@ -289,13 +306,13 @@ export async function updateConsultationCase(
 
 /** 完了済みも含む、閲覧できる相談の未読件数。本文や相手の既読状態を返さない。 */
 export async function countUnreadConsultations(db: DbOrTx, actor: Actor | null) {
-  const auth = await authorize(db, actor);
+  const auth = await authorizeConsultationActor(db, actor);
   if (!auth.ok) return auth;
   const [row] = await db
     .select({ total: count() })
     .from(salesActivities)
     .innerJoin(assignments, eq(assignments.id, salesActivities.assignmentId))
-    .where(and(visible(auth.value), unreadExpr(auth.value)));
+    .where(and(consultationVisibleTo(auth.value), unreadExpr(auth.value)));
   return ok(row?.total ?? 0);
 }
 
@@ -309,14 +326,14 @@ export async function markConsultationRead(
 ) {
   if (!uuid.test(activityId) || !Number.isSafeInteger(revision) || revision < 0) return err("invalid_input");
   return db.transaction(async (tx) => {
-    const auth = await authorize(tx, actor);
+    const auth = await authorizeConsultationActor(tx, actor);
     if (!auth.ok) return auth;
     const user = auth.value;
     const [activity] = await tx
       .select({ id: salesActivities.id })
       .from(salesActivities)
       .innerJoin(assignments, eq(assignments.id, salesActivities.assignmentId))
-      .where(and(visible(user), eq(salesActivities.id, activityId)))
+      .where(and(consultationVisibleTo(user), eq(salesActivities.id, activityId)))
       .for("update", { of: salesActivities });
     if (!activity) return err("not_found");
     const [current] = await tx

@@ -5,6 +5,7 @@ import {
   countUnreadConsultations,
   getConsultationCase,
   listConsultationCases,
+  loadConsultationDraft,
 } from "@siteoffer/core";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -38,10 +39,11 @@ export async function ConsultationsPage({
     const result = await getConsultationCase(db, user.actor, focus);
     if (!result.ok) notFound();
     const backParams = new URLSearchParams();
-    for (const key of ["status", "mine", "q", "page", "unread", "assignment"])
+    for (const key of ["status", "mine", "q", "page", "unread", "drafts", "assignment"])
       if (text(key)) backParams.set(key, text(key).slice(0, 100));
     const backHref = backParams.size ? `${base}?${backParams}` : base;
     const d = result.value;
+    const initialDraft = await loadConsultationDraft(db, user.actor, d.activityId);
     const firstUnread = d.events.find((e) => e.revision > d.readRevision && e.authorId !== user.userId);
     const unreadAnchor =
       d.readRevision < 0 && role === "ops"
@@ -128,6 +130,7 @@ export async function ConsultationsPage({
         <ConsultationForm
           key={d.activityId}
           activityId={d.activityId}
+          initialDraft={initialDraft}
           revision={d.revision}
           status={d.status}
           userRole={role}
@@ -144,6 +147,7 @@ export async function ConsultationsPage({
       ? "pending"
       : "all";
   const unread = text("unread") === "1";
+  const drafts = text("drafts") === "1";
   const unreadCount = await countUnreadConsultations(db, user.actor);
   const q = text("q").trim().slice(0, 100);
   const mine = role === "ops" && text("mine") === "1";
@@ -151,6 +155,7 @@ export async function ConsultationsPage({
     status,
     mine,
     unread,
+    drafts,
     q,
     page: Number(text("page")) || 1,
     assignmentId: assignmentId || undefined,
@@ -161,6 +166,7 @@ export async function ConsultationsPage({
     const p = new URLSearchParams({ status, page: String(next) });
     if (q) p.set("q", q);
     if (unread) p.set("unread", "1");
+    if (drafts) p.set("drafts", "1");
     if (mine) p.set("mine", "1");
     if (assignmentId) p.set("assignment", assignmentId);
     return `${base}?${p}`;
@@ -198,39 +204,51 @@ export async function ConsultationsPage({
         </p>
       )}
       <form
-        key={`${status}:${q}:${mine}:${unread}:${assignmentId}`}
+        key={`${status}:${q}:${mine}:${unread}:${drafts}:${assignmentId}`}
         action={base}
-        className={`mb-5 grid items-end gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 ${role === "ops" ? "xl:grid-cols-[10rem_minmax(12rem,1fr)_auto_auto_auto]" : "xl:grid-cols-[12rem_minmax(12rem,1fr)_auto_auto]"}`}
+        className="mb-5 grid items-end gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 xl:grid-cols-[10rem_minmax(12rem,1fr)_auto_auto]"
       >
         {assignmentId && <input type="hidden" name="assignment" value={assignmentId} />}
-        <label className="grid gap-1 text-sm">
-          状態
-          <select name="status" defaultValue={status} className="rounded-md border bg-background p-2">
+        <div className="grid gap-1 text-sm">
+          <label htmlFor="consultation-filter-status">状態</label>
+          <select
+            id="consultation-filter-status"
+            name="status"
+            defaultValue={status}
+            className="rounded-md border bg-background p-2"
+          >
             <option value="pending">未対応・対応中</option>
             <option value="resolved">対応完了</option>
             <option value="all">すべて</option>
           </select>
-        </label>
-        <label className="grid min-w-0 flex-1 gap-1 text-sm">
-          企業名・相談者
+        </div>
+        <div className="grid min-w-0 flex-1 gap-1 text-sm">
+          <label htmlFor="consultation-filter-q">企業名・相談者</label>
           <input
+            id="consultation-filter-q"
             name="q"
             defaultValue={q}
             maxLength={100}
             className="min-w-0 rounded-md border p-2"
             placeholder="企業名で探す"
           />
-        </label>
-        {role === "ops" && (
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {role === "ops" && (
+            <label className="flex items-center gap-2 py-2 text-sm">
+              <input type="checkbox" name="mine" value="1" defaultChecked={mine} />
+              自分の担当
+            </label>
+          )}
           <label className="flex items-center gap-2 py-2 text-sm">
-            <input type="checkbox" name="mine" value="1" defaultChecked={mine} />
-            自分の担当
+            <input type="checkbox" name="unread" value="1" defaultChecked={unread} />
+            未読のみ
           </label>
-        )}
-        <label className="flex items-center gap-2 py-2 text-sm">
-          <input type="checkbox" name="unread" value="1" defaultChecked={unread} />
-          未読のみ
-        </label>
+          <label className="flex items-center gap-2 py-2 text-sm">
+            <input type="checkbox" name="drafts" value="1" defaultChecked={drafts} />
+            下書きあり
+          </label>
+        </div>
         <div className="flex items-center gap-3">
           <Button type="submit">絞り込む</Button>
           <Link href={base} className="py-2 text-sm text-primary underline">
@@ -252,6 +270,11 @@ export async function ConsultationsPage({
                 {d.unread && (
                   <Badge variant="info" className="mb-2">
                     未読の更新
+                  </Badge>
+                )}
+                {d.hasDraft && (
+                  <Badge variant="outline" className="mb-2 ml-1">
+                    自分の下書き
                   </Badge>
                 )}
                 <h2 className="font-semibold">

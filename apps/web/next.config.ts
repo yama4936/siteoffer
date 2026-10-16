@@ -10,6 +10,8 @@ if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 const config: NextConfig = {
   // Keep the local demo focused on the application. Compile/runtime errors still surface.
   devIndicators: false,
+  // Server Function arguments may contain private drafts or login credentials.
+  logging: { serverFunctions: false },
   distDir: process.env.SITEOFFER_NEXT_DIST_DIR || ".next",
   experimental: { serverActions: { bodySizeLimit: "16mb" } },
   outputFileTracingIncludes: { "/*": ["./assets/fonts/noto-sans-jp.ttf"] },
