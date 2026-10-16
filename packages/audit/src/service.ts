@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type Actor, type Clock, err, ok, type Result, recordEvent } from "@siteoffer/core";
-import { type DbOrTx, findings, siteAudits, websites } from "@siteoffer/db";
+import { companies, type DbOrTx, findings, siteAudits, websites } from "@siteoffer/db";
 import { eq } from "drizzle-orm";
 import { AuditAbortedError, abortableAudit, checkAuditSignal } from "./cancellation.ts";
 import type { SiteCollector } from "./collect.ts";
@@ -73,6 +73,7 @@ export async function runSiteAudit(
   const auditId = crypto.randomUUID();
   const artifactDir = artifactDirFor(deps.options.paths.artifactRoot, url.href, auditId, clock.now());
   await owned(async (tx) => {
+    await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, site.companyId)).for("update");
     await tx.insert(siteAudits).values({
       id: auditId,
       companyId: site.companyId,

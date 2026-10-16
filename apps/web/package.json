@@ -15,6 +15,7 @@
     "@siteoffer/discovery": "workspace:*",
     "@siteoffer/generation": "workspace:*",
     "@siteoffer/schemas": "workspace:*",
+    "@siteoffer/worker": "workspace:*",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "drizzle-orm": "0.45.4",

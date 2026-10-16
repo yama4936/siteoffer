@@ -5,6 +5,7 @@
  * ここでは FormData を読み、処理を呼び、結果の文言を付けて元の画面へ戻すだけにする。
  */
 import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
+import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -511,4 +512,22 @@ export async function retryDeliveryBuildAction(deliveryId: string, buildId: stri
     };
   refresh();
   return { message: "制作の再試行を受け付けました。進行状態を確認してください。" };
+}
+
+export async function resumeAuditAction(auditId: string) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await resumeAuditByOps(getDb(), systemClock, actor, auditId);
+    if (!result.ok) return { ok: false, message: result.message ?? "診断と操作権限を確認してください" };
+    revalidatePath("/ops/processing");
+    revalidatePath(`/ops/companies/${result.value.companyId}`);
+    return {
+      ok: true,
+      message: result.value.proposalQueued
+        ? "保存済みの診断から制作依頼を受け付けました。ワーカーが自動で引き継ぎます。"
+        : "保存済みの判定を反映しました。採点のやり直しは行っていません。",
+    };
+  } catch {
+    return { ok: false, message: "受付結果を確認できませんでした。もう一度操作しても、同じ依頼は重複しません。" };
+  }
 }

@@ -1,7 +1,9 @@
 import { systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
+import { getAuditRecoveryCandidates } from "@siteoffer/worker/audit-recovery";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AuditRecovery } from "@/components/ops/audit-recovery";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { DiscoveryStatus } from "@/components/ops/discovery-status";
 import { PageHeader } from "@/components/ui/page";
@@ -38,6 +40,9 @@ export default async function ProcessingPage({
   );
   if (!result.ok) notFound();
   const d = result.value;
+  const recovery = await getAuditRecoveryCandidates(db, user.actor, company, Number(sp.auditPage));
+  if (!recovery.ok) notFound();
+  const recoverable = recovery.value;
   const discovery = await discoveryAvailability(db, systemClock);
   const groups = [
     {
@@ -112,9 +117,10 @@ export default async function ProcessingPage({
   function pageHref(kind: string, page: number) {
     const q = new URLSearchParams();
     if (company) q.set("company", company);
+    q.set("auditPage", String(kind === "audit" ? page : recoverable.page));
     if (deliveryState === "stopped") q.set("deliveryState", "stopped");
     for (const [key, value] of Object.entries(d.paging)) q.set(`${key}Page`, String(key === kind ? page : value.page));
-    return `/ops/processing?${q}#processing-${kind}`;
+    return `/ops/processing?${q}#${kind === "audit" ? "audit-recovery" : `processing-${kind}`}`;
   }
   function deliveryFilterHref(state: "all" | "stopped") {
     const url = new URL(pageHref("deliveries", 1), "http://local.invalid");
@@ -156,6 +162,11 @@ export default async function ProcessingPage({
           </Link>
         </p>
       )}
+      <AuditRecovery
+        {...recoverable}
+        previousHref={pageHref("audit", recoverable.page - 1)}
+        nextHref={pageHref("audit", recoverable.page + 1)}
+      />
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         {(
           [

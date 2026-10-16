@@ -1,5 +1,5 @@
-import { type Clock, recordEvent } from "@siteoffer/core";
-import { type DbOrTx, proposalHandoffs } from "@siteoffer/db";
+import { recordEvent } from "@siteoffer/core";
+import { proposalHandoffs } from "@siteoffer/db";
 import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
 import type { WorkerDeps } from "./deps.ts";
 import { type ProposalPayload, QUEUES, stepKeys } from "./queues.ts";
@@ -9,40 +9,7 @@ export const HANDOFF_LEASE_MS = 60_000;
 export const HANDOFF_SEND_TIMEOUT_MS = 10_000;
 export const HANDOFF_RETRY_MESSAGE = "提案制作への引き継ぎを確認できませんでした。依頼は保存済みで、自動で再送します。";
 
-export async function findProposalHandoff(db: DbOrTx, key: string) {
-  const [row] = await db.select().from(proposalHandoffs).where(eq(proposalHandoffs.sourceStepKey, key));
-  return row ?? null;
-}
-
-/** 呼び出し側の業務トランザクション内で保存する。再送時に診断を差し替えない。 */
-export async function recordProposalHandoff(
-  db: DbOrTx,
-  clock: Clock,
-  input: {
-    sourceStepKey: string;
-    companyId: string;
-    auditId: string;
-  },
-) {
-  const [created] = await db
-    .insert(proposalHandoffs)
-    .values({ ...input, nextAttemptAt: clock.now(), createdAt: clock.now(), updatedAt: clock.now() })
-    .onConflictDoNothing({ target: proposalHandoffs.sourceStepKey })
-    .returning();
-  const row = created ?? (await findProposalHandoff(db, input.sourceStepKey));
-  if (!row || row.companyId !== input.companyId || row.auditId !== input.auditId) {
-    throw new Error("保存済みの引き継ぎと診断が一致しません");
-  }
-  if (created)
-    await recordEvent(db, clock, {
-      actor,
-      action: "pipeline.handoff_requested",
-      targetType: "worker_step",
-      targetId: input.sourceStepKey,
-      after: { companyId: input.companyId, auditId: input.auditId },
-    });
-  return row;
-}
+export { findProposalHandoff, recordProposalHandoff } from "./handoff-store.ts";
 
 function retryDelay(attempts: number) {
   return Math.min(300_000, 30_000 * 2 ** Math.min(Math.max(attempts - 1, 0), 4));

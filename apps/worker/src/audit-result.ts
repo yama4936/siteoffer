@@ -1,8 +1,8 @@
 import { type Clock, recordEvent } from "@siteoffer/core";
 import { auditEvents, companies, type DbOrTx, siteAudits, websites } from "@siteoffer/db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { recordProposalHandoff } from "./handoff.ts";
-import type { AuditStepResult } from "./pipeline/audit.ts";
+import type { AuditStepResult } from "./audit-result-types.ts";
+import { recordProposalHandoff } from "./handoff-store.ts";
 import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./pipeline/status.ts";
 import { type AuditPayload, stepKeys } from "./queues.ts";
 

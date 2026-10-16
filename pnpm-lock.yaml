@@ -214,6 +214,9 @@ importers:
       '@siteoffer/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@siteoffer/worker':
+        specifier: workspace:*
+        version: link:../worker
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1

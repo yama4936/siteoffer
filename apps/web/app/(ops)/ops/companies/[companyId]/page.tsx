@@ -476,7 +476,14 @@ export default async function CompanyPage({
         </Table>
       </Section>
 
-      <Section title="診断結果">
+      <Section
+        title="診断結果"
+        actions={
+          <Link className="text-sm text-primary underline" href={`/ops/processing?company=${companyId}#audit-recovery`}>
+            処理状況・再開を確認
+          </Link>
+        }
+      >
         {d.latestAudit ? (
           <AuditView audit={d.latestAudit} findings={d.findings} />
         ) : (
