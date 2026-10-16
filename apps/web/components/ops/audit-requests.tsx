@@ -122,7 +122,7 @@ export function AuditRequests({
               <Link className="text-primary underline" href={`/ops/companies/${item.companyId}#audit-request`}>
                 診断・企業情報を確認
               </Link>
-              {(item.status === "failed" || item.status === "blocked") && (
+              {item.hasSavedResult && (
                 <Link
                   className="text-primary underline"
                   href={`/ops/processing?company=${item.companyId}#audit-recovery`}

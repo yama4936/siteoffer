@@ -1,7 +1,9 @@
 import { type Actor, type Clock, err, ok, recordEvent } from "@siteoffer/core";
 import { auditRequests, type DbOrTx, users } from "@siteoffer/db";
 import { eq, sql } from "drizzle-orm";
+import { auditRecoveryCandidatesQuery } from "./audit-recovery.ts";
 import { auditRequestKey, isAuditOperator } from "./audit-request.ts";
+import { auditRequestNeedsAttention } from "./audit-request-query.ts";
 import { readStepState } from "./ledger.ts";
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -42,7 +44,7 @@ export async function listAuditRequests(
   const query = input.query?.trim() ?? "";
   const base = sql`select r.id,r.company_id as "companyId",c.name as "companyName",r.target_url as "targetUrl",r.status,r.message,r.created_at as "createdAt",r.finished_at as "finishedAt",
  exists(select 1 from audit_events e where e.target_type='worker_step' and e.target_id='audit:'||r.company_id::text||':ops:'||r.id::text and e.action='worker.step_started') as started,
- (r.finished_at is not null and r.status in ('failed','blocked') and not exists(select 1 from audit_requests newer where newer.company_id=r.company_id and (newer.created_at,newer.id)>(r.created_at,r.id))) as attention
+ ${auditRequestNeedsAttention} as attention
  from audit_requests r join companies c on c.id=r.company_id where true
  ${input.companyId ? sql`and r.company_id=${input.companyId}::uuid` : sql``}
  ${query ? sql`and position(lower(${query}) in lower(c.name||' '||r.target_url))>0` : sql``}`;
@@ -65,6 +67,16 @@ export async function listAuditRequests(
   const result = await db.execute(
     sql`select * from (${base}) candidates where ${conditions[view as AuditRequestView]} order by ${order} limit 20 offset ${(page - 1) * 20}`,
   );
+  const rows = (result as { rows: RequestRow[] }).rows;
+  const stoppedCompanies = rows.filter((r) => r.status === "failed" || r.status === "blocked").map((r) => r.companyId);
+  const saved = stoppedCompanies.length
+    ? await db.execute(sql`select "companyId" from (${auditRecoveryCandidatesQuery()}) recovery
+      where "companyId" in (${sql.join(
+        stoppedCompanies.map((id) => sql`${id}::uuid`),
+        sql`, `,
+      )})`)
+    : { rows: [] };
+  const savedCompanies = new Set((saved as { rows: { companyId: string }[] }).rows.map((r) => r.companyId));
   return ok({
     view: view as AuditRequestView,
     query,
@@ -72,7 +84,8 @@ export async function listAuditRequests(
     total,
     pages,
     page,
-    items: (result as { rows: RequestRow[] }).rows.map((r) => ({
+    items: rows.map((r) => ({
+      hasSavedResult: (r.status === "failed" || r.status === "blocked") && savedCompanies.has(r.companyId),
       id: r.id,
       companyId: r.companyId,
       companyName: r.companyName,

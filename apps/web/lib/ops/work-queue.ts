@@ -19,7 +19,7 @@ import {
   users,
 } from "@siteoffer/db";
 import { discoveryCriteriaSchema } from "@siteoffer/discovery";
-import { getAuditRecoveryCandidates } from "@siteoffer/worker/audit-recovery";
+import { getAuditAttentionWork } from "@siteoffer/worker/audit-recovery";
 import { and, asc, eq, gt, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { currentDeliveryBuild, deliveryNeedsAttention } from "./delivery-processing";
@@ -28,7 +28,7 @@ import { requireOps } from "./guard";
 
 export const WORK_GROUPS = {
   discovery: { label: "収集の復旧", href: "/ops/discovery" },
-  audit_recovery: { label: "診断の再開", href: "/ops/processing#audit-recovery" },
+  audit_attention: { label: "診断の対応", href: "/ops/processing#audit-attention" },
   design: { label: "デザイン", href: "/ops/designs" },
   proposal: { label: "提案レビュー", href: "/ops/review" },
   consultation: { label: "営業からの相談", href: "/ops/consultations" },
@@ -83,7 +83,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     domain,
     consultation,
     deliveryRecovery,
-    auditRecovery,
+    auditAttention,
   ] = await Promise.all([
     db
       .select({
@@ -320,17 +320,23 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
         asc(deliveries.id),
       )
       .limit(PER_GROUP),
-    getAuditRecoveryCandidates(db, actor),
+    getAuditAttentionWork(db, actor),
   ]);
-  if (!auditRecovery.ok) return auditRecovery;
+  if (!auditAttention.ok) return auditAttention;
   const items: WorkItem[] = [
-    ...auditRecovery.value.items.map((r) => ({
-      id: r.auditId,
-      group: "audit_recovery" as const,
+    ...auditAttention.value.items.map((r) => ({
+      id: r.id,
+      group: "audit_attention" as const,
       title: r.companyName,
-      reason: r.blockedReason ?? "診断は保存済みです。採点を繰り返さず、停止した判定の反映から再開できます。",
-      action: r.blockedReason ? "企業情報を確認" : "保存済み結果で再開",
-      href: r.blockedReason ? `/ops/companies/${r.companyId}` : `/ops/processing?company=${r.companyId}#audit-recovery`,
+      reason:
+        r.blockedReason ?? r.reason ?? "診断は保存済みです。採点を繰り返さず、停止した判定の反映から再開できます。",
+      action: r.kind === "request" ? "診断・企業情報を確認" : r.blockedReason ? "企業情報を確認" : "保存済み結果で再開",
+      href:
+        r.kind === "request"
+          ? `/ops/companies/${r.companyId}#audit-request`
+          : r.blockedReason
+            ? `/ops/companies/${r.companyId}`
+            : `/ops/processing?company=${r.companyId}#audit-recovery`,
       since: r.createdAt,
       priority: 0,
     })),
@@ -483,7 +489,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
   items.sort((a, b) => a.priority - b.priority || a.since.localeCompare(b.since) || a.id.localeCompare(b.id));
   const groups = Object.entries({
     discovery: failed,
-    audit_recovery: [{ total: auditRecovery.value.total }],
+    audit_attention: [{ total: auditAttention.value.total }],
     design,
     proposal,
     assignment,

@@ -190,23 +190,25 @@ export default async function ProcessingPage({
           </Link>
         </p>
       )}
-      <AuditRecovery
-        {...recoverable}
-        previousHref={pageHref("audit", recoverable.page - 1)}
-        nextHref={pageHref("audit", recoverable.page + 1)}
-      />
-      <AuditRequests
-        data={requested}
-        filters={Object.entries(AUDIT_REQUEST_VIEWS).map(([key, label]) => ({
-          key,
-          label,
-          count: requested.counts[key as keyof typeof AUDIT_REQUEST_VIEWS],
-          href: requestFilterHref(key),
-        }))}
-        searchFields={requestSearchFields}
-        previousHref={pageHref("requests", requested.page - 1)}
-        nextHref={pageHref("requests", requested.page + 1)}
-      />
+      <div id="audit-attention" className="scroll-mt-24">
+        <AuditRecovery
+          {...recoverable}
+          previousHref={pageHref("audit", recoverable.page - 1)}
+          nextHref={pageHref("audit", recoverable.page + 1)}
+        />
+        <AuditRequests
+          data={requested}
+          filters={Object.entries(AUDIT_REQUEST_VIEWS).map(([key, label]) => ({
+            key,
+            label,
+            count: requested.counts[key as keyof typeof AUDIT_REQUEST_VIEWS],
+            href: requestFilterHref(key),
+          }))}
+          searchFields={requestSearchFields}
+          previousHref={pageHref("requests", requested.page - 1)}
+          nextHref={pageHref("requests", requested.page + 1)}
+        />
+      </div>
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         {(
           [

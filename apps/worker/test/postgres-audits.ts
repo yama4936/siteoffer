@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
+import { getAuditAttentionWork } from "../src/audit-recovery.ts";
 import { auditRequestKey, requestAuditByOps, validateAuditRequest } from "../src/audit-request.ts";
 import { cancelAuditRequest, listAuditRequests } from "../src/audit-request-management.ts";
 import { claimStep } from "../src/ledger.ts";
@@ -314,6 +315,41 @@ async function main() {
     indexed.every((sample) => !("error" in sample) && sample.ms < 2000),
     "20k-row list must complete within the 2s regression limit on this isolated fixture",
   );
+  // 要確認1,000社のうち500社に保存済み結果を付与。同じ案件を二重に数えない。
+  await admin.pool.query(`create table qa_recovery as
+    select r.*,gen_random_uuid() audit_id from audit_requests r join qa_bench b on b.company_id=r.company_id
+    where b.n%4=1 and r.created_at=(select max(newer.created_at) from audit_requests newer where newer.company_id=r.company_id);
+    insert into site_audits(id,company_id,website_id,target_url,status,decision)
+      select audit_id,company_id,website_id,target_url,'evaluated','hold' from qa_recovery;
+    insert into audit_events(actor_kind,action,target_type,target_id,after)
+      select 'system','site_audit.started','site_audit',audit_id::text,
+        jsonb_build_object('workerStepKey','audit:'||company_id::text||':ops:'||id::text) from qa_recovery;
+    update audit_events e set after=jsonb_build_object('attempt',1,'queue','pipeline.audit','payload',
+      jsonb_build_object('companyId',r.company_id::text,'requestKey','ops:'||r.id::text)) from qa_recovery r
+      where e.action='worker.step_started' and e.target_id='audit:'||r.company_id::text||':ops:'||r.id::text;
+    insert into audit_events(actor_kind,action,target_type,target_id,after)
+      select 'system','worker.step_failed','worker_step','audit:'||company_id::text||':ops:'||id::text,
+        '{"attempt":1,"final":true}'::jsonb from qa_recovery;
+    analyze site_audits; analyze audit_events;`);
+  const attentionStart = performance.now();
+  const attention = await getAuditAttentionWork(admin.db, ops[0]!);
+  const attentionMs = Math.round(performance.now() - attentionStart);
+  assert(attention.ok);
+  assert.equal(attention.value.total, 1000);
+  assert.equal(attention.value.items.length, 20);
+  assert(attentionMs < 2000, "mixed diagnostic work must complete within the 2s local regression limit");
+  report.attention = { ms: attentionMs, total: attention.value.total, savedResults: 500 };
+  console.log(`Mixed diagnostic work: ${JSON.stringify(report.attention)}`);
+  const mixed = await measure("mixed");
+  report.mixedList = mixed;
+  assert(
+    mixed.every((sample) => !("error" in sample) && sample.ms < 2000),
+    "lists with saved results must complete within the 2s local regression limit",
+  );
+  const savedCompany = (await admin.pool.query("select company_id from qa_recovery limit 1")).rows[0].company_id;
+  const savedList = await listAuditRequests(admin.db, ops[0]!, { companyId: savedCompany, view: "attention" });
+  assert(savedList.ok && savedList.value.items[0]?.hasSavedResult);
+  checks.push("20k requests and 500 saved results yield 1000 distinct diagnostic followups");
   const plan = await admin.pool.query(
     "explain (analyze,buffers,format json) select count(*) from audit_requests r where r.status in ('failed','blocked') and not exists(select 1 from audit_requests newer where newer.company_id=r.company_id and (newer.created_at,newer.id)>(r.created_at,r.id))",
   );

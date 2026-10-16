@@ -1,6 +1,7 @@
 import { type Actor, type Clock, err, ok, recordEvent } from "@siteoffer/core";
 import { auditEvents, auditRequests, companies, type DbOrTx, users } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
+import { auditRequestNeedsAttention } from "./audit-request-query.ts";
 import { resumeSavedAudit } from "./audit-result.ts";
 import { readStepExecution, readStepState } from "./ledger.ts";
 import { PROTECTED } from "./pipeline/status.ts";
@@ -33,7 +34,7 @@ interface Candidate {
   requestPayload: unknown;
   queue: string;
 }
-function candidates(companyId?: string, auditId?: string) {
+export function auditRecoveryCandidatesQuery(companyId?: string, auditId?: string) {
   return sql`select a.id as "auditId", a.company_id as "companyId", c.name as "companyName", a.status, a.decision,
   a.created_at as "createdAt", a.target_url as "targetUrl", a.website_id as "websiteId", w.id as "siteId", w.url as "siteUrl",
   c.official_site_status as "officialStatus", c.suppression, source.detail->>'workerStepKey' as "sourceKey", started.detail->'payload' as "requestPayload", started.detail->>'queue' as queue
@@ -82,7 +83,7 @@ export async function getAuditRecoveryCandidates(
 ) {
   if (!(await allowed(db, actor))) return err("forbidden");
   if (companyId && !UUID.test(companyId)) return err("invalid_input");
-  const base = candidates(companyId);
+  const base = auditRecoveryCandidatesQuery(companyId);
   const count = await db.execute(sql`select count(*)::int as total from (${base}) candidate`);
   const total = (count as { rows: { total: number }[] }).rows[0]!.total;
   const pages = Math.max(1, Math.ceil(total / LIMIT));
@@ -103,6 +104,51 @@ export async function getAuditRecoveryCandidates(
       decision: c.decision,
       createdAt: new Date(c.createdAt).toISOString(),
       blockedReason: blockedReason(c),
+    })),
+  });
+}
+/** ホームでは同じ企業を重複して数えず、保存済み結果の再利用を先に案内する。 */
+export async function getAuditAttentionWork(db: DbOrTx, actor: Actor | null) {
+  if (!(await allowed(db, actor))) return err("forbidden");
+  const base = sql`with recovery as (${auditRecoveryCandidatesQuery()}), work as (
+    select 'recovery' as kind, r."auditId" as id, r."companyId", r."companyName", r."createdAt", row_to_json(r) as detail
+      from recovery r
+    union all
+    select 'request' as kind,r.id,r.company_id,c.name,r.created_at,
+      json_build_object('status',r.status) as detail
+      from audit_requests r join companies c on c.id=r.company_id
+      where ${auditRequestNeedsAttention}
+        and not exists(select 1 from recovery saved where saved."companyId"=r.company_id)
+  )`;
+  const count = await db.execute(sql`${base} select count(*)::int as total from work`);
+  const result = await db.execute(sql`${base} select * from work order by "createdAt" asc,id asc limit ${LIMIT}`);
+  const rows = (
+    result as {
+      rows: {
+        kind: "recovery" | "request";
+        id: string;
+        companyId: string;
+        companyName: string;
+        createdAt: Date;
+        detail: Candidate | { status: "failed" | "blocked" };
+      }[];
+    }
+  ).rows;
+  return ok({
+    total: (count as { rows: { total: number }[] }).rows[0]!.total,
+    items: rows.map((row) => ({
+      id: row.id,
+      companyId: row.companyId,
+      companyName: row.companyName,
+      kind: row.kind,
+      createdAt: new Date(row.createdAt).toISOString(),
+      blockedReason: row.kind === "recovery" ? blockedReason(row.detail as Candidate) : null,
+      reason:
+        row.kind === "request"
+          ? row.detail.status === "blocked"
+            ? "診断対象の確認が必要です。企業情報と公式サイトを確認してください。"
+            : "診断が停止しています。停止理由と対象サイトを確認し、必要なら再度依頼してください。"
+          : null,
     })),
   });
 }
@@ -134,7 +180,7 @@ export async function resumeAuditByOps(db: DbOrTx, clock: Clock, actor: Actor | 
       const r = receipt.after as { companyId: string; proposalQueued: boolean };
       return ok({ companyId: r.companyId, proposalQueued: r.proposalQueued, alreadyApplied: true });
     }
-    const initial = await tx.execute(candidates(undefined, auditId));
+    const initial = await tx.execute(auditRecoveryCandidatesQuery(undefined, auditId));
     const candidate = (initial as { rows: Candidate[] }).rows[0];
     if (!candidate) return err("not_resumable", "状態が変わりました。最新の処理状況を確認してください");
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${candidate.sourceKey}`}))`);
@@ -151,7 +197,7 @@ export async function resumeAuditByOps(db: DbOrTx, clock: Clock, actor: Actor | 
       stepKeys.audit(payload.data) !== candidate.sourceKey
     )
       return err("not_resumable", "診断の依頼記録を照合できません。管理者に確認してください");
-    const refreshed = await tx.execute(candidates(undefined, auditId));
+    const refreshed = await tx.execute(auditRecoveryCandidatesQuery(undefined, auditId));
     const current = (refreshed as { rows: Candidate[] }).rows[0];
     if (!current) return err("not_resumable", "新しい診断や処理が見つかりました。最新の状態を確認してください");
     const blocked = blockedReason(current);
