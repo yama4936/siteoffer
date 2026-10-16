@@ -63,7 +63,7 @@ export function WorkQueue({
           <h2>
             あなたの確認で進む仕事 <span className="work-total">{total}</span>
           </h2>
-          <p>停止対応 → 担当・契約 → 確認 → 準備の順。同じ優先度は登録の古い順です。</p>
+          <p>停止対応 → 相談・担当・契約 → 確認 → 準備の順。同じ優先度は登録の古い順です。</p>
         </div>
         <button
           type="button"

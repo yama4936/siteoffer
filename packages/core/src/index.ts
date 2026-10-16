@@ -1,6 +1,7 @@
 export * from "./assignment/index.ts";
 export * from "./auth/index.ts";
 export * from "./common/index.ts";
+export * from "./consultation.ts";
 export * from "./content.ts";
 export * from "./contract/index.ts";
 export * from "./delivery/index.ts";

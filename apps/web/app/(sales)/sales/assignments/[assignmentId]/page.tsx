@@ -75,6 +75,14 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
         <a href="#activity-history" className={buttonVariants({ variant: "outline", size: "sm" })}>
           活動履歴を見る
         </a>
+        {d.activities.some((x) => x.consultOps) && (
+          <Link
+            href={`/sales/consultations?assignment=${a.id}`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            運営への相談・回答
+          </Link>
+        )}
       </nav>
       <SectionCard title="担当の概要">
         <DescriptionList>
@@ -182,7 +190,11 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <strong className="font-semibold">{activityKindLabel(x.kind)}</strong>{" "}
                   <span className="text-muted-foreground text-xs">{formatDateTime(x.occurredAt)}</span>
-                  {x.consultOps && <Badge variant="warning">運営に相談</Badge>}
+                  {x.consultOps && (
+                    <Link href={`/sales/consultations?focus=${x.id}`} className="text-primary underline">
+                      相談の回答・状況を見る
+                    </Link>
+                  )}
                 </div>
                 {x.note && <p className="whitespace-pre-wrap leading-relaxed">{x.note}</p>}
                 {x.nextActionMode === "clear" && (

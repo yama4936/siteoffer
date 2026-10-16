@@ -264,7 +264,7 @@ export async function listActivities(
   return ok(rows);
 }
 
-/** 運営への相談がある活動（運営のみ）。対応済みの管理は未実装（スキーマに列がない） */
+/** 運営への相談がある活動（運営のみ）。対応状況と回答は consultation の業務関数で扱う */
 export async function listOpsConsultations(
   db: DbOrTx,
   actor: Actor,

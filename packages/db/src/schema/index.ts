@@ -1,6 +1,7 @@
 export * from "./activity-draft.ts";
 export * from "./assignment.ts";
 export * from "./companies.ts";
+export * from "./consultation.ts";
 export * from "./content.ts";
 export * from "./contract.ts";
 export * from "./delivery.ts";

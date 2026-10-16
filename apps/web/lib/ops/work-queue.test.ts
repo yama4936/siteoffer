@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { confirmDomainPreference, fixedClock, saveDomainPreference } from "@siteoffer/core";
+import { confirmDomainPreference, fixedClock, saveDomainPreference, updateConsultationCase } from "@siteoffer/core";
 import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
 import {
   assignments,
@@ -11,6 +11,7 @@ import {
   discoveryJobs,
   domainPreferences,
   proposalVersions,
+  salesActivities,
   siteAudits,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
@@ -290,4 +291,53 @@ it("100件を超える未着手契約でも直接リンクは件数制限に埋�
   const q = await getOpsWorkQueue(db, b.ops);
   expect(q.ok && q.value.groups.find((g) => g.key === "delivery_start")?.count).toBe(106);
   expect(q.ok && q.value.items.filter((i) => i.group === "delivery_start")).toHaveLength(20);
+});
+
+it("営業相談は終了した担当でも未完了を集め、回答完了で消え、追加相談で戻る", async () => {
+  const b = await seedDeliveryBase(db);
+  const [a] = await db
+    .insert(salesActivities)
+    .values({
+      assignmentId: b.contract.assignmentId,
+      companyId: b.company.id,
+      userId: b.sales.userId,
+      kind: "negotiating",
+      occurredAt: new Date(),
+      consultOps: true,
+      note: "private consultation fixture",
+    })
+    .returning();
+  let q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.items.find((i) => i.id === a!.id)).toMatchObject({
+    group: "consultation",
+    href: `/ops/consultations?focus=${a!.id}`,
+  });
+  expect(JSON.stringify(q)).not.toContain("private consultation fixture");
+  const clock = fixedClock("2026-10-16T00:00:00Z");
+  expect(
+    (
+      await updateConsultationCase(db, clock, b.ops, {
+        activityId: a!.id,
+        revision: 0,
+        operation: "resolve",
+        note: "回答しました",
+        requestKey: randomUUID(),
+      })
+    ).ok,
+  ).toBe(true);
+  q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.items.some((i) => i.id === a!.id)).toBe(false);
+  expect(
+    (
+      await updateConsultationCase(db, clock, b.sales, {
+        activityId: a!.id,
+        revision: 1,
+        operation: "follow_up",
+        note: "追加で確認します",
+        requestKey: randomUUID(),
+      })
+    ).ok,
+  ).toBe(true);
+  q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.items.some((i) => i.id === a!.id)).toBe(true);
 });

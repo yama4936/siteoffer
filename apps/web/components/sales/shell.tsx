@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, Building2, CircleHelp, LogOut, Wallet } from "lucide-react";
+import { BriefcaseBusiness, Building2, CircleHelp, LogOut, MessageCircle, Wallet } from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
 import { OpsFrame } from "@/components/ops/frame";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 const NAV = [
   { href: "/sales/companies", label: "企業・案件", icon: Building2 },
   { href: "/sales/assignments", label: "担当案件", icon: BriefcaseBusiness },
+  { href: "/sales/consultations", label: "運営への相談", icon: MessageCircle },
   { href: "/sales/earnings", label: "実績・報酬", icon: Wallet },
 ];
 

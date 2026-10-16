@@ -10,13 +10,8 @@ import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
-import { ACTIVITY_LABEL, ASSIGNMENT_STATUS_LABEL, fmtDate, label, SUPPRESSION_LABEL } from "@/lib/ops/format";
-import {
-  listActiveSalesUsers,
-  listAssignmentsOverview,
-  listConsultations,
-  listSuppressedCompanies,
-} from "@/lib/ops/queries";
+import { ASSIGNMENT_STATUS_LABEL, fmtDate, label, SUPPRESSION_LABEL } from "@/lib/ops/format";
+import { listActiveSalesUsers, listAssignmentsOverview, listSuppressedCompanies } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
 import {
   extendAssignmentAction,
@@ -36,13 +31,12 @@ export default async function AssignmentsPage({
   const includeClosed = first(sp, "all") === "1";
   const db = getDb();
   const actor = await getCurrentActor();
-  const [list, salesUsers, suppressed, consultations] = await Promise.all([
+  const [list, salesUsers, suppressed] = await Promise.all([
     listAssignmentsOverview(db, actor, { includeClosed, id: focus }),
     listActiveSalesUsers(db, actor),
     listSuppressedCompanies(db, actor),
-    listConsultations(db, actor),
   ]);
-  if (!list.ok || !salesUsers.ok || !suppressed.ok || !consultations.ok) return <Forbidden />;
+  if (!list.ok || !salesUsers.ok || !suppressed.ok) return <Forbidden />;
   const here = includeClosed ? "/ops/assignments?all=1" : "/ops/assignments";
   // 運営確認待ちを先頭に
   const rows = [...list.value].sort(
@@ -208,40 +202,10 @@ export default async function AssignmentsPage({
         </Table>
       </Section>
 
-      <Section
-        title={`運営への相談（${consultations.value.length}件）`}
-        description="対応済みの管理は未実装です（core・スキーマに列がありません）。"
-      >
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>日時</TableHead>
-              <TableHead>企業</TableHead>
-              <TableHead>営業ユーザー</TableHead>
-              <TableHead>活動</TableHead>
-              <TableHead>メモ</TableHead>
-              <TableHead>次回対応</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {consultations.value.map(({ activity, companyName, userName }) => (
-              <TableRow key={activity.id}>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(activity.occurredAt)}</TableCell>
-                <TableCell className="min-w-40">
-                  <Link href={`/ops/companies/${activity.companyId}`}>{companyName}</Link>
-                </TableCell>
-                <TableCell>{userName}</TableCell>
-                <TableCell>
-                  <Badge variant="secondary">{label(ACTIVITY_LABEL, activity.kind)}</Badge>
-                </TableCell>
-                <TableCell className="min-w-48">{activity.note ?? "—"}</TableCell>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                  {fmtDate(activity.nextActionAt)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      <Section title="営業からの相談" description="相談の担当・回答・対応完了は、相談画面で管理できます。">
+        <Link href="/ops/consultations" className={buttonVariants({ variant: "outline" })}>
+          未対応・対応中の相談を見る
+        </Link>
       </Section>
 
       <Section
