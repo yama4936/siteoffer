@@ -15,7 +15,7 @@ import {
   saveActivityDraft,
 } from "@/lib/sales/activity-drafts";
 import { claimCompany, releaseMyAssignment, reportDeal, type SalesDeps, saveDomainWish } from "@/lib/sales/operations";
-import { issueProposalShare, revokeProposalShare } from "@/lib/sales/share";
+import { checkProposalShare, issueProposalShare, revokeProposalShare } from "@/lib/sales/share";
 import { getCurrentActor } from "@/lib/session";
 
 async function deps(): Promise<SalesDeps> {
@@ -92,4 +92,17 @@ export async function revokeShareAction(_prev: SalesActionState, formData: FormD
   const r = await revokeProposalShare(await deps(), formData);
   if (r?.status === "ok") refresh();
   return r;
+}
+
+/** URLのコピー前に現在の担当・承認・営業抑止・期限を確認する。URL自体は送信しない。 */
+export async function checkShareAction(proposalVersionId: string, linkId: string) {
+  try {
+    return await checkProposalShare(await deps(), proposalVersionId, linkId);
+  } catch {
+    return {
+      status: "error" as const,
+      message: "リンクの状態を確認できません。接続を確認して、もう一度コピーしてください。",
+      unavailable: false,
+    };
+  }
 }

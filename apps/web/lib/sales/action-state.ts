@@ -10,6 +10,7 @@ export type SalesActionState =
       activityId?: string;
       /** 共有リンクを発行したときのURL（トークンを含む）。この戻り値でだけ渡し、再表示はできない */
       shareUrl?: string;
+      shareLinkId?: string;
       /** 共有リンクの有効期限（ISO文字列） */
       shareExpiresAt?: string;
     }

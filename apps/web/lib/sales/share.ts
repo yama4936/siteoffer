@@ -5,10 +5,12 @@
  * Next.js に依存しない形にして、PGlite の結合テストから直接呼べるようにしている。
  */
 import { type Actor, type Clock, issueShareLink, listShareLinks, revokeShareLink, shareLinkUrl } from "@siteoffer/core";
-import type { DbOrTx } from "@siteoffer/db";
+import { companies, type DbOrTx, proposals, proposalVersions, users } from "@siteoffer/db";
+import { eq } from "drizzle-orm";
 import type { SalesActionState } from "./action-state.ts";
 import { previewOrigin } from "./preview.ts";
 import { UUID_RE } from "./queries.ts";
+import type { ShareCheckResult } from "./share-presentation.ts";
 
 export interface ShareDeps {
   db: DbOrTx;
@@ -28,6 +30,16 @@ export const SHARE_ERROR_MESSAGES: Record<string, string> = {
   already_revoked: "この共有リンクはすでに取り消されています。",
   unauthenticated: "ログインしてください。",
 };
+
+async function activeUser(deps: ShareDeps): Promise<boolean> {
+  const actor = deps.actor;
+  if (!actor || (actor.kind !== "sales" && actor.kind !== "ops") || !UUID_RE.test(actor.userId)) return false;
+  const [user] = await deps.db
+    .select({ role: users.role, status: users.status })
+    .from(users)
+    .where(eq(users.id, actor.userId));
+  return user?.status === "active" && user.role === actor.kind;
+}
 
 const fail = (message: string): SalesActionState => ({ status: "error", message });
 
@@ -60,7 +72,7 @@ export async function issueProposalShare(
     if (!/^\d{1,5}$/.test(ttlRaw)) return fail("有効期間を確認してください。");
     ttlHours = Number(ttlRaw);
   }
-  if (!deps.actor) return fail(SHARE_ERROR_MESSAGES.unauthenticated!);
+  if (!(await activeUser(deps))) return fail(SHARE_ERROR_MESSAGES.unauthenticated!);
   const r = await issueShareLink(deps.db, deps.clock, deps.actor, {
     purpose: "proposal",
     targetId: versionId,
@@ -72,6 +84,7 @@ export async function issueProposalShare(
     message:
       "共有リンクを発行しました。このURLはこの画面でだけ表示します。閉じると再表示できないため、必要なら新しく発行してください。",
     shareUrl: shareLinkUrl(origin, r.value.token),
+    shareLinkId: r.value.link.id,
     shareExpiresAt: r.value.link.expiresAt.toISOString(),
   };
 }
@@ -80,9 +93,9 @@ export async function issueProposalShare(
 export async function revokeProposalShare(deps: ShareDeps, fd: FormData): Promise<SalesActionState> {
   const linkId = str(fd, "linkId");
   if (!UUID_RE.test(linkId)) return fail("取り消すリンクが指定されていません。");
-  if (!deps.actor) return fail(SHARE_ERROR_MESSAGES.unauthenticated!);
+  if (!(await activeUser(deps))) return fail(SHARE_ERROR_MESSAGES.unauthenticated!);
   const r = await revokeShareLink(deps.db, deps.clock, deps.actor, linkId);
-  if (!r.ok) return shareError(r);
+  if (!r.ok && r.error !== "already_revoked") return shareError(r);
   return { status: "ok", message: "共有リンクを取り消しました。このリンクでは改善デモを開けなくなります。" };
 }
 
@@ -102,6 +115,7 @@ export async function listProposalShares(
   versionId: string,
 ): Promise<{ ok: true; value: ShareLinkView[] } | { ok: false; error: string }> {
   if (!UUID_RE.test(versionId)) return { ok: false, error: "target_not_found" };
+  if (!(await activeUser(deps))) return { ok: false, error: "forbidden" };
   const r = await listShareLinks(deps.db, deps.actor, { purpose: "proposal", targetId: versionId });
   if (!r.ok) return { ok: false, error: r.error };
   const now = deps.clock.now().getTime();
@@ -115,4 +129,40 @@ export async function listProposalShares(
       revokedAt: l.revokedAt,
     })),
   };
+}
+
+/** コピー直前の再確認。ブラウザから会社・担当・期限を受け取らず、現在のDBで判定する。 */
+export async function checkProposalShare(
+  deps: ShareDeps,
+  versionId: string,
+  linkId: string,
+): Promise<ShareCheckResult> {
+  const denied: ShareCheckResult = {
+    status: "error",
+    message: "このリンクは共有できません。担当・提案の承認状態を確認してください。",
+    unavailable: true,
+  };
+  if (!UUID_RE.test(versionId) || !UUID_RE.test(linkId)) return denied;
+  const links = await listProposalShares(deps, versionId);
+  if (!links.ok) return denied;
+  const link = links.value.find((l) => l.id === linkId);
+  if (!link) return denied;
+  if (link.state !== "active")
+    return {
+      status: "error",
+      message: link.state === "revoked" ? "この共有リンクは取り消されています。" : "この共有リンクは期限切れです。",
+      unavailable: true,
+    };
+  const [target] = await deps.db
+    .select({
+      status: proposalVersions.status,
+      artifact: proposalVersions.demoArtifactDir,
+      suppression: companies.suppression,
+    })
+    .from(proposalVersions)
+    .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+    .innerJoin(companies, eq(companies.id, proposals.companyId))
+    .where(eq(proposalVersions.id, versionId));
+  if (target?.status !== "approved" || !target.artifact || target.suppression !== "none") return denied;
+  return { status: "ok", expiresAt: link.expiresAt.toISOString() };
 }
