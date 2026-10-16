@@ -1,10 +1,11 @@
 "use server";
 
+import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
 /**
  * 運営画面の Server Function。直接POSTでも呼べるため、権限は各処理（lib/ops/commands.ts → core）で判定する。
  * ここでは FormData を読み、処理を呼び、結果の文言を付けて元の画面へ戻すだけにする。
  */
-import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
+import { requestPreparedAudits } from "@siteoffer/worker/audit-preparation";
 import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
 import { requestAuditByOps } from "@siteoffer/worker/audit-request";
 import { cancelAuditRequest } from "@siteoffer/worker/audit-request-management";
@@ -568,5 +569,19 @@ export async function cancelCompanyAuditAction(requestId: string) {
     };
   } catch {
     return { ok: false, message: "取消結果を確認できませんでした。同じ操作でもう一度確認してください。" };
+  }
+}
+
+export async function requestPreparedAuditsAction(input: unknown) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await requestPreparedAudits(getDb(), systemClock, actor, input);
+    if (!result.ok) return { ok: false as const, message: result.message ?? "対象と操作権限を確認してください。" };
+    revalidatePath("/ops");
+    revalidatePath("/ops/processing");
+    for (const item of result.value.items) revalidatePath(`/ops/companies/${item.companyId}`);
+    return { ok: true as const, items: result.value.items };
+  } catch {
+    return { ok: false as const, message: "受付結果を確認できません。同じ選択で再度操作してください。" };
   }
 }

@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
+import { listAuditPreparation, requestPreparedAudits } from "../src/audit-preparation.ts";
 import { getAuditAttentionWork } from "../src/audit-recovery.ts";
 import { auditRequestKey, requestAuditByOps, validateAuditRequest } from "../src/audit-request.ts";
 import { cancelAuditRequest, listAuditRequests } from "../src/audit-request-management.ts";
@@ -266,6 +267,30 @@ async function main() {
   assert.deepEqual(await cancelling, { ok: false, error: "forbidden", message: "操作権限を確認してください" });
   checks.push("suspension committed during preflight prevents cancellation");
   console.log("PASS live permission race");
+  const initialCompanies = await Promise.all([seed(admin.db, "PG一括A"), seed(admin.db, "PG一括B")]);
+  for (const c of initialCompanies)
+    await admin.db.update(companies).set({ pipelineStatus: "collected" }).where(eq(companies.id, c.company.id));
+  const preparation = await listAuditPreparation(admin.db, ops[0]!, { query: "PG一括" });
+  assert(preparation.ok && preparation.value.total === 2);
+  const batch = initialCompanies.map((c) => ({
+    companyId: c.company.id,
+    websiteId: c.website.id,
+    targetUrl: c.website.url,
+    requestId: randomUUID(),
+  }));
+  const batchResults = await Promise.all(
+    peers.slice(0, 3).map((p, i) => requestPreparedAudits(p.db, systemClock, ops[i]!, batch)),
+  );
+  assert(batchResults.every((r) => r.ok && r.value.items.length === 2 && r.value.items.every((item) => item.ok)));
+  for (const c of initialCompanies)
+    assert.equal(
+      (await admin.db.select().from(auditRequests).where(eq(auditRequests.companyId, c.company.id))).length,
+      1,
+    );
+  const preparedAfter = await listAuditPreparation(admin.db, ops[0]!, { query: "PG一括" });
+  assert(preparedAfter.ok && preparedAfter.value.total === 0);
+  checks.push("3 simultaneous batches over independent PostgreSQL connections create one request per company");
+  console.log("PASS concurrent preparation batches");
   // 本番データを使わない。検証専用DBに2,000社×10履歴を構築する。
   await admin.pool.query(`create table qa_bench as select gen_random_uuid() company_id,gen_random_uuid() website_id,n from generate_series(1,2000) n;
  insert into companies(id,name,official_site_status,pipeline_status) select company_id,'架空負荷試験 '||n,'confirmed','failed' from qa_bench;

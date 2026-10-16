@@ -1,9 +1,11 @@
 import { systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
+import { listAuditPreparation } from "@siteoffer/worker/audit-preparation";
 import { getAuditRecoveryCandidates } from "@siteoffer/worker/audit-recovery";
 import { AUDIT_REQUEST_VIEWS, listAuditRequests } from "@siteoffer/worker/audit-request-management";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AuditPreparation } from "@/components/ops/audit-preparation";
 import { AuditRecovery } from "@/components/ops/audit-recovery";
 import { AuditRequests } from "@/components/ops/audit-requests";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
@@ -58,6 +60,14 @@ export default async function ProcessingPage({
   });
   if (!requests.ok) notFound();
   const requested = requests.value;
+  if (sp.preparationQuery !== undefined && typeof sp.preparationQuery !== "string") notFound();
+  const preparation = await listAuditPreparation(db, user.actor, {
+    companyId: company,
+    query: sp.preparationQuery as string | undefined,
+    page: Number(sp.preparationPage),
+  });
+  if (!preparation.ok) notFound();
+  const prepared = preparation.value;
 
   const discovery = await discoveryAvailability(db, systemClock);
   const groups = [
@@ -133,6 +143,8 @@ export default async function ProcessingPage({
   function pageHref(kind: string, page: number) {
     const q = new URLSearchParams();
     if (company) q.set("company", company);
+    q.set("preparationPage", String(kind === "preparation" ? page : prepared.page));
+    if (prepared.query) q.set("preparationQuery", prepared.query);
     q.set("requestPage", String(kind === "requests" ? page : requested.page));
     q.set("requestView", requested.view);
     if (requested.query) q.set("requestQuery", requested.query);
@@ -140,8 +152,11 @@ export default async function ProcessingPage({
     q.set("auditPage", String(kind === "audit" ? page : recoverable.page));
     if (deliveryState === "stopped") q.set("deliveryState", "stopped");
     for (const [key, value] of Object.entries(d.paging)) q.set(`${key}Page`, String(key === kind ? page : value.page));
-    return `/ops/processing?${q}#${kind === "audit" ? "audit-recovery" : kind === "requests" ? "audit-requests" : `processing-${kind}`}`;
+    return `/ops/processing?${q}#${kind === "preparation" ? "audit-preparation" : kind === "audit" ? "audit-recovery" : kind === "requests" ? "audit-requests" : `processing-${kind}`}`;
   }
+  const preparationSearchFields = Array.from(
+    new URL(pageHref("preparation", 1), "http://local.invalid").searchParams.entries(),
+  ).filter(([key]) => key !== "preparationQuery");
   function requestFilterHref(view: string) {
     const u = new URL(pageHref("requests", 1), "http://local.invalid");
     u.searchParams.set("requestView", view);
@@ -190,6 +205,13 @@ export default async function ProcessingPage({
           </Link>
         </p>
       )}
+      <AuditPreparation
+        key={`${company ?? "all"}:${prepared.query}`}
+        data={prepared}
+        searchFields={preparationSearchFields}
+        previousHref={pageHref("preparation", prepared.page - 1)}
+        nextHref={pageHref("preparation", prepared.page + 1)}
+      />
       <div id="audit-attention" className="scroll-mt-24">
         <AuditRecovery
           {...recoverable}

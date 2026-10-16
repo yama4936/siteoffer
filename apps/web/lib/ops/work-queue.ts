@@ -19,6 +19,7 @@ import {
   users,
 } from "@siteoffer/db";
 import { discoveryCriteriaSchema } from "@siteoffer/discovery";
+import { listAuditPreparation } from "@siteoffer/worker/audit-preparation";
 import { getAuditAttentionWork } from "@siteoffer/worker/audit-recovery";
 import { and, asc, eq, gt, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -39,6 +40,7 @@ export const WORK_GROUPS = {
   delivery_recovery: { label: "制作の復旧", href: "/ops/processing?deliveryState=stopped#processing-deliveries" },
   delivery: { label: "制作・公開", href: "/ops/delivery" },
   website: { label: "公式サイト確認", href: "/ops/discovery?pipeline=collected" },
+  audit_preparation: { label: "診断の準備", href: "/ops/processing#audit-preparation" },
   preparation: { label: "デザインの準備", href: "/ops/designs" },
 } as const;
 export type WorkGroup = keyof typeof WORK_GROUPS;
@@ -84,6 +86,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     consultation,
     deliveryRecovery,
     auditAttention,
+    auditPreparation,
   ] = await Promise.all([
     db
       .select({
@@ -321,9 +324,23 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
       )
       .limit(PER_GROUP),
     getAuditAttentionWork(db, actor),
+    listAuditPreparation(db, actor),
   ]);
   if (!auditAttention.ok) return auditAttention;
+  if (!auditPreparation.ok) return auditPreparation;
   const items: WorkItem[] = [
+    ...auditPreparation.value.items.map((r) => ({
+      id: r.companyId,
+      group: "audit_preparation" as const,
+      title: r.companyName,
+      reason: r.blockedReason ?? "公式サイトは確認済みです。対象を確認すると診断を依頼できます。",
+      action: r.blockedReason ? "公式サイトを確認" : "対象を確認して診断",
+      href: r.blockedReason
+        ? `/ops/companies/${r.companyId}`
+        : `/ops/processing?company=${r.companyId}#audit-preparation`,
+      since: r.createdAt,
+      priority: 3,
+    })),
     ...auditAttention.value.items.map((r) => ({
       id: r.id,
       group: "audit_attention" as const,
@@ -490,6 +507,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
   const groups = Object.entries({
     discovery: failed,
     audit_attention: [{ total: auditAttention.value.total }],
+    audit_preparation: [{ total: auditPreparation.value.total }],
     design,
     proposal,
     assignment,

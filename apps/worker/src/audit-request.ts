@@ -116,7 +116,12 @@ export async function requestAuditByOps(
   db: DbOrTx,
   clock: Clock,
   actor: Actor | null,
-  input: { companyId: string; requestId: string },
+  input: {
+    companyId: string;
+    requestId: string;
+    initialOnly?: boolean;
+    expectedTarget?: { websiteId: string; url: string };
+  },
 ) {
   if (actor?.kind !== "ops" || !(await isAuditOperator(db, actor))) return err("forbidden", "運営だけが行える操作です");
   if (!UUID.test(input.companyId) || !UUID.test(input.requestId))
@@ -149,6 +154,16 @@ export async function requestAuditByOps(
       return same.companyId === company.id
         ? ok({ requestId: same.id, alreadyAccepted: true })
         : err("invalid_input", "この依頼は別の企業で使用済みです");
+    if (input.expectedTarget) {
+      const target = await currentAuditSite(tx, company.id);
+      const checked = target ? checkPublicHttpUrl(target.url) : null;
+      if (
+        target?.id !== input.expectedTarget.websiteId ||
+        !checked?.ok ||
+        checked.url.href !== input.expectedTarget.url
+      )
+        return err("target_changed", "診断対象が変更されました。現在の公式サイトを確認して選び直してください。");
+    }
     const [pending] = await tx
       .select()
       .from(auditRequests)
@@ -162,6 +177,15 @@ export async function requestAuditByOps(
         after: { companyId: company.id, requestId: pending.id },
       });
       return ok({ requestId: pending.id, alreadyAccepted: true });
+    }
+    if (input.initialOnly) {
+      const prior = await tx.execute(sql`select 1 from audit_requests where company_id=${company.id}::uuid
+        union all select 1 from site_audits where company_id=${company.id}::uuid limit 1`);
+      if (
+        !["collected", "site_confirmed"].includes(company.pipelineStatus) ||
+        (prior as { rows: unknown[] }).rows.length
+      )
+        return err("not_ready", "すでに診断の受付・結果、または進行中の作業があります。企業画面で確認してください。");
     }
     const issue = await requestIssue(tx, actor, company);
     if (issue) return err("not_ready", issue);
@@ -180,7 +204,12 @@ export async function requestAuditByOps(
       action: "audit.requested",
       targetType: "company",
       targetId: company.id,
-      after: { requestId: input.requestId, websiteId: site.id, targetUrl: new URL(site.url).href },
+      after: {
+        requestId: input.requestId,
+        websiteId: site.id,
+        targetUrl: new URL(site.url).href,
+        initialOnly: input.initialOnly === true,
+      },
     });
     await recordEvent(tx, clock, {
       actor,
@@ -203,6 +232,19 @@ export async function validateAuditRequest(db: DbOrTx, payload: { companyId: str
     .where(and(eq(auditRequests.id, id), eq(auditRequests.companyId, payload.companyId)));
   if (!r) return "診断の受付が見つかりません";
   if (r.finishedAt) return "この診断依頼は終了済みです。現在の診断結果を確認してください。";
+  // 初回診断のまとめ受付は、待機中に別経路で診断済みになった企業を再採点しない。
+  // 同じ依頼が作った診断は除外し、ワーカー自身の正当な再試行は継続できる。
+  const firstOnly = await db.execute(sql`select 1 from audit_events e where e.action='audit.requested'
+    and e.target_type='company' and e.target_id=${r.companyId} and e."after"->>'requestId'=${r.id}
+    and e."after"->>'initialOnly'='true' limit 1`);
+  if ((firstOnly as { rows: unknown[] }).rows.length) {
+    const other = await db.execute(sql`select 1 from site_audits a where a.company_id=${r.companyId}::uuid
+      and not exists(select 1 from audit_events e where e.target_type='site_audit' and e.target_id=a.id::text
+        and e.action='site_audit.started' and e."after"->>'workerStepKey'=${auditRequestKey(r)}) limit 1`);
+    if ((other as { rows: unknown[] }).rows.length)
+      return "受付後に別の診断が見つかりました。既存の結果と処理状況を確認してください。";
+  }
+
   const [company] = await db.select().from(companies).where(eq(companies.id, payload.companyId));
   const site = await currentAuditSite(db, payload.companyId);
   if (company && !["collected", "site_confirmed", "audited", "on_hold", "failed"].includes(company.pipelineStatus))
