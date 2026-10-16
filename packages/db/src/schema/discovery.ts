@@ -55,10 +55,27 @@ export const discoverySources = pgTable(
   (t) => [uniqueIndex("discovery_sources_provider_external").on(t.provider, t.externalId)],
 );
 
+export type IntakePhase = "starting" | "designs" | "images" | "discovery" | "deliveries" | "idle" | "error";
+export interface WorkerCapabilities {
+  version: 1;
+  discoveryOnly: boolean;
+  imageConfigured: boolean;
+  generator: "mock" | "codex" | "unknown";
+  intakeIntervalMs: number;
+}
+export interface WorkerProgress {
+  phase: IntakePhase;
+  since: string;
+  completedAt: string | null;
+  lastErrorAt: string | null;
+}
+
 /** Only public capabilities and liveness; never credentials or connection strings. */
 export const workerRuntimes = pgTable("worker_runtimes", {
   id: uuid("id").primaryKey(),
   providers: jsonb("providers").$type<string[]>().notNull(),
   mode: text("mode").notNull(),
   heartbeatAt: ts("heartbeat_at").notNull(),
+  capabilities: jsonb("capabilities").$type<WorkerCapabilities>(),
+  progress: jsonb("progress").$type<WorkerProgress>(),
 });

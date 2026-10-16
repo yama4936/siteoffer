@@ -14,6 +14,8 @@ const actor = { kind: "system", job: "design-worker" } as const;
 /** Durable claim before API call. A crash is surfaced, never silently charged again. */
 export async function processDesignJobs(deps: WorkerDeps, provider?: ImageGenerator) {
   const { db, clock } = deps;
+  // A worker without image credentials must leave queued images for a configured worker.
+  if (!provider && !process.env.OPENAI_API_KEY?.trim()) return;
   await db
     .update(designVersions)
     .set({

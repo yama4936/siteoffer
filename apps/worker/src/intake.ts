@@ -1,6 +1,7 @@
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
 import { type Actor, addDeliveryVersion, canTransition, transitionDelivery } from "@siteoffer/core";
+import type { IntakePhase } from "@siteoffer/db";
 import {
   companies,
   contentEntries,
@@ -269,13 +270,28 @@ async function findAuditForContract(deps: WorkerDeps, contract: typeof contracts
 }
 
 /** 受付処理を1回実行する（収集 → 納品の順） */
-export async function runIntakeOnce(deps: WorkerDeps, state: IntakeState) {
-  if (deps.discoveryOnly) return { discovery: await intakeDiscoveryJobs(deps, state), deliveries: [] };
-  await intakeDesignBuilds(deps);
-  await processDesignJobs(deps);
-  const discovery = await intakeDiscoveryJobs(deps, state);
-  const deliveriesResult = await intakeDeliveries(deps, state);
-  return { discovery, deliveries: deliveriesResult };
+export async function runIntakeOnce(
+  deps: WorkerDeps,
+  state: IntakeState,
+  report?: (phase: IntakePhase) => Promise<void>,
+) {
+  try {
+    if (!deps.discoveryOnly) {
+      await report?.("designs");
+      await intakeDesignBuilds(deps);
+      await report?.("images");
+      await processDesignJobs(deps);
+    }
+    await report?.("discovery");
+    const discovery = await intakeDiscoveryJobs(deps, state);
+    if (!deps.discoveryOnly) await report?.("deliveries");
+    const deliveriesResult = deps.discoveryOnly ? [] : await intakeDeliveries(deps, state);
+    await report?.("idle");
+    return { discovery, deliveries: deliveriesResult };
+  } catch (error) {
+    await report?.("error");
+    throw error;
+  }
 }
 
 export interface IntakeLoop {
@@ -286,14 +302,19 @@ export interface IntakeLoop {
  * 受付処理を一定間隔で動かす。前の回が終わってから次の回を予約する（重ならない）。
  * 例外はログに出して次の回へ進む。
  */
-export function startIntakeLoop(deps: WorkerDeps, intervalMs: number, state = createIntakeState()): IntakeLoop {
+export function startIntakeLoop(
+  deps: WorkerDeps,
+  intervalMs: number,
+  state = createIntakeState(),
+  report?: (phase: IntakePhase) => Promise<void>,
+): IntakeLoop {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
   let current: Promise<void> | null = null;
   const tick = () => {
     timer = null;
     if (stopped) return;
-    current = runIntakeOnce(deps, state)
+    current = runIntakeOnce(deps, state, report)
       .then(
         () => {},
         (e: unknown) => deps.logger.error("受付処理に失敗した", { message: (e as Error).message }),

@@ -12,6 +12,7 @@ export type DesignJourneyInput = {
 export const DESIGN_STEPS = ["制作条件", "画像を用意", "画像を確認", "サイトを制作", "提案を引き継ぐ"] as const;
 export function designJourney({ companyId, canCreate, configured, design: d, proposal: p }: DesignJourneyInput) {
   const company = `/ops/companies/${companyId}`;
+  const processing = `/ops/processing?${new URLSearchParams({ company: companyId })}`;
   const review = `/ops/review?${new URLSearchParams({ company: companyId, ...(p ? { version: p.id } : {}) })}`;
   const state = (step: number, title: string, description: string, action: string, href: string, waiting = false) => ({
     step,
@@ -52,9 +53,9 @@ export function designJourney({ companyId, canCreate, configured, design: d, pro
     return state(
       1,
       d.status === "queued" ? "画像生成の開始待ち" : "デザイン画像を生成中",
-      "完了するとこの画面に画像が表示されます。画面を閉じても処理の依頼は残ります。長く変わらない場合は企業情報の処理履歴を確認してください。",
-      "企業情報・処理履歴を見る",
-      company,
+      "完了するとこの画面に画像が表示されます。画面を閉じても処理の依頼は残ります。長く変わらない場合は処理の状況からワーカーの通知を確認してください。",
+      "処理の状況を確認",
+      processing,
       true,
     );
   if (d.status === "failed" || d.status === "rejected")
@@ -86,8 +87,8 @@ export function designJourney({ companyId, canCreate, configured, design: d, pro
       3,
       "サイトを制作中・開始待ち",
       "依頼は受け付け済みです。完成したら提案レビューで表示・内容・機能を確認します。長く変わらない場合は処理履歴を確認してください。",
-      "企業情報・処理履歴を見る",
-      company,
+      "処理の状況を確認",
+      processing,
       true,
     );
   if (p.status === "failed" || p.status === "rejected")

@@ -29,6 +29,11 @@ export default async function OpsHome({
       />
       <Flash searchParams={await searchParams} />
       <WorkQueue {...r.value} updatedAt={systemClock.now().toISOString()} />
+      <p className="my-4 text-sm">
+        <Link href="/ops/processing" className="text-primary underline">
+          待機中の処理・ワーカーの状態を確認
+        </Link>
+      </p>
       <section className="work-system" aria-label="運用の状態">
         <Link href="/ops/discovery">
           <span>収集ワーカー</span>

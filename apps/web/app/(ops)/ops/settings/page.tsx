@@ -1,4 +1,5 @@
 import { Filter } from "lucide-react";
+import Link from "next/link";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
 import { inlineFormClass } from "@/components/ops/ui-parts-1";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +37,11 @@ export default async function SettingsPage({
     <>
       <PageHeader title="設定・操作履歴" description="運用ルールと変更の履歴を確認します。" />
       <Flash searchParams={sp} />
+      <p className="mb-5 text-sm">
+        <Link className="text-primary underline" href="/ops/processing">
+          処理の状況・ワーカーの通知を確認
+        </Link>
+      </p>
 
       <Section
         title="運営設定"

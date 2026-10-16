@@ -221,3 +221,22 @@ it("画像APIのリクエスト・失敗・不正ファイルを検証する", a
   await expect(failed.generate("design", "model")).rejects.toThrow("HTTP 429");
   await expect(normalizeDesignImage(Buffer.from("<svg>unsafe</svg>"))).rejects.toThrow();
 });
+
+it("an image worker without credentials leaves queued work for a configured worker", async () => {
+  const { company, audit, actor } = await seed();
+  const d = await createDesign(env.db, env.clock, actor, {
+    companyId: company.id,
+    auditId: audit.id,
+    brief: DEFAULT_DESIGN_BRIEF,
+    requestKey: "missing-image-key",
+    source: "openai",
+    model: "test-model",
+  });
+  vi.stubEnv("OPENAI_API_KEY", "");
+  try {
+    await processDesignJobs(env.deps);
+    expect((await env.db.select().from(designVersions).where(eq(designVersions.id, d.id)))[0]?.status).toBe("queued");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});

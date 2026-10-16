@@ -18,7 +18,7 @@ describe("design journey", () => {
       expect(designJourney({ ...base, design: { ...design, status } })).toMatchObject({
         step: 1,
         waiting: true,
-        href: "/ops/companies/company-one",
+        href: "/ops/processing?company=company-one",
       });
     },
   );

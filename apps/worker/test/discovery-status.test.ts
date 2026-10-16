@@ -64,3 +64,56 @@ it("real collection has no fake search and collection-only mode queues no audit"
   expect(results).toHaveLength(1);
   expect(results[0]?.outcome).toMatchObject({ status: "succeeded", result: { auditQueued: [] } });
 });
+
+it("heartbeat reports intake progress independently of process liveness", async () => {
+  const stop = await startWorkerHeartbeat(e.deps, "demo", 5000);
+  try {
+    await stop.report("images");
+    const [working] = await e.db.select().from(workerRuntimes);
+    expect(working?.capabilities).toMatchObject({
+      version: 1,
+      discoveryOnly: false,
+      generator: "mock",
+      intakeIntervalMs: 5000,
+    });
+    expect(working?.progress).toMatchObject({ phase: "images", completedAt: null });
+    await stop.report("error");
+    expect((await e.db.select().from(workerRuntimes))[0]?.progress?.lastErrorAt).toBe(e.clock.now().toISOString());
+    await stop.report("idle");
+    expect((await e.db.select().from(workerRuntimes))[0]?.progress).toMatchObject({
+      phase: "idle",
+      completedAt: e.clock.now().toISOString(),
+    });
+  } finally {
+    await stop();
+  }
+  await stop.report("images");
+  expect(await e.db.select().from(workerRuntimes)).toHaveLength(0);
+});
+it("intake reports actual phases and collection-only failures without advertising production", async () => {
+  const phases: string[] = [];
+  const report = async (phase: string) => {
+    phases.push(phase);
+  };
+  await runIntakeOnce(e.deps, createIntakeState(), report);
+  expect(phases).toEqual(["designs", "images", "discovery", "deliveries", "idle"]);
+  e.deps.discoveryOnly = true;
+  const stop = await startWorkerHeartbeat(e.deps, "standard");
+  try {
+    expect((await e.db.select().from(workerRuntimes))[0]?.capabilities).toMatchObject({
+      discoveryOnly: true,
+      imageConfigured: false,
+    });
+  } finally {
+    await stop();
+  }
+  await job("fixture");
+  e.deps.queue = {
+    send: async () => {
+      throw new Error("test queue failure");
+    },
+  };
+  phases.length = 0;
+  await expect(runIntakeOnce(e.deps, createIntakeState(), report)).rejects.toThrow("test queue failure");
+  expect(phases).toEqual(["discovery", "error"]);
+});
