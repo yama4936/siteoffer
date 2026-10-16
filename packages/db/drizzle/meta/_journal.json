@@ -253,6 +253,13 @@
       "when": 1792191501915,
       "tag": "0035_nebulous_toxin",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792192582679,
+      "tag": "0036_gorgeous_starfox",
+      "breakpoints": true
     }
   ]
 }

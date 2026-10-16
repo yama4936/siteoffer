@@ -1,6 +1,7 @@
 import {
   ClipboardCheck,
   FileSignature,
+  Images,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -29,6 +30,7 @@ export const NAV_ITEMS = [
   { href: "/ops/discovery", label: "企業・案件", icon: Search },
   { href: "/ops/designs", label: "デザイン・提案書", icon: Palette },
   { href: "/ops/review", label: "提案レビュー", icon: ClipboardCheck },
+  { href: "/ops/materials", label: "顧客の写真・ロゴ", icon: Images },
   { href: "/ops/content", label: "お知らせ・ブログ", icon: Newspaper },
   { href: "/ops/delivery", label: "制作・公開", icon: PackageCheck },
   { href: "/ops/consultations", label: "営業からの相談", icon: MessageCircle },
@@ -44,11 +46,13 @@ export function OpsShell({
   children,
   unreadCount,
   recoveryCount = null,
+  materialCount = null,
 }: {
   userName: string;
   children: ReactNode;
   unreadCount: number | null;
   recoveryCount?: number | null;
+  materialCount?: number | null;
 }) {
   return (
     <OpsFrame
@@ -71,6 +75,14 @@ export function OpsShell({
                 <item.icon aria-hidden="true" />
                 <span>{item.label}</span>
                 {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
+                {item.href === "/ops/materials" && materialCount !== null && materialCount > 0 && (
+                  <span
+                    className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"
+                    title={`確認待ち ${materialCount}件`}
+                  >
+                    {materialCount}
+                  </span>
+                )}
                 {item.href === "/ops/account-recovery" && recoveryCount !== null && recoveryCount > 0 && (
                   <span
                     className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"

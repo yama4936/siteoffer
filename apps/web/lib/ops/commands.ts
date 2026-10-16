@@ -46,6 +46,7 @@ import {
   designVersions,
   discoveryJobs,
   imageAssets,
+  imageSubmissions,
   productTerms,
   proposals,
   proposalVersions,
@@ -453,6 +454,24 @@ export async function updateImageAssetPolicy(
     if (!before) return fail("not_found");
     if (input.expectedRevision !== undefined && before.policyRevision !== input.expectedRevision)
       return fail("conflict", "別の担当が素材を更新しました。最新の画像と許諾を確認してから更新してください");
+    const [submission] = await tx
+      .select()
+      .from(imageSubmissions)
+      .where(eq(imageSubmissions.assetId, before.id))
+      .for("share");
+    if (
+      submission &&
+      (input.allowSalesDemo ||
+        input.allowProduction ||
+        (input.placement !== undefined && input.placement !== "reference")) &&
+      (submission.status !== "accepted" ||
+        (input.allowSalesDemo && !submission.requestedDemo) ||
+        (input.allowProduction && !submission.requestedProduction))
+    )
+      return fail(
+        "customer_scope",
+        "顧客提出の確認結果と許可された用途を確認してください。未確認・取り下げ済みの画像は利用できません",
+      );
     const placement = input.placement ?? before.placement;
     const replaced =
       placement !== "reference" ? locked.filter((a) => a.id !== before.id && a.placement === placement) : [];

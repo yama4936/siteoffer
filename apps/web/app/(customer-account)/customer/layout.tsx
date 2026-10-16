@@ -10,7 +10,13 @@ export default async function Layout({ children }: { children: ReactNode }) {
     <div className="min-h-dvh bg-slate-50">
       <header className="border-b bg-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-5 py-4">
-          <Brand />
+          <div className="flex flex-wrap items-center gap-5">
+            <Brand />
+            <nav aria-label="顧客メニュー" className="flex gap-4 text-sm">
+              <Link href="/customer/content">記事の更新</Link>
+              <Link href="/customer/materials">写真・ロゴ</Link>
+            </nav>
+          </div>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <span>{user.displayName} さん</span>
             <Link href="/account/security" className="underline">

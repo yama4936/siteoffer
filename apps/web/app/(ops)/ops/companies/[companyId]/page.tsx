@@ -367,6 +367,11 @@ export default async function CompanyPage({
       </Section>
 
       <Section id="image-assets" title="画像素材と利用許諾">
+        <p className="mb-4 text-sm">
+          <Link href={`/ops/materials?company=${companyId}&all=1`} className="underline">
+            この会社の顧客提出素材を確認
+          </Link>
+        </p>
         <Alert>
           <AlertDescription>
             元サイトの画像は登録しただけでは営業デモや納品サイトに使えません。権利状態と利用範囲を画像ごとに確認してください。外部画像の直リンクは行いません。

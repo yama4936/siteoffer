@@ -38,19 +38,7 @@ export async function attachImageAssetFile(
   if (!uuid.test(input.assetId) || !uuid.test(input.companyId))
     throw new ImageAssetError("対象の素材を確認してください");
   const { png, width, height } = input;
-  if (
-    !Buffer.isBuffer(png) ||
-    png.length < 24 ||
-    png.length > 8 * 1024 * 1024 ||
-    !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
-    width < 1 ||
-    height < 1 ||
-    width > 2560 ||
-    height > 2560 ||
-    png.readUInt32BE(16) !== width ||
-    png.readUInt32BE(20) !== height
-  )
-    throw new ImageAssetError("保存する画像の形式を確認できません");
+  validateNormalizedAssetImage(input);
   const sha256 = createHash("sha256").update(png).digest("hex");
   return db.transaction(async (tx) => {
     const [asset] = await tx
@@ -233,4 +221,21 @@ export async function loadDeliveryImageAssets(db: DbOrTx, buildId: string, deliv
     result.push({ ...a, bytes });
   }
   return result;
+}
+
+/** Internal normalized image boundary shared by operator and customer uploads. */
+export function validateNormalizedAssetImage({ png, width, height }: { png: Buffer; width: number; height: number }) {
+  if (
+    !Buffer.isBuffer(png) ||
+    png.length < 24 ||
+    png.length > 8 * 1024 * 1024 ||
+    !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+    width < 1 ||
+    height < 1 ||
+    width > 2560 ||
+    height > 2560 ||
+    png.readUInt32BE(16) !== width ||
+    png.readUInt32BE(20) !== height
+  )
+    throw new ImageAssetError("保存する画像の形式を確認できません");
 }

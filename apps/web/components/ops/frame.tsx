@@ -10,6 +10,7 @@ const titles: Record<string, string> = {
   review: "提案レビュー",
   designs: "デザイン・提案書",
   content: "お知らせ・ブログ",
+  materials: "顧客の写真・ロゴ",
   assignments: "担当・引き継ぎ",
   consultations: "営業からの相談",
   contracts: "契約・報酬",

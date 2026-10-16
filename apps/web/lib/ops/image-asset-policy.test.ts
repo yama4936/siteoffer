@@ -1,6 +1,6 @@
 import { attachImageAssetFile, fixedClock } from "@siteoffer/core";
 import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
-import { type Db, imageAssets, users } from "@siteoffer/db";
+import { type Db, imageAssets, imageSubmissions, users } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -71,5 +71,33 @@ it("画像取込前の画面から許諾を戻せず、停止運営と不正配�
   expect(await updateImageAssetPolicy({ db, clock }, s.ops, { ...s.input, expectedRevision: 1 })).toMatchObject({
     ok: false,
     error: "forbidden",
+  });
+});
+
+it("顧客提出は確認待ち・取り下げ済みなら台帳から許可を迂回できず、承認後も用途を拡大できない", async () => {
+  const s = await setup();
+  await db.insert(imageSubmissions).values({
+    assetId: s.rows[0]!.id,
+    submittedBy: s.sales.userId,
+    rightsBasis: "own_work",
+    rightsNote: "権利の説明テスト",
+    requestedDemo: false,
+    requestedProduction: true,
+    updatedAt: clock.now(),
+  });
+  expect(await updateImageAssetPolicy({ db, clock }, s.ops, s.input)).toMatchObject({
+    ok: false,
+    error: "customer_scope",
+  });
+  await db.update(imageSubmissions).set({ status: "accepted" }).where(eq(imageSubmissions.assetId, s.rows[0]!.id));
+  expect(await updateImageAssetPolicy({ db, clock }, s.ops, { ...s.input, allowSalesDemo: true })).toMatchObject({
+    ok: false,
+    error: "customer_scope",
+  });
+  expect((await updateImageAssetPolicy({ db, clock }, s.ops, s.input)).ok).toBe(true);
+  await db.update(imageSubmissions).set({ status: "withdrawn" }).where(eq(imageSubmissions.assetId, s.rows[0]!.id));
+  expect(await updateImageAssetPolicy({ db, clock }, s.ops, { ...s.input, expectedRevision: 1 })).toMatchObject({
+    ok: false,
+    error: "customer_scope",
   });
 });
