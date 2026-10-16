@@ -1,12 +1,13 @@
 import { approvals, contracts, type Db, deliveries, deliveryVersions, generationJobs } from "@siteoffer/db";
 import { type GenerationInput, SiteGenerationOutputSchema } from "@siteoffer/schemas";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 /** 顧客の依頼と直前の構成を当該納品だけから読み、事実・権限を昇格させずに生成へ渡す。 */
 export async function withDeliveryRevision(
   db: Db,
   deliveryId: string,
   companyId: string,
   input: GenerationInput,
+  changeBaseVersion?: number,
 ): Promise<GenerationInput> {
   const [request] = await db
     .select({
@@ -25,6 +26,7 @@ export async function withDeliveryRevision(
         eq(deliveryVersions.deliveryId, deliveryId),
         eq(contracts.companyId, companyId),
         eq(approvals.decision, "changes_requested"),
+        changeBaseVersion === undefined ? undefined : gt(deliveryVersions.version, changeBaseVersion),
       ),
     )
     .orderBy(desc(deliveryVersions.version), desc(approvals.decidedAt))

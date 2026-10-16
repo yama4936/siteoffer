@@ -5,6 +5,7 @@ import {
   type DbOrTx,
   deliveries,
   deliveryBuilds,
+  deliveryChanges,
   deliveryVersions,
   deployments,
   generationJobs,
@@ -27,7 +28,7 @@ import { loadDeliveryInputSource } from "./preparation.ts";
  * 状態：情報確認 → 制作 → 運営確認 → 顧客確認 → 公開準備 → 公開 → 納品。
  * - 契約が完了（completed）した契約ごとに1件（deliveries.contract_id の一意制約）。
  * - 制作版は追加するだけで書き換えない。再生成は新しい版。
- * - 顧客が承認した版を deliveries.locked_version_id に固定し、以後は変えない（AC-18）。
+ * - 顧客が承認した版を deliveries.locked_version_id に固定し、通常の操作では変えない。承認後の変更は change.ts で履歴を残して再承認する。
  * - 公開・納品の実処理（AWS）は作らない。状態と記録（deployments）だけを持つ。
  * 運営（と system）だけが操作する。営業ユーザーは操作できない（5.2・AC-18）。
  * 顧客の承認・修正依頼は customer.ts（共有リンクの検証）で扱う。
@@ -50,8 +51,8 @@ export const DELIVERY_STATUSES: readonly DeliveryStatus[] = [
 ];
 
 /**
- * 許可する遷移。戻りは「運営確認・顧客確認から制作へ」だけ。
- * 公開準備（ready）以降は戻らないため、固定した版は変わらない。
+ * 通常の遷移。戻りは「運営確認・顧客確認から制作へ」だけ。
+ * 公開準備以降の再制作は、change.ts の明示的な変更受付と再承認を必要とする。
  */
 export const DELIVERY_TRANSITIONS: Readonly<Record<DeliveryStatus, readonly DeliveryStatus[]>> = {
   info_gathering: ["building"],
@@ -551,6 +552,7 @@ export interface DeliveryDetail {
   versions: DeliveryVersionRow[];
   approvals: ApprovalRow[];
   deployments: DeploymentRow[];
+  changes: (typeof deliveryChanges.$inferSelect)[];
 }
 
 /** 納品の詳細（運営の画面用）。版は新しい順、承認・修正依頼は新しい順 */
@@ -603,5 +605,11 @@ export async function getDeliveryDetail(
     versions,
     approvals: approvalRows,
     deployments: deploymentRows,
+    changes: await db
+      .select()
+      .from(deliveryChanges)
+      .where(eq(deliveryChanges.deliveryId, deliveryId))
+      .orderBy(desc(deliveryChanges.createdAt))
+      .limit(20),
   });
 }

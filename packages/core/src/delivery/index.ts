@@ -1,4 +1,5 @@
 export * from "./build.ts";
+export * from "./change.ts";
 export * from "./customer.ts";
 export * from "./delivery.ts";
 export * from "./preparation.ts";

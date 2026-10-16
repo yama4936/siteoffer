@@ -10,6 +10,7 @@ import { notFound, redirect } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
 import { CustomerReviewLinks } from "@/components/ops/customer-review-links";
 import { DeliveryBuildRetry } from "@/components/ops/delivery-build-retry";
+import { DeliveryChange } from "@/components/ops/delivery-change";
 import { DeliveryPreparation } from "@/components/ops/delivery-preparation";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { SubmitButton } from "@/components/ops/submit-button";
@@ -374,26 +375,29 @@ function DeliveryCard({
 
       <div className="space-y-4 border-t px-5 py-4">
         <StepIndicator steps={steps} current={status} />
+        <DeliveryChange delivery={delivery} changes={d.changes} versions={d.versions} />
         {preparation && <DeliveryPreparation data={preparation} />}
-        {latestRequest && (
-          <section
-            aria-label="顧客からの修正依頼"
-            className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4"
-          >
-            <h3 className="font-semibold text-sm">第{rejectedVersion}版への修正依頼</h3>
-            <p className="text-xs text-muted-foreground">受付：{fmtDate(latestRequest.decidedAt)}</p>
-            <p className="whitespace-pre-wrap break-words text-sm">{latestRequest.comment}</p>
-            <p className="text-sm">
-              {status === "building"
-                ? "修正内容を制作処理へ引き継ぎます。新しい版ができたら、反映結果と事実関係を運営で確認してください。"
-                : status === "customer_review"
-                  ? "修正版は顧客の確認待ちです。この依頼に対する修正結果をご確認いただいています。"
-                  : delivery.lockedVersionId
-                    ? "修正後の版は顧客承認済みです。この依頼は過去の記録として表示しています。"
-                    : "修正版を確認するときは、この依頼内容が反映されているかも確認してください。"}
-            </p>
-          </section>
-        )}
+        {latestRequest &&
+          rejectedVersion >
+            Math.max(0, ...d.changes.map((c) => d.versions.find((v) => v.id === c.fromVersionId)?.version ?? 0)) && (
+            <section
+              aria-label="顧客からの修正依頼"
+              className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4"
+            >
+              <h3 className="font-semibold text-sm">第{rejectedVersion}版への修正依頼</h3>
+              <p className="text-xs text-muted-foreground">受付：{fmtDate(latestRequest.decidedAt)}</p>
+              <p className="whitespace-pre-wrap break-words text-sm">{latestRequest.comment}</p>
+              <p className="text-sm">
+                {status === "building"
+                  ? "修正内容を制作処理へ引き継ぎます。新しい版ができたら、反映結果と事実関係を運営で確認してください。"
+                  : status === "customer_review"
+                    ? "修正版は顧客の確認待ちです。この依頼に対する修正結果をご確認いただいています。"
+                    : delivery.lockedVersionId
+                      ? "修正後の版は顧客承認済みです。この依頼は過去の記録として表示しています。"
+                      : "修正版を確認するときは、この依頼内容が反映されているかも確認してください。"}
+              </p>
+            </section>
+          )}
 
         <div className="space-y-3 rounded-lg bg-muted/50 p-4">
           {status === "info_gathering" ? (

@@ -14,7 +14,7 @@ export const PROMPT_FILES = {
   faq: "faq.v1.md",
   // v3：会社ごとのアートディレクションを追加し、内部の確認注記を営業用本文から分離
   demo_site: "demo_site.v3.md",
-  delivery_site: "delivery_site.v4.md",
+  delivery_site: "delivery_site.v5.md",
 } as const satisfies Record<GenerationPurpose | "common", string>;
 
 const cache = new Map<string, string>();

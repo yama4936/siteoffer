@@ -1,4 +1,5 @@
-import { index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { type AnyPgColumn, index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { createdAt, id, ts, updatedAt } from "./common.ts";
 import { contracts } from "./contract.ts";
 import { generationJobs } from "./generation.ts";
@@ -24,7 +25,7 @@ export const deliveries = pgTable("deliveries", {
     .unique()
     .references(() => contracts.id),
   status: deliveryStatus("status").notNull().default("info_gathering"),
-  /** 顧客が承認し、公開対象として固定した版。一度固定したら変えない */
+  /** 現在の公開対象。承認後の変更はdeliveryChangesに旧承認版を記録し、再承認まで未固定にする。 */
   lockedVersionId: uuid("locked_version_id"),
   /**
    * 顧客確認に回している版（customer_review の間だけ値を持つ）。
@@ -61,6 +62,36 @@ export const deliveryPreparations = pgTable(
   (t) => [uniqueIndex("delivery_preparations_revision").on(t.deliveryId, t.revision)],
 );
 
+/** 承認済みの版を変更する明示的な受付。旧承認・公開記録は保持し、新しい版の承認で完了する。 */
+export const deliveryChanges = pgTable(
+  "delivery_changes",
+  {
+    id: id(),
+    deliveryId: uuid("delivery_id")
+      .notNull()
+      .references(() => deliveries.id),
+    fromVersionId: uuid("from_version_id")
+      .notNull()
+      .references((): AnyPgColumn => deliveryVersions.id),
+    fromBuildId: uuid("from_build_id"),
+    priorStatus: deliveryStatus("prior_status").notNull(),
+    requestId: uuid("request_id").notNull().unique(),
+    payloadHash: text("payload_hash").notNull(),
+    reason: text("reason").notNull(),
+    requestedChanges: text("requested_changes").notNull(),
+    requestedBy: uuid("requested_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: createdAt(),
+    approvedVersionId: uuid("approved_version_id").references((): AnyPgColumn => deliveryVersions.id),
+    approvedAt: ts("approved_at"),
+  },
+  (t) => [
+    index("delivery_changes_delivery").on(t.deliveryId, t.createdAt),
+    uniqueIndex("delivery_changes_open").on(t.deliveryId).where(sql`${t.approvedVersionId} is null`),
+  ],
+);
+
 export const deliveryBuildStatus = pgEnum("delivery_build_status", [
   "queued",
   "running",
@@ -77,6 +108,7 @@ export const deliveryBuilds = pgTable(
       .references(() => deliveries.id),
     previousId: uuid("previous_id"),
     preparationId: uuid("preparation_id").references(() => deliveryPreparations.id),
+    changeId: uuid("change_id").references(() => deliveryChanges.id),
     imageAssetSnapshot: jsonb("image_asset_snapshot"),
     status: deliveryBuildStatus("status").notNull().default("queued"),
     ownerId: uuid("owner_id"),

@@ -1,5 +1,5 @@
-import { type DbOrTx, deliveries, deliveryBuilds, deliveryPreparations } from "@siteoffer/db";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { type DbOrTx, deliveries, deliveryBuilds, deliveryChanges, deliveryPreparations } from "@siteoffer/db";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Clock } from "../common/clock.ts";
 import { captureDeliveryImageAssets } from "../image-assets.ts";
 
@@ -23,12 +23,17 @@ export async function beginDeliveryBuild(tx: DbOrTx, clock: Clock, delivery: typ
     .where(eq(deliveryPreparations.deliveryId, delivery.id))
     .orderBy(desc(deliveryPreparations.revision))
     .limit(1);
+  const [change] = await tx
+    .select({ id: deliveryChanges.id })
+    .from(deliveryChanges)
+    .where(and(eq(deliveryChanges.deliveryId, delivery.id), isNull(deliveryChanges.approvedVersionId)));
   const [build] = await tx
     .insert(deliveryBuilds)
     .values({
       deliveryId: delivery.id,
       previousId: delivery.currentBuildId,
       preparationId: preparation?.id ?? null,
+      changeId: change?.id ?? null,
       imageAssetSnapshot: await captureDeliveryImageAssets(tx, delivery.contractId),
       createdAt: now,
     })

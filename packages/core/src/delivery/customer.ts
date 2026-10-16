@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { approvals, companies, contracts, type DbOrTx, deliveries, deliveryVersions, shareLinks } from "@siteoffer/db";
+import {
+  approvals,
+  companies,
+  contracts,
+  type DbOrTx,
+  deliveries,
+  deliveryBuilds,
+  deliveryChanges,
+  deliveryVersions,
+  shareLinks,
+} from "@siteoffer/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -167,6 +177,20 @@ export async function decideAsCustomer(
 
     if (input.decision === "approved" && !(await deliveryVersionImagesValid(tx, version.id, true)))
       return err("not_under_review", "制作内容を運営で再確認しています。担当者へお問い合わせください");
+    const [change] = await tx
+      .select()
+      .from(deliveryChanges)
+      .where(and(eq(deliveryChanges.deliveryId, delivery.id), isNull(deliveryChanges.approvedVersionId)))
+      .for("update");
+    if (change) {
+      const [build] = version.buildId
+        ? await tx
+            .select({ changeId: deliveryBuilds.changeId })
+            .from(deliveryBuilds)
+            .where(and(eq(deliveryBuilds.id, version.buildId), eq(deliveryBuilds.deliveryId, delivery.id)))
+        : [];
+      if (build?.changeId !== change.id) return err("not_under_review", "今回の変更に対応する版を確認してください");
+    }
     const now = clock.now();
     const [approval] = await tx
       .insert(approvals)
@@ -199,6 +223,11 @@ export async function decideAsCustomer(
       )
       .returning();
     if (!row) throw new Error(`delivery ${delivery.id} changed during customer decision`);
+    if (approved && change)
+      await tx
+        .update(deliveryChanges)
+        .set({ approvedVersionId: version.id, approvedAt: now })
+        .where(eq(deliveryChanges.id, change.id));
 
     await recordEvent(tx, clock, {
       actor: link.value.actor,

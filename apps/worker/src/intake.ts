@@ -16,6 +16,7 @@ import { contentEntries, deliveries, deliveryBuilds, discoveryJobs } from "@site
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
 import { and, asc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
+import { withDeliveryChange } from "./delivery-change.ts";
 import { applyDeliveryMaterials, prepareDeliveryMaterials } from "./delivery-materials.ts";
 import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
@@ -245,7 +246,8 @@ async function processDelivery(
       },
     },
   };
-  input = await withDeliveryRevision(db, d.id, company.id, input);
+  const change = await withDeliveryChange(db, d.id, company.id, claim.buildId, input);
+  input = await withDeliveryRevision(db, d.id, company.id, change.input, change.baseVersion);
   const workDir = path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId);
   const materials = await prepareDeliveryMaterials(db, d.id, claim.buildId, workDir, input);
   input = materials.input;
