@@ -18,6 +18,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { deliveryVersionImagesValid } from "../image-assets.ts";
 import { authorizeUser } from "../permissions/policy.ts";
 import { getSalesOffer } from "../sales-offer/offer.ts";
 import { generateShareToken, hashShareToken, isShareTokenFormat, type ShareTokenRecovery } from "./token.ts";
@@ -93,6 +94,7 @@ async function loadTarget(db: DbOrTx, purpose: SharePurpose, targetId: string): 
     .innerJoin(deliveries, eq(deliveries.id, deliveryVersions.deliveryId))
     .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
     .where(eq(deliveryVersions.id, targetId));
+  if (row && !(await deliveryVersionImagesValid(db, targetId))) return null;
   return row ? { companyId: row.companyId, approved: true, artifactDir: row.artifactDir } : null;
 }
 

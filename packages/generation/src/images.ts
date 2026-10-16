@@ -74,3 +74,21 @@ export function createOpenAIImageGenerator(apiKey: string, transport: typeof fet
     },
   };
 }
+
+/** 素材画像はEXIF等を除去し、向き補正したPNGを保存する。ロゴにも使えるため最小寸法は設けない。 */
+export async function normalizeAssetImage(bytes: Buffer) {
+  if (!bytes.length || bytes.length > 12 * 1024 * 1024)
+    throw new Error("画像は12MB以下のPNG・JPEG・WebPを指定してください");
+  const source = sharp(bytes, { limitInputPixels: 20_000_000, failOn: "warning" });
+  const meta = await source.metadata();
+  if (!["png", "jpeg", "webp"].includes(meta.format ?? "") || (meta.pages ?? 1) !== 1)
+    throw new Error("静止画のPNG・JPEG・WebPだけを使用できます");
+  const { data, info } = await source
+    .rotate()
+    .resize({ width: 2560, height: 2560, fit: "inside", withoutEnlargement: true })
+    .png()
+    .toBuffer({ resolveWithObject: true });
+  if (data.length > 8 * 1024 * 1024)
+    throw new Error("変換後の画像が8MBを超えました。サイズを小さくして再試行してください");
+  return { png: data, width: info.width, height: info.height };
+}

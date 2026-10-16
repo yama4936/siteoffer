@@ -204,6 +204,13 @@
       "when": 1792183381962,
       "tag": "0028_delivery_preparations",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792184667030,
+      "tag": "0029_image_asset_files",
+      "breakpoints": true
     }
   ]
 }

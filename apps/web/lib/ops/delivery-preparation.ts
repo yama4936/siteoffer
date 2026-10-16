@@ -1,4 +1,11 @@
-import { type Actor, err, findDomainPreferenceForContract, loadDeliveryInputSource, ok } from "@siteoffer/core";
+import {
+  type Actor,
+  deliveryImageAssetsValid,
+  err,
+  findDomainPreferenceForContract,
+  loadDeliveryInputSource,
+  ok,
+} from "@siteoffer/core";
 import {
   contentEntries,
   type DbOrTx,
@@ -6,6 +13,7 @@ import {
   deliveryBuilds,
   deliveryPreparations,
   designVersions,
+  imageAssetFiles,
   imageAssets,
   proposals,
   proposalVersions,
@@ -34,8 +42,10 @@ export async function getDeliveryPreparation(db: DbOrTx, actor: Actor | null, de
       .select({
         total: sql<number>`count(*)::int`,
         production: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null)::int`,
+        ready: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null and ${imageAssets.placement}<>'reference' and ${imageAssetFiles.assetId} is not null)::int`,
       })
       .from(imageAssets)
+      .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
       .where(eq(imageAssets.companyId, company.id)),
     db
       .select({
@@ -47,7 +57,10 @@ export async function getDeliveryPreparation(db: DbOrTx, actor: Actor | null, de
   ]);
   const brief = design?.brief && typeof design.brief === "object" ? (design.brief as Record<string, unknown>) : {};
   const [build] = delivery.currentBuildId
-    ? await db.select().from(deliveryBuilds).where(eq(deliveryBuilds.id, delivery.currentBuildId))
+    ? await db
+        .select()
+        .from(deliveryBuilds)
+        .where(and(eq(deliveryBuilds.id, delivery.currentBuildId), eq(deliveryBuilds.deliveryId, delivery.id)))
     : [];
   const needed = source.missing.proposal || source.missing.scope;
   const options = needed
@@ -138,7 +151,13 @@ export async function getDeliveryPreparation(db: DbOrTx, actor: Actor | null, de
           confirmed: !domain.needsOpsReview && !!domain.confirmedAt,
         }
       : null,
-    assets: assets[0]!,
+    assets: {
+      ...assets[0]!,
+      currentBuildCount: Array.isArray(build?.imageAssetSnapshot) ? build.imageAssetSnapshot.length : 0,
+      currentBuildAllowed: delivery.currentBuildId
+        ? await deliveryImageAssetsValid(db, delivery.currentBuildId, delivery.id)
+        : true,
+    },
     articles: articles[0]!,
     blockers: source.blockers,
     notices: source.notices,

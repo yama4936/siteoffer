@@ -158,11 +158,17 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
         <section className="min-w-0 space-y-3 rounded-xl border p-4">
           <h4 className="font-semibold text-sm">画像素材の利用許諾</h4>
           <p className="text-sm">
-            登録 {d.assets.total}件 / 本番利用の確認済み {d.assets.production}件
+            登録 {d.assets.total}件 / 本番利用の確認済み {d.assets.production}件 / 次回の制作で配置 {d.assets.ready}件
           </p>
           <p className="text-xs text-muted-foreground">
-            台帳の許諾状況です。ファイルの取込完了を表すものではありません。未確認・デモ限定の素材は、本番用として流用しません。
+            画像ファイルを登録し、本番利用と配置先を確認した素材を次回の制作へ渡します。未確認・デモ限定の素材は本番に使用しません。
           </p>
+          <p className="text-sm">今回の制作に固定した素材 {d.assets.currentBuildCount}件</p>
+          {!d.assets.currentBuildAllowed && (
+            <p role="alert" className="text-sm text-destructive">
+              今回使用した画像の利用許諾を確認できません。素材の許諾を確認するか、使用画像を変更して再制作してください。顧客向け共有は停止中です。公開前に許諾を確認してください。
+            </p>
+          )}
           <Link href={`${companyHref}#image-assets`} className="text-sm text-primary underline">
             素材と利用許諾を確認
           </Link>

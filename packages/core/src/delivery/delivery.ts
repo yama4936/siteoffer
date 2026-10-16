@@ -14,6 +14,7 @@ import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { deliveryImageAssetsValid, deliveryVersionImagesValid } from "../image-assets.ts";
 import { authorize } from "../permissions/policy.ts";
 import { type IssuedShareLink, type IssueShareLinkError, issueShareLink } from "../share-link/share-link.ts";
 import type { ShareTokenRecovery } from "../share-link/token.ts";
@@ -165,7 +166,8 @@ export type AddDeliveryVersionError =
   | "invalid_state"
   | "invalid_input"
   | "generation_job_not_found"
-  | "stale_build";
+  | "stale_build"
+  | "image_rights_changed";
 
 /**
  * 制作版を追加する。版番号は納品ごとに1から連番。既存の版は書き換えない（再生成は新しい版）。
@@ -214,6 +216,8 @@ export async function addDeliveryVersion(
       )
         return err("stale_build");
     } else if (build?.status === "running") return err("invalid_state", "制作処理の実行中は別の版を追加できません");
+    if (!(await deliveryImageAssetsValid(tx, delivery.currentBuildId, delivery.id, true)))
+      return err("image_rights_changed", "制作に使った画像の許諾が変更されています。素材を確認して再制作してください");
     if (jobId !== null) {
       const [job] = await tx
         .select({ companyId: generationJobs.companyId, purpose: generationJobs.purpose, status: generationJobs.status })
@@ -368,7 +372,8 @@ export type SendToCustomerReviewError =
   | "invalid_transition"
   | "no_artifact"
   | IssueShareLinkError
-  | "version_requires_revision";
+  | "version_requires_revision"
+  | "image_rights_changed";
 
 /**
  * 運営が確認した版を顧客確認に回し、納品用の共有リンク（期限付き）を発行する。
@@ -413,6 +418,8 @@ export async function sendToCustomerReview(
       return err("invalid_transition", "運営確認中の納品だけを顧客確認に回せます");
     }
     if (!version.artifactDir) return err("no_artifact", "この版には成果物がありません");
+    if (!(await deliveryVersionImagesValid(tx, version.id, true)))
+      return err("image_rights_changed", "画像の利用許諾が変更されています。素材を確認して再制作してください");
 
     const issued = await issueShareLink(
       tx,
@@ -456,7 +463,13 @@ export interface RecordPublicationInput {
   url?: string | null;
 }
 
-export type RecordPublicationError = "forbidden" | "not_found" | "invalid_transition" | "not_locked" | "invalid_input";
+export type RecordPublicationError =
+  | "forbidden"
+  | "not_found"
+  | "invalid_transition"
+  | "not_locked"
+  | "invalid_input"
+  | "image_rights_changed";
 
 /**
  * 公開準備（ready）→ 公開（published）。固定した版で deployments に記録を1行残す。
@@ -493,6 +506,8 @@ export async function recordPublication(
       return err("invalid_transition", "公開準備の納品だけを公開済みにできます");
     }
     if (!delivery.lockedVersionId) return err("not_locked", "公開対象の版が固定されていません");
+    if (!(await deliveryVersionImagesValid(tx, delivery.lockedVersionId, true)))
+      return err("image_rights_changed", "画像の利用許諾が変更されています。公開前に確認してください");
     const now = clock.now();
     const [deployment] = await tx
       .insert(deployments)

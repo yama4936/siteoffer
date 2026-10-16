@@ -168,6 +168,8 @@ export async function updateImageAssetPolicyAction(fd: FormData) {
         rightsStatus: str(fd, "rightsStatus") as Parameters<typeof updateImageAssetPolicy>[2]["rightsStatus"],
         allowSalesDemo: fd.has("allowSalesDemo"),
         allowProduction: fd.has("allowProduction"),
+        placement: str(fd, "placement") as "reference" | "hero" | "logo",
+        expectedRevision: Number(str(fd, "expectedRevision")),
         note: str(fd, "note"),
       }),
     "画像素材の権利状態と利用範囲を更新しました",

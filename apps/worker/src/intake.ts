@@ -16,6 +16,7 @@ import { contentEntries, deliveries, deliveryBuilds, discoveryJobs } from "@site
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
 import { and, asc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
+import { applyDeliveryMaterials, prepareDeliveryMaterials } from "./delivery-materials.ts";
 import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
 import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
@@ -245,6 +246,9 @@ async function processDelivery(
     },
   };
   input = await withDeliveryRevision(db, d.id, company.id, input);
+  const workDir = path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId);
+  const materials = await prepareDeliveryMaterials(db, d.id, claim.buildId, workDir, input);
+  input = materials.input;
   if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
   const gen = await runGenerationJob(genDeps, {
     idempotencyKey: `${round}:delivery_site`,
@@ -270,10 +274,9 @@ async function processDelivery(
   const output = gen.value.output as SiteGenerationOutput;
 
   if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
-  const workDir = path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId);
   const built = await deps.siteBuilder.buildDelivery({
     siteInput: {
-      ...siteGenerationToSiteInput(output, { mode: "delivery" }),
+      ...applyDeliveryMaterials(siteGenerationToSiteInput(output, { mode: "delivery" }), materials.images),
       updatesUrl,
     },
     workDir,

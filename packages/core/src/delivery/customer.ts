@@ -5,6 +5,7 @@ import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
+import { deliveryVersionImagesValid } from "../image-assets.ts";
 import { verifyShareLink } from "../share-link/share-link.ts";
 import { beginDeliveryBuild } from "./build-state.ts";
 import type { DeliveryRow } from "./delivery.ts";
@@ -164,6 +165,8 @@ export async function decideAsCustomer(
       return err("not_under_review", "この版は現在、確認の受付を行っていません");
     }
 
+    if (input.decision === "approved" && !(await deliveryVersionImagesValid(tx, version.id, true)))
+      return err("not_under_review", "制作内容を運営で再確認しています。担当者へお問い合わせください");
     const now = clock.now();
     const [approval] = await tx
       .insert(approvals)

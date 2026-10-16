@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { AuditRequest } from "@/components/ops/audit-request";
 import { AuditView } from "@/components/ops/audit-view";
 import { GenerationHistory } from "@/components/ops/generation-history";
+import { ImageAssetUpload } from "@/components/ops/image-asset-upload";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
 import {
   detailsClass,
@@ -403,47 +404,65 @@ export default async function CompanyPage({
             </div>
           </form>
         </details>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>素材・出所</TableHead>
-              <TableHead>権利状態</TableHead>
-              <TableHead>利用範囲</TableHead>
-              <TableHead>確認</TableHead>
-              <TableHead>更新</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {d.imageAssets.map(({ asset, confirmerName }) => (
-              <TableRow key={asset.id}>
-                <TableCell className="min-w-52">
-                  <div className="font-medium">{asset.label}</div>
-                  <div className="text-muted-foreground text-xs">{label(IMAGE_SOURCE_LABEL, asset.sourceType)}</div>
-                  {asset.sourceUrl ? (
-                    <div className="break-all text-muted-foreground text-xs">{asset.sourceUrl}</div>
-                  ) : null}
-                </TableCell>
-                <TableCell>{label(IMAGE_RIGHTS_LABEL, asset.rightsStatus)}</TableCell>
-                <TableCell>
-                  <div>評価参照：可</div>
-                  <div>営業デモ：{asset.allowSalesDemo ? "可" : "不可"}</div>
-                  <div>本番：{asset.allowProduction ? "可" : "不可"}</div>
-                </TableCell>
-                <TableCell className="text-xs">
-                  {asset.confirmedAt ? (
-                    <>
-                      <div>{confirmerName ?? "運営ユーザー"}</div>
-                      <div className="whitespace-nowrap tabular-nums">{fmtDate(asset.confirmedAt)}</div>
-                    </>
-                  ) : (
-                    "未確認"
-                  )}
-                </TableCell>
-                <TableCell className="min-w-72">
-                  <form action={updateImageAssetPolicyAction} className="grid gap-2">
+        <div className="grid gap-4">
+          {d.imageAssets.map(({ asset, confirmerName, file }) => (
+            <article
+              key={asset.id}
+              aria-label={`素材：${asset.label}`}
+              className="grid gap-4 rounded-xl border bg-background p-4 lg:grid-cols-[240px_1fr]"
+            >
+              <div className="min-w-0">
+                <div className="font-medium">{asset.label}</div>
+                <ImageAssetUpload
+                  companyId={c.id}
+                  assetId={asset.id}
+                  label={asset.label}
+                  file={file?.assetId ? file : null}
+                />
+                <div className="text-muted-foreground text-xs">{label(IMAGE_SOURCE_LABEL, asset.sourceType)}</div>
+                {asset.sourceUrl ? (
+                  <div className="break-all text-muted-foreground text-xs">{asset.sourceUrl}</div>
+                ) : null}
+              </div>
+              <div className="min-w-0 space-y-3">
+                <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">権利：</span>
+                    {label(IMAGE_RIGHTS_LABEL, asset.rightsStatus)}
+                  </div>
+                  <div>
+                    <div>評価参照：可</div>
+                    <div>営業デモ：{asset.allowSalesDemo ? "可" : "不可"}</div>
+                    <div>本番：{asset.allowProduction ? "可" : "不可"}</div>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {asset.confirmedAt ? (
+                      <>
+                        <div>{confirmerName ?? "運営ユーザー"}</div>
+                        <div className="whitespace-nowrap tabular-nums">{fmtDate(asset.confirmedAt)}</div>
+                      </>
+                    ) : (
+                      "未確認"
+                    )}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <form key={asset.policyRevision} action={updateImageAssetPolicyAction} className="grid gap-2">
                     <ReturnTo path={here} />
                     <input type="hidden" name="companyId" value={c.id} />
                     <input type="hidden" name="imageAssetId" value={asset.id} />
+                    <input type="hidden" name="expectedRevision" value={asset.policyRevision} />
+                    <label htmlFor={`placement-${asset.id}`} className="text-sm">
+                      納品サイトの配置先
+                    </label>
+                    <NativeSelect id={`placement-${asset.id}`} name="placement" defaultValue={asset.placement}>
+                      <option value="reference">自動配置しない</option>
+                      <option value="hero">メイン画像</option>
+                      <option value="logo">ロゴ</option>
+                    </NativeSelect>
+                    <p className="max-w-72 text-xs text-muted-foreground">
+                      各配置先に1点。別の素材を選ぶと、次回の制作から置き換わります。画像登録と本番利用の許諾が必要です。
+                    </p>
                     <NativeSelect
                       name="rightsStatus"
                       defaultValue={asset.rightsStatus}
@@ -475,12 +494,14 @@ export default async function CompanyPage({
                       </Button>
                     </div>
                   </form>
-                </TableCell>
-              </TableRow>
-            ))}
-            {d.imageAssets.length === 0 ? <EmptyRow colSpan={5}>登録された画像素材はありません</EmptyRow> : null}
-          </TableBody>
-        </Table>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+        {d.imageAssets.length === 0 && (
+          <EmptyState>画像素材を登録すると、画像の取込・許諾確認・配置先の指定ができます。</EmptyState>
+        )}
       </Section>
 
       <Section

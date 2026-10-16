@@ -77,6 +77,7 @@ export const deliveryBuilds = pgTable(
       .references(() => deliveries.id),
     previousId: uuid("previous_id"),
     preparationId: uuid("preparation_id").references(() => deliveryPreparations.id),
+    imageAssetSnapshot: jsonb("image_asset_snapshot"),
     status: deliveryBuildStatus("status").notNull().default("queued"),
     ownerId: uuid("owner_id"),
     leaseUntil: ts("lease_until"),

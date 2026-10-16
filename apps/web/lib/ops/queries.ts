@@ -27,6 +27,7 @@ import {
   domainPreferences,
   findings,
   generationJobs,
+  imageAssetFiles,
   imageAssets,
   payments,
   productTerms,
@@ -179,8 +180,18 @@ export async function getCompanyDetail(db: DbOrTx, actor: Actor | null, companyI
     .orderBy(desc(generationJobs.createdAt))
     .limit(20);
   const assets = await db
-    .select({ asset: imageAssets, confirmerName: users.displayName })
+    .select({
+      asset: imageAssets,
+      confirmerName: users.displayName,
+      file: {
+        assetId: imageAssetFiles.assetId,
+        width: imageAssetFiles.width,
+        height: imageAssetFiles.height,
+        byteSize: imageAssetFiles.byteSize,
+      },
+    })
     .from(imageAssets)
+    .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
     .leftJoin(users, eq(users.id, imageAssets.confirmedBy))
     .where(eq(imageAssets.companyId, companyId))
     .orderBy(desc(imageAssets.createdAt));

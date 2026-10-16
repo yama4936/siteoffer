@@ -8,6 +8,7 @@ export * from "./contract/index.ts";
 export * from "./delivery/index.ts";
 export * from "./design.ts";
 export * from "./domain-preference/index.ts";
+export * from "./image-assets.ts";
 export * from "./permissions/index.ts";
 export * from "./reward/index.ts";
 export * from "./sales-activity/index.ts";

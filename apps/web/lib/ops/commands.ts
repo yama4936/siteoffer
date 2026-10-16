@@ -59,7 +59,7 @@ import {
   discoveryCriteriaSchema,
   NtaCorporateNumberProvider,
 } from "@siteoffer/discovery";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { isUuid } from "./form.ts";
 import { type OpsActor, requireOps } from "./guard.ts";
 import { type SellableIssue, sellableIssues } from "./sellable.ts";
@@ -410,8 +410,16 @@ export async function updateImageAssetPolicy(
     allowSalesDemo: boolean;
     allowProduction: boolean;
     note?: string;
+    placement?: "reference" | "hero" | "logo";
+    expectedRevision?: number;
   },
 ): Promise<Result<ImageAsset, string>> {
+  if (
+    !isUuid(input.companyId) ||
+    !isUuid(input.imageAssetId) ||
+    (input.expectedRevision !== undefined && (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0))
+  )
+    return err("invalid_input");
   const ops = authorizeCompanyManage(actor, input.companyId);
   if (!ops.ok) return ops;
   if (!(IMAGE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) {
@@ -420,17 +428,45 @@ export async function updateImageAssetPolicy(
   if (input.rightsStatus === "unknown" && (input.allowSalesDemo || input.allowProduction)) {
     return err("rights_unconfirmed", "権利未確認の素材は評価参照にしか使えません");
   }
+  if (input.placement !== undefined && !["reference", "hero", "logo"].includes(input.placement))
+    return err("invalid_input", "配置先が不正です");
   return inTx(db, async (tx, fail) => {
-    const [before] = await tx
+    const [company] = await tx
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.id, input.companyId))
+      .for("update");
+    if (!company) return fail("not_found");
+    const locked = await tx
       .select()
       .from(imageAssets)
-      .where(and(eq(imageAssets.id, input.imageAssetId), eq(imageAssets.companyId, input.companyId)))
+      .where(eq(imageAssets.companyId, input.companyId))
+      .orderBy(asc(imageAssets.id))
       .for("update");
+    const [user] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, ops.value.userId), eq(users.role, "ops"), eq(users.status, "active")))
+      .for("share");
+    if (!user) return fail("forbidden");
+    const before = locked.find((a) => a.id === input.imageAssetId);
     if (!before) return fail("not_found");
+    if (input.expectedRevision !== undefined && before.policyRevision !== input.expectedRevision)
+      return fail("conflict", "別の担当が素材を更新しました。最新の画像と許諾を確認してから更新してください");
+    const placement = input.placement ?? before.placement;
+    const replaced =
+      placement !== "reference" ? locked.filter((a) => a.id !== before.id && a.placement === placement) : [];
+    for (const a of replaced)
+      await tx
+        .update(imageAssets)
+        .set({ placement: "reference", policyRevision: a.policyRevision + 1, updatedAt: clock.now() })
+        .where(eq(imageAssets.id, a.id));
     const confirmed = input.rightsStatus !== "unknown";
     const [after] = await tx
       .update(imageAssets)
       .set({
+        placement,
+        policyRevision: before.policyRevision + 1,
         rightsStatus: input.rightsStatus,
         allowSalesDemo: input.allowSalesDemo,
         allowProduction: input.allowProduction,
@@ -448,12 +484,15 @@ export async function updateImageAssetPolicy(
       targetId: input.companyId,
       before: {
         imageAssetId: before.id,
+        placement: before.placement,
         rightsStatus: before.rightsStatus,
         allowSalesDemo: before.allowSalesDemo,
         allowProduction: before.allowProduction,
       },
       after: {
         imageAssetId: before.id,
+        placement,
+        replacedPlacementAssetIds: replaced.map((a) => a.id),
         rightsStatus: input.rightsStatus,
         allowSalesDemo: input.allowSalesDemo,
         allowProduction: input.allowProduction,

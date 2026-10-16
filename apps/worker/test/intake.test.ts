@@ -4,10 +4,11 @@
  * Astroの実ビルドは、このファイルでは納品サイト（mode=delivery）の1回だけ。
  */
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  attachImageAssetFile,
   createDeliveryForContract,
   DELIVERY_BUILD_LEASE_MS,
   decideAsCustomer,
@@ -28,6 +29,7 @@ import {
   deliveryVersions,
   discoveryJobs,
   generationJobs,
+  imageAssets,
   proposals,
   proposalVersions,
   siteAudits,
@@ -264,6 +266,35 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     clock.advance(1000);
     const deps = { ...env.deps, siteBuilder: createAstroSiteBuilder({ timeoutMs: 240_000 }) };
     const [contract] = await db.select().from(contracts).where(eq(contracts.id, d!.contractId));
+    const [materialOps] = await db.select().from(users).where(eq(users.role, "ops")).limit(1);
+    const [material] = await db
+      .insert(imageAssets)
+      .values({
+        companyId: contract!.companyId,
+        label: "顧客提供の確認済みメイン画像",
+        sourceType: "customer_upload",
+        placement: "hero",
+      })
+      .returning();
+    const materialPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGNUyNvCwMDAxMDAwMDAAAAOrgFGyLjQ8AAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await attachImageAssetFile(
+      db,
+      clock,
+      { kind: "ops", userId: materialOps!.id },
+      { companyId: contract!.companyId, assetId: material!.id, png: materialPng, width: 2, height: 2 },
+    );
+    await db
+      .update(imageAssets)
+      .set({
+        rightsStatus: "use_approved",
+        allowProduction: true,
+        confirmedBy: materialOps!.id,
+        confirmedAt: clock.now(),
+      })
+      .where(eq(imageAssets.id, material!.id));
     await db
       .insert(contentEntries)
       .values({ companyId: contract!.companyId, slug: "delivery-news", updatedAt: clock.now() });
@@ -289,6 +320,15 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     // 納品サイトにはデモの「非公式」表示を入れない
     expect(page).not.toContain("非公式");
     expect(page).toContain(`https://cms.example.test/published/${contract!.companyId}/news`);
+    expect(page).toContain(material!.label);
+    const site = JSON.parse(await readFile(path.join(path.dirname(dist), "site.json"), "utf8"));
+    expect(site.hero.image).toEqual({ src: `materials/material-${material!.id}.png`, alt: material!.label });
+    const copied = await Promise.all(
+      (await readdir(path.join(dist, "images"))).map((n) => readFile(path.join(dist, "images", n))),
+    );
+    expect(copied.some((bytes) => bytes.equals(materialPng))).toBe(true);
+    const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, v!.generationJobId!));
+    expect((job!.inputRef as { attachments: string[] }).attachments).toContain(`material-${material!.id}.png`);
     vi.unstubAllEnvs();
   }, 300_000);
   it("顧客の修正本文と前版の構成を次の生成へ渡し、新しい版を運営確認へ戻す", async () => {

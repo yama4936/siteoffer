@@ -175,7 +175,7 @@ it("本番の許諾確認と現在のドメイン希望をまとめ、無許可�
     needsOpsReview: true,
   });
   const d = must(await getDeliveryPreparation(db, s.ops, s.delivery.id));
-  expect(d.assets).toEqual({ total: 3, production: 1 });
+  expect(d.assets).toEqual({ total: 3, production: 1, ready: 0, currentBuildCount: 0, currentBuildAllowed: true });
   expect(d.domain).toMatchObject({ intent: "keep", confirmed: false });
   expect(d.design?.updatePlan).toContain("10件");
 });
