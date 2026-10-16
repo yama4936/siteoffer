@@ -37,7 +37,7 @@ import {
   users,
   websites,
 } from "@siteoffer/db";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import { EDITABLE_SETTINGS, latestProposalVersions } from "./commands";
 import { requireOps } from "./guard";
 
@@ -220,7 +220,13 @@ export async function listReviewQueue(db: DbOrTx, actor: Actor | null) {
     .from(proposalVersions)
     .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
     .innerJoin(companies, eq(companies.id, proposals.companyId))
-    .where(eq(proposalVersions.status, "in_review"))
+    .where(
+      and(
+        eq(proposalVersions.status, "in_review"),
+        eq(companies.suppression, "none"),
+        sql`not exists(select 1 from proposal_versions newer where newer.proposal_id=${proposalVersions.proposalId} and newer.version>${proposalVersions.version})`,
+      ),
+    )
     .orderBy(asc(proposalVersions.createdAt))
     .limit(LIST_LIMIT);
   // 営業可能化の候補：営業可能でなく、抑止がなく、承認済みの版がある企業
@@ -232,6 +238,7 @@ export async function listReviewQueue(db: DbOrTx, actor: Actor | null) {
     .where(
       and(
         eq(proposalVersions.status, "approved"),
+        sql`not exists(select 1 from proposal_versions newer where newer.proposal_id=${proposalVersions.proposalId} and newer.version>${proposalVersions.version})`,
         ne(companies.pipelineStatus, "sellable"),
         eq(companies.suppression, "none"),
       ),

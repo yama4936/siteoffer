@@ -490,6 +490,15 @@ export async function reviewProposalVersion(
     });
     if (!auth.ok) return fail(auth.error, auth.message);
     const before = row.version;
+    const [latest] = await tx
+      .select({ id: proposalVersions.id })
+      .from(proposalVersions)
+      .where(eq(proposalVersions.proposalId, before.proposalId))
+      .orderBy(desc(proposalVersions.version))
+      .limit(1);
+    if (latest?.id !== before.id)
+      return fail("superseded_version", "新しい提案版があります。最新版を開いて確認してください");
+
     if (before.status !== "in_review") return fail("invalid_state", "運営確認待ちの版だけをレビューできます");
     if (input.decision === "approved") {
       const content = before.content as {

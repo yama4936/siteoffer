@@ -7,7 +7,31 @@ import { reviewProposalAction } from "@/app/(ops)/ops/actions";
 import { SitePreview } from "@/components/shell/site-preview";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
 
-type Item = { id: string; name: string; location: string; industry: string | null; status: string; pending: boolean };
+type Item = {
+  id: string;
+  name: string;
+  location: string;
+  industry: string | null;
+  status: string;
+  pending: boolean;
+  versionId: string | null;
+  version: number | null;
+  versionStatus: string | null;
+  suppression: string;
+};
+type ReviewQueue = {
+  view: "pending" | "all";
+  query: string;
+  page: number;
+  pages: number;
+  total: number;
+  counts: { all: number; pending: number };
+  context: string;
+  pendingHref: string;
+  allHref: string;
+  previousHref: string;
+  nextHref: string;
+};
 type Selected = {
   pipelineStatus: string;
   id: string;
@@ -21,6 +45,7 @@ type Selected = {
   assets: { id: string; name: string; allowed: boolean; confirmed: boolean }[];
   versions: { id: string; version: number; status: string; date: string; note: string | null }[];
   version: {
+    isLatest: boolean;
     id: string;
     version: number;
     status: string;
@@ -43,9 +68,21 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selected: Selected | null }) {
-  const [filter, setFilter] = useState("all");
-  const [query, setQuery] = useState("");
+export function ReviewWorkspace({
+  items,
+  selected: c,
+  queue,
+}: {
+  items: Item[];
+  selected: Selected | null;
+  queue: ReviewQueue;
+}) {
+  function reviewHref(companyId: string, versionId?: string | null) {
+    const q = new URLSearchParams(queue.context);
+    q.set("company", companyId);
+    if (versionId) q.set("version", versionId);
+    return `/ops/review?${q}`;
+  }
   const [tab, setTab] = useState("compare");
   const [device, setDevice] = useState("desktop");
   const [checked, setChecked] = useState<string[]>(() => {
@@ -61,10 +98,10 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
   const measures = Array.isArray(proposal.measures) ? proposal.measures.map(record) : [];
   const safeWebsite = c?.website && /^https?:\/\//i.test(c.website) ? c.website : null;
   const preview = version?.hasDemo ? `/ops/review/preview/${version.id}/index.html` : null;
-  const visible = items.filter((i) => (filter !== "pending" || i.pending) && `${i.name} ${i.location}`.includes(query));
-  const canReview = version?.status === "in_review";
+  const visible = items;
+  const canReview = version?.status === "in_review" && version.isLatest;
   function submit(decision: "approved" | "rejected") {
-    if (!c || !version) return;
+    if (!c || !version || !canReview) return;
     if (decision === "rejected" && !note.trim()) {
       setError("修正してほしい内容を確認メモに入力してください。");
       return;
@@ -76,7 +113,7 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
     const fd = new FormData();
     fd.set("proposalVersionId", version.id);
     fd.set("decision", decision);
-    fd.set("returnTo", `/ops/review?company=${c.id}&version=${version.id}`);
+    fd.set("returnTo", reviewHref(c.id, version.id));
     fd.set("note", decision === "approved" ? `確認済み：${checked.join("、")}\n${note}` : note);
     setError("");
     startTransition(async () => {
@@ -90,33 +127,44 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
   }
   return (
     <div className="review-layout">
-      <aside className="review-queue">
+      <aside className="review-queue" aria-label="レビュー案件一覧">
         <div className="queue-heading">
           <h1>提案レビュー</h1>
-          <span>{items.filter((i) => i.pending).length}</span>
+          <span>{queue.counts.pending}</span>
         </div>
-        <div className="queue-search">
-          <Search size={15} />
+        <form className="queue-search" action="/ops/review" method="get" key={queue.query}>
+          <Search size={15} aria-hidden="true" />
+          <input type="hidden" name="reviewView" value={queue.view} />
           <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="案件を絞り込む"
-            aria-label="レビュー案件を絞り込む"
+            name="reviewQuery"
+            defaultValue={queue.query}
+            maxLength={200}
+            placeholder="企業名・地域・業種で検索"
+            aria-label="レビュー案件を検索"
           />
-        </div>
-        <div className="queue-filters">
-          <button type="button" className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>
-            すべて
-          </button>
-          <button type="button" className={filter === "pending" ? "active" : ""} onClick={() => setFilter("pending")}>
-            確認待ち
-          </button>
-        </div>
+          <button type="submit">検索</button>
+        </form>
+        <nav className="queue-filters" aria-label="レビューの表示対象">
+          <Link
+            href={queue.pendingHref}
+            className={queue.view === "pending" ? "active" : ""}
+            aria-current={queue.view === "pending" ? "page" : undefined}
+          >
+            確認待ち {queue.counts.pending}
+          </Link>
+          <Link
+            href={queue.allHref}
+            className={queue.view === "all" ? "active" : ""}
+            aria-current={queue.view === "all" ? "page" : undefined}
+          >
+            すべて {queue.counts.all}
+          </Link>
+        </nav>
         <div className="queue-items">
           {visible.map((i) => (
             <Link
               key={i.id}
-              href={`/ops/review?company=${i.id}`}
+              href={reviewHref(i.id, i.versionId)}
               className={`queue-item ${i.id === c?.id ? "selected" : ""}`}
               aria-current={i.id === c?.id ? "page" : undefined}
             >
@@ -126,12 +174,29 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
               </small>
               <span className={`queue-status ${i.pending ? "waiting" : ""}`}>
                 <i />
-                {i.pending ? "提案確認待ち" : (PIPELINE_LABEL[i.status] ?? i.status)}
+                {i.suppression !== "none"
+                  ? "営業抑止中"
+                  : i.pending
+                    ? "提案確認待ち"
+                    : i.versionStatus
+                      ? (PROPOSAL_STATUS_LABEL[i.versionStatus] ?? i.versionStatus)
+                      : (PIPELINE_LABEL[i.status] ?? i.status)}
               </span>
+              {i.version && <small>提案 第{i.version}版</small>}
             </Link>
           ))}
           {visible.length === 0 && <p className="queue-empty">該当する案件はありません。</p>}
         </div>
+        <nav aria-label="レビュー案件のページ" className="queue-pagination">
+          {queue.page > 1 ? <Link href={queue.previousHref}>前の20社</Link> : <span />}
+          <span>
+            {queue.page} / {queue.pages}ページ · {queue.total}社
+          </span>
+          {queue.page < queue.pages ? <Link href={queue.nextHref}>次の20社</Link> : <span />}
+        </nav>
+        {c && !items.some((i) => i.id === c.id) && (
+          <p className="queue-empty">表示中の案件は、この一覧条件には含まれていません。</p>
+        )}
         <Link href="/ops/discovery" className="queue-all">
           案件一覧を見る <ChevronRight size={17} />
         </Link>
@@ -139,9 +204,15 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
       {!c ? (
         <div className="review-empty">
           <FileText />
-          <h2>確認する案件はまだありません</h2>
-          <p>企業・案件から候補の収集と診断を進めてください。</p>
-          <Link href="/ops/discovery">企業・案件へ</Link>
+          <h2>
+            {queue.query
+              ? "条件に合う案件はありません"
+              : queue.view === "pending"
+                ? "確認待ちの提案はありません"
+                : "確認する案件はまだありません"}
+          </h2>
+          <p>検索条件を変えるか、すべての案件から履歴や制作状況を確認できます。</p>
+          <Link href={queue.allHref}>すべての案件を確認</Link>
         </div>
       ) : (
         <>
@@ -176,6 +247,12 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
                 </a>
               )}
             </header>
+            {version && !version.isLatest && (
+              <div className="review-version-notice" role="status">
+                過去の提案版を表示しています。この版の承認・差し戻しはできません。
+                <Link href={reviewHref(c.id, c.versions[0]?.id)}>最新版を開く</Link>
+              </div>
+            )}
             <ol className="review-steps">
               {["情報確認", "制作", "提案確認", "営業・契約", "納品・公開"].map((s, i) => (
                 <li key={s} className={i === (c.pipelineStatus === "sellable" ? 3 : version ? 2 : 0) ? "current" : ""}>
@@ -306,7 +383,7 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
                   )}
                   <Link
                     className="review-outline"
-                    href={`/ops/companies/${c.id}?returnTo=${encodeURIComponent(`/ops/review?company=${c.id}`)}`}
+                    href={`/ops/companies/${c.id}?returnTo=${encodeURIComponent(reviewHref(c.id, version?.id))}`}
                   >
                     企業情報・素材を編集 <ArrowRight size={16} />
                   </Link>
@@ -316,7 +393,7 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
                 <div className="review-document">
                   <h3>提案の履歴</h3>
                   {c.versions.map((v) => (
-                    <Link href={`/ops/review?company=${c.id}&version=${v.id}`} className="version-row" key={v.id}>
+                    <Link href={reviewHref(c.id, v.id)} className="version-row" key={v.id}>
                       <span className="version-number">{v.version}</span>
                       <div>
                         <strong>提案 第{v.version}版</strong>
@@ -389,7 +466,9 @@ export function ReviewWorkspace({ items, selected: c }: { items: Item[]; selecte
           </aside>
           <footer className="review-footer">
             <div>
-              <strong>{version ? `第${version.version}版を確認中` : "制作準備中"}</strong>
+              <strong>
+                {version ? `第${version.version}版${version.isLatest ? "を確認中" : "の履歴"}` : "制作準備中"}
+              </strong>
               <button type="button" onClick={() => setTab("history")}>
                 変更履歴
               </button>
