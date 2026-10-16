@@ -17,6 +17,7 @@ export const QUEUES = {
   recoverDiscovery: "maintenance.recover-stale-discovery",
   /** 定期：稼働通知が途切れた生成ジョブの履歴を閉じる */
   recoverGeneration: "maintenance.recover-stale-generation",
+  dispatchHandoffs: "maintenance.dispatch-proposal-handoffs",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -80,4 +81,5 @@ export const DEFAULT_SCHEDULES = {
   expireAssignments: "*/10 * * * *",
   recoverDiscovery: "*/15 * * * *",
   recoverGeneration: "* * * * *",
+  dispatchHandoffs: "* * * * *",
 } as const;

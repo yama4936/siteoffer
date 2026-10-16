@@ -32,6 +32,7 @@ export default async function ProcessingPage({
       images: Number(sp.imagesPage),
       sites: Number(sp.sitesPage),
       deliveries: Number(sp.deliveriesPage),
+      handoffs: Number(sp.handoffsPage),
     },
     deliveryState,
   );
@@ -49,6 +50,19 @@ export default async function ProcessingPage({
         status: j.status === "queued" ? "開始待ち" : "収集中",
         since: j.startedAt ?? j.createdAt,
         href: `/ops/discovery/${j.id}`,
+      })),
+    },
+    {
+      name: "診断後の制作受付",
+      kind: "handoffs",
+      ...d.paging.handoffs,
+      rows: d.handoffs.map((j) => ({
+        id: j.id,
+        title: j.companyName,
+        since: j.since,
+        status: j.state === "sending" ? "引き継ぎ中" : j.state === "retry" ? "自動再送待ち" : "提案制作の受付待ち",
+        detail: j.state === "retry" ? `再送受付：${fmtDate(j.nextAttemptAt)}以降` : null,
+        href: `/ops/companies/${j.companyId}`,
       })),
     },
     {
@@ -188,6 +202,11 @@ export default async function ProcessingPage({
             <h2 className="mb-3 text-lg font-semibold">
               {g.name} · {g.total}件
             </h2>
+            {g.kind === "handoffs" && (
+              <p className="mb-3 text-sm text-muted-foreground">
+                診断結果と制作依頼は保存済みです。制作ワーカーが稼働すると自動で引き継ぎます。同じ診断を重ねて依頼する必要はありません。
+              </p>
+            )}
             {g.kind === "deliveries" && (
               <nav className="mb-3 flex flex-wrap gap-2 text-sm" aria-label="納品制作の表示対象">
                 {(["all", "stopped"] as const).map((state) => (
@@ -224,6 +243,9 @@ export default async function ProcessingPage({
                     >
                       {j.status} · {fmtDate(j.since)}から
                     </p>
+                    {"detail" in j && typeof j.detail === "string" && (
+                      <p className="mt-1 text-xs text-muted-foreground">{j.detail}</p>
+                    )}
                   </div>
                   <Link className="rounded-md border px-3 py-2 text-primary" href={j.href}>
                     {"attention" in j && j.attention ? "停止理由・再試行を確認" : "依頼・結果を確認"}

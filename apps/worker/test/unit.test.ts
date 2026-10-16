@@ -91,6 +91,7 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
     expect(f.handlers[QUEUES.discovery]).toBeDefined();
     expect(f.handlers[QUEUES.audit]).toBeUndefined();
     expect(f.handlers[QUEUES.proposal]).toBeUndefined();
+    expect(f.handlers[QUEUES.dispatchHandoffs]).toBeUndefined();
   });
 
   it("処理のキューは exclusive・再試行上限・制限時間付きで作り、retry の結果は例外にして再試行させる", async () => {
@@ -116,6 +117,7 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
       [QUEUES.expireAssignments]: DEFAULT_SCHEDULES.expireAssignments,
       [QUEUES.recoverDiscovery]: DEFAULT_SCHEDULES.recoverDiscovery,
       [QUEUES.recoverGeneration]: DEFAULT_SCHEDULES.recoverGeneration,
+      [QUEUES.dispatchHandoffs]: DEFAULT_SCHEDULES.dispatchHandoffs,
     });
 
     const handler = f.handlers[QUEUES.proposal]!;

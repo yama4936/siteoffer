@@ -2,7 +2,8 @@ import { runSiteAudit } from "@siteoffer/audit";
 import { companies, websites } from "@siteoffer/db";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
-import { type AuditPayload, type ProposalPayload, QUEUES, stepKeys } from "../queues.ts";
+import { dispatchProposalHandoffs, findProposalHandoff, recordProposalHandoff } from "../handoff.ts";
+import { type AuditPayload, QUEUES, stepKeys } from "../queues.ts";
 import { checkPublicHttpUrl } from "../url.ts";
 import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
 
@@ -13,7 +14,7 @@ export interface AuditStepResult {
   auditId: string | null;
   auditStatus: "evaluated" | "unevaluable" | null;
   decision: "create" | "skip" | "hold" | null;
-  /** 生成へ送った */
+  /** 生成依頼を永続化した（キュー停止時は自動再送する） */
   proposalQueued: boolean;
 }
 
@@ -35,6 +36,24 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     if (PROTECTED.includes(company.suppression)) return { ...base, skipped: `営業抑止（${company.suppression}）` };
     if (company.officialSiteStatus !== "confirmed") {
       return { ...base, skipped: `公式サイトが未確認（${company.officialSiteStatus}）` };
+    }
+
+    const key = stepKeys.audit(payload);
+    const previous = await ctx.withOwnership((tx) => findProposalHandoff(tx, key));
+    const dispatch = () =>
+      dispatchProposalHandoffs(deps, key).catch(() => {
+        deps.logger.warn("提案への引き継ぎは保存済みです。定期処理で再送します", { key });
+      });
+    if (previous) {
+      await dispatch();
+      return {
+        ...base,
+        skipped: null,
+        auditId: previous.auditId,
+        auditStatus: "evaluated",
+        decision: "create",
+        proposalQueued: true,
+      };
     }
 
     const [site] = await db
@@ -60,18 +79,17 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
 
     const meta = { auditId: out.auditId, decision: out.decision };
     if (out.status === "evaluated" && out.decision === "create") {
-      await ctx.withOwnership((tx) =>
-        moveCompanyStatus(tx, clock, {
+      await ctx.withOwnership(async (tx) => {
+        await moveCompanyStatus(tx, clock, {
           companyId: company.id,
           from: [...PRE_REVIEW_STATUSES],
           to: "audited",
           reason: "診断済み（判定：create）",
           meta,
-        }),
-      );
-      const next: ProposalPayload = { companyId: company.id, auditId: out.auditId, revision: "initial" };
-      await ctx.assertCurrent();
-      await deps.queue.send(QUEUES.proposal, next, { singletonKey: stepKeys.proposal(next) });
+        });
+        await recordProposalHandoff(tx, clock, { sourceStepKey: key, companyId: company.id, auditId: out.auditId });
+      });
+      await dispatch();
       return {
         ...base,
         skipped: null,
@@ -104,6 +122,8 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     };
   },
   async onGiveUp(deps, payload, reason) {
+    // 引き継ぎ確定後の終了通知の失敗で、診断済みの企業を失敗へ戻さない。
+    if (await findProposalHandoff(deps.db, stepKeys.audit(payload))) return;
     await moveCompanyStatus(deps.db, deps.clock, {
       companyId: payload.companyId,
       from: ["collected", "site_confirmed", "audited", "on_hold"],

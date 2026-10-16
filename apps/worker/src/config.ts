@@ -57,7 +57,12 @@ export interface WorkerConfig {
   /** DBを見てジョブを受け付ける間隔（ミリ秒）。0 なら受付処理を動かさない */
   intakeIntervalMs: number;
   policies: Record<StepKind, StepPolicy>;
-  schedules: { expireAssignments: string; recoverDiscovery: string; recoverGeneration: string };
+  schedules: {
+    expireAssignments: string;
+    recoverDiscovery: string;
+    recoverGeneration: string;
+    dispatchHandoffs: string;
+  };
   discoveryStaleAfterMs: number;
   /** キューごとの同時実行数（このプロセス内） */
   concurrency: Record<StepKind, number>;

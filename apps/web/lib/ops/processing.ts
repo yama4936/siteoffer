@@ -7,6 +7,7 @@ import {
   deliveryBuilds,
   designVersions,
   discoveryJobs,
+  proposalHandoffs,
   proposalVersions,
   users,
   workerRuntimes,
@@ -118,7 +119,7 @@ export async function getProcessingOverview(
   clock: Clock,
   actor: Actor | null,
   companyId?: string,
-  requestedPages: Partial<Record<"discovery" | "images" | "sites" | "deliveries", number>> = {},
+  requestedPages: Partial<Record<"discovery" | "images" | "sites" | "deliveries" | "handoffs", number>> = {},
   deliveryState: "all" | "stopped" = "all",
 ) {
   if (actor?.kind !== "ops" || !isUuid(actor.userId)) return err("forbidden");
@@ -151,7 +152,11 @@ export async function getProcessingOverview(
     companyId ? eq(companies.id, companyId) : undefined,
     deliveryState === "stopped" ? deliveryNeedsAttention(now) : undefined,
   );
-  const [dc, ic, sc, bc] = await Promise.all([
+  const handoffWhere = and(
+    isNull(proposalHandoffs.sentAt),
+    companyId ? eq(proposalHandoffs.companyId, companyId) : undefined,
+  );
+  const [dc, ic, sc, bc, hc] = await Promise.all([
     companyId
       ? Promise.resolve([{ total: 0 }])
       : db.select({ total: count() }).from(discoveryJobs).where(discoveryWhere),
@@ -172,6 +177,7 @@ export async function getProcessingOverview(
       .innerJoin(companies, eq(companies.id, contracts.companyId))
       .leftJoin(deliveryBuilds, currentDeliveryBuild)
       .where(deliveryWhere),
+    db.select({ total: count() }).from(proposalHandoffs).where(handoffWhere),
   ]);
   const pagination = (total: number, requested: number | undefined) => {
     const pages = Math.max(1, Math.ceil(total / PROCESSING_LIMIT));
@@ -182,8 +188,9 @@ export async function getProcessingOverview(
     images: pagination(ic[0]?.total ?? 0, requestedPages.images),
     sites: pagination(sc[0]?.total ?? 0, requestedPages.sites),
     deliveries: pagination(bc[0]?.total ?? 0, requestedPages.deliveries),
+    handoffs: pagination(hc[0]?.total ?? 0, requestedPages.handoffs),
   };
-  const [runtime, discovery, images, sites, deliveryRows, company] = await Promise.all([
+  const [runtime, discovery, images, sites, deliveryRows, company, handoffs] = await Promise.all([
     db.select().from(workerRuntimes).orderBy(desc(workerRuntimes.heartbeatAt)),
     companyId
       ? Promise.resolve([])
@@ -259,11 +266,29 @@ export async function getProcessingOverview(
     companyId
       ? db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId))
       : Promise.resolve([]),
+    db
+      .select({
+        id: proposalHandoffs.sourceStepKey,
+        companyId: companies.id,
+        companyName: companies.name,
+        since: proposalHandoffs.createdAt,
+        nextAttemptAt: proposalHandoffs.nextAttemptAt,
+        state: sql<
+          "sending" | "retry" | "pending"
+        >`case when ${proposalHandoffs.leaseUntil} > ${now} then 'sending' when ${proposalHandoffs.attempts} > 0 then 'retry' else 'pending' end`,
+      })
+      .from(proposalHandoffs)
+      .innerJoin(companies, eq(companies.id, proposalHandoffs.companyId))
+      .where(handoffWhere)
+      .orderBy(asc(proposalHandoffs.createdAt), asc(proposalHandoffs.sourceStepKey))
+      .limit(PROCESSING_LIMIT)
+      .offset((paging.handoffs.page - 1) * PROCESSING_LIMIT),
   ]);
   if (companyId && !company.length) return err("not_found");
   return ok({
     ...assessWorkers(runtime, now),
     discovery,
+    handoffs,
     images,
     sites,
     deliveries: deliveryRows.map(({ status, leaseUntil, ...row }) => ({

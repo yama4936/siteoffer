@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { fixedClock } from "@siteoffer/core";
-import { type Db, designVersions, discoveryJobs, proposalVersions, users, type workerRuntimes } from "@siteoffer/db";
+import {
+  type Db,
+  designVersions,
+  discoveryJobs,
+  proposalHandoffs,
+  proposalVersions,
+  users,
+  type workerRuntimes,
+} from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -82,6 +90,38 @@ let db: Db, close: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await close?.();
   close = undefined;
+});
+
+it("shows pending handoffs by company, paginates, hides sent rows and never returns lease tokens", async () => {
+  ({ db, close } = await createTestDb());
+  const ops = await seedUser(db, "ops");
+  const a = await seedCandidate(db, { versionStatus: null });
+  const b = await seedCandidate(db, { versionStatus: null });
+  const token = randomUUID();
+  await db.insert(proposalHandoffs).values(
+    Array.from({ length: 23 }, (_, i) => ({
+      sourceStepKey: `handoff-${i}`,
+      companyId: i === 22 ? b.company.id : a.company.id,
+      auditId: i === 22 ? b.audit.id : a.audit.id,
+      sentAt: i === 21 ? clock.now() : null,
+      attempts: i === 1 ? 2 : 0,
+      leaseToken: i === 0 ? token : null,
+      leaseUntil: i === 0 ? new Date(clock.now().getTime() + 60_000) : null,
+      createdAt: new Date(clock.now().getTime() + i * 1000),
+      nextAttemptAt: clock.now(),
+    })),
+  );
+  const first = await getProcessingOverview(db, clock, ops.actor, a.company.id);
+  if (!first.ok) throw new Error(first.error);
+  expect(first.value.paging.handoffs).toEqual({ page: 1, pages: 2, total: 21 });
+  expect(first.value.handoffs).toHaveLength(20);
+  expect(first.value.handoffs.slice(0, 3).map((r) => r.state)).toEqual(["sending", "retry", "pending"]);
+  expect(JSON.stringify(first.value)).not.toContain(token);
+  expect(JSON.stringify(first.value)).not.toContain("leaseToken");
+  const second = await getProcessingOverview(db, clock, ops.actor, a.company.id, { handoffs: 999 });
+  expect(second.ok && second.value.handoffs.map((r) => r.id)).toEqual(["handoff-20"]);
+  const other = await getProcessingOverview(db, clock, ops.actor, b.company.id);
+  expect(other.ok && other.value.handoffs.map((r) => r.id)).toEqual(["handoff-22"]);
 });
 it("restricts processing records to active ops and rejects invalid filters", async () => {
   ({ db, close } = await createTestDb());

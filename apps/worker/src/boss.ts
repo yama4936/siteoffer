@@ -55,7 +55,9 @@ export async function registerQueues(
     [QUEUES.expireAssignments, config.schedules.expireAssignments],
     [QUEUES.recoverDiscovery, config.schedules.recoverDiscovery],
     [QUEUES.recoverGeneration, config.schedules.recoverGeneration],
+    [QUEUES.dispatchHandoffs, config.schedules.dispatchHandoffs],
   ] as const) {
+    if (config.discoveryOnly && name === QUEUES.dispatchHandoffs) continue;
     await boss.createQueue(name, { policy: "singleton", retryLimit: 2, retryDelay: 60, expireInSeconds: 600 });
     await boss.schedule(name, cron, {}, { tz: "Asia/Tokyo" });
     await boss.work(name, async () => {

@@ -52,6 +52,7 @@ export async function startWorker(env: Record<string, string | undefined> = proc
   const runtime = createWorkerRuntime(deps);
   await registerQueues(boss, runtime, config, logger);
   await runtime.run(QUEUES.recoverGeneration, {});
+  await runtime.run(QUEUES.dispatchHandoffs, {});
   const stopHeartbeat =
     config.intakeIntervalMs > 0
       ? await startWorkerHeartbeat(
