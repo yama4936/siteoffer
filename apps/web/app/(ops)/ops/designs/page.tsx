@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_DESIGN_BRIEF, DESIGN_LABELS, type DesignBrief } from "@siteoffer/core";
 import { companies, designBriefDrafts, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { and, desc, eq, getTableColumns, isNotNull, sql } from "drizzle-orm";
-import { ArrowRight, Download, Palette } from "lucide-react";
+import { ArrowRight, Palette } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { DesignBriefForm } from "@/components/ops/design-brief-form";
 import { DesignRefresh, DesignSubmit } from "@/components/ops/design-controls";
+import { DesignJourney } from "@/components/ops/design-journey";
 import { Flash, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { loadDesignDraft } from "@/lib/ops/design-drafts";
@@ -34,6 +35,7 @@ export default async function DesignPage({
   if (!isUuid(companyId)) notFound();
   const [company] = await db.select().from(companies).where(eq(companies.id, companyId));
   if (!company) notFound();
+  if (!candidates.some((c) => c.id === company.id)) candidates.unshift({ id: company.id, name: company.name });
   const { imageBase64: _image, ...metadata } = getTableColumns(designVersions);
   const versions = await db
     .select(metadata)
@@ -147,17 +149,15 @@ export default async function DesignPage({
           </div>
         </form>
       </header>
-      <div className="design-steps">
-        <span className="active">01　制作条件</span>
-        <ArrowRight size={16} />
-        <span className={selected?.imageSha256 ? "active" : ""}>02　デザイン画像</span>
-        <ArrowRight size={16} />
-        <span className={selected?.status === "approved" ? "active" : ""}>03　確認・承認</span>
-        <ArrowRight size={16} />
-        <span className={proposal ? "active" : ""}>04　サイト制作・提案PDF</span>
-      </div>
+      <DesignJourney
+        companyId={companyId}
+        canCreate={!!audit}
+        configured={configured}
+        design={selected}
+        proposal={proposal}
+      />
       <div className={`design-grid ${selected?.imageSha256 ? "" : "no-design-image"}`}>
-        <section className="design-card design-brief">
+        <section id="design-brief" tabIndex={-1} className="design-card design-brief">
           <h2>
             <Palette size={19} />
             制作条件
@@ -248,7 +248,7 @@ export default async function DesignPage({
             </p>
           )}
           {selected?.status === "draft" && (
-            <form action={uploadDesignAction} className="design-upload">
+            <form id="design-upload" tabIndex={-1} action={uploadDesignAction} className="design-upload">
               {hidden}
               <label>
                 デザイン画像（PNG・JPEG・WebP、12MB以下）
@@ -263,14 +263,10 @@ export default async function DesignPage({
                 画像 {selected.width} × {selected.height} ·{" "}
                 {selected.source === "openai" ? `API生成 / ${selected.model}` : "取り込み画像"}
               </span>
-              <a className="design-button secondary" href={`/ops/designs/${selected.id}/pdf`}>
-                <Download size={16} />
-                デザイン提案PDF
-              </a>
             </div>
           )}
           {selected?.status === "in_review" && (
-            <form action={reviewDesignAction} className="design-review">
+            <form id="design-review" tabIndex={-1} action={reviewDesignAction} className="design-review">
               {hidden}
               <h3>制作へ進む前の確認</h3>
               <label className="design-check">
@@ -305,10 +301,10 @@ export default async function DesignPage({
             </form>
           )}
           {selected?.status === "approved" && (
-            <div className="design-review">
+            <div id="design-build" tabIndex={-1} className="design-review">
               <h3>このデザインで制作を進める</h3>
               <p>画像・制作条件・診断を固定し、サイト生成へ渡します。</p>
-              {!selected.buildRequestedAt ? (
+              {!selected.buildRequestedAt && !proposal ? (
                 <form action={buildDesignAction}>
                   {hidden}
                   <DesignSubmit>
@@ -337,12 +333,6 @@ export default async function DesignPage({
                 >
                   提案 第{proposal.version}版を確認 <ArrowRight size={16} />
                 </Link>
-              )}
-              {proposal?.status === "approved" && (
-                <a className="design-button secondary" href={`/ops/proposals/${proposal.id}/pdf`}>
-                  <Download size={16} />
-                  承認済み提案PDF
-                </a>
               )}
             </div>
           )}

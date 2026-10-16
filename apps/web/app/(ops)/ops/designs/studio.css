@@ -75,23 +75,7 @@
   outline: 3px solid #94b4ff;
   outline-offset: 3px;
 }
-.design-steps {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 19px 24px;
-  background: #f1f4fb;
-  border: 1px solid #e2e7f1;
-  border-radius: 8px;
-  color: #8a96aa;
-  font-size: 12px;
-  margin-bottom: 22px;
-}
-.design-steps .active {
-  color: #2852df;
-  font-weight: 700;
-}
+
 .design-grid {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -307,10 +291,7 @@
   .design-heading h1 {
     font-size: 23px;
   }
-  .design-steps {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
+
   .design-canvas-footer {
     flex-direction: column;
     align-items: flex-start;
@@ -326,10 +307,7 @@
   .design-brief {
     order: 2;
   }
-  .design-steps {
-    font-size: 10px;
-    padding: 14px;
-  }
+
   .design-section-heading {
     padding: 16px;
     flex-wrap: wrap;
@@ -351,6 +329,122 @@
   margin: 0;
   min-width: 0;
 }
+.design-journey {
+  margin-bottom: 24px;
+  border: 1px solid #dbe3f2;
+  border-radius: 12px;
+  background: white;
+  overflow: hidden;
+}
+.design-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  list-style: none;
+  margin: 0;
+  padding: 18px 22px;
+  background: #f4f7fc;
+}
+.design-progress li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #66758b;
+  font-size: 12px;
+}
+.design-progress li > span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid #cdd7e5;
+}
+.design-progress .complete {
+  color: #267150;
+}
+.design-progress .current {
+  color: #234bd4;
+  font-weight: 700;
+}
+
+.design-next {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px;
+}
+.design-next h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 7px 0;
+}
+.design-next p:not(.design-eyebrow),
+.design-documents p {
+  font-size: 12px;
+  color: #526680;
+  line-height: 1.9;
+}
+.design-next > .design-button {
+  flex-shrink: 0;
+}
+.design-documents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  padding: 18px 22px;
+  border-top: 1px solid #e2e8f2;
+}
+.design-documents h3 {
+  font-size: 13px;
+  font-weight: 700;
+}
+.design-documents h3 span {
+  display: inline-block;
+  color: #526680;
+  font-size: 11px;
+  font-weight: 400;
+  margin-left: 8px;
+}
+.design-documents p {
+  margin: 6px 0 10px;
+}
+.design-progress .current > span {
+  background: #3156e9;
+  color: white;
+  border-color: #3156e9;
+}
+.design-studio [id^="design-"] {
+  scroll-margin-top: 90px;
+}
+@media (max-width: 800px) {
+  .design-next {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+  }
+  .design-documents {
+    grid-template-columns: 1fr;
+    padding: 18px;
+  }
+  .design-progress {
+    gap: 10px 14px;
+    padding: 14px 18px;
+  }
+  .design-progress li {
+    font-size: 11px;
+  }
+  .design-inline {
+    min-width: 0;
+  }
+  .design-inline select {
+    min-width: 0;
+    flex: 1;
+  }
+}
+
 .design-draft-status,
 .design-draft-conflict,
 .design-draft-error {
