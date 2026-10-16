@@ -49,6 +49,7 @@ export async function submitArticleAction(
   try {
     const result = await submitArticleOperation(getDb(), systemClock, await getCurrentActor(), scope, input);
     revalidatePath("/ops/content");
+    revalidatePath("/customer/content");
     if (input.kind === "publish") revalidatePath(`/published/${scope.companyId}/news`, "page");
     return { status: "ok", ...result };
   } catch (e) {

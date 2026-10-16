@@ -1,9 +1,10 @@
-import { hasPublishedSite, loadArticleWorkspace } from "@siteoffer/core";
+import { hasPublishedSite, loadArticleWorkspace, loadContentAccess } from "@siteoffer/core";
 import { companies, contentEntries, contentRevisions } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArticleEditor } from "@/components/ops/article-editor";
+import { ContentAccessManager } from "@/components/ops/content-access-manager";
 import { Flash, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
@@ -46,6 +47,7 @@ export default async function ContentPage({
   if (id && !selected) notFound();
   const publicSite = await hasPublishedSite(db, companyId);
   const workspace = await loadArticleWorkspace(db, user.actor, { companyId, entryId: selected?.entry.id ?? null });
+  const access = await loadContentAccess(db, user.actor, companyId);
   return (
     <div className="design-studio">
       <Flash searchParams={sp} />
@@ -128,6 +130,9 @@ export default async function ContentPage({
             publicSite={publicSite}
           />
         </section>
+      </div>
+      <div className="mt-6">
+        <ContentAccessManager key={companyId} initial={access} />
       </div>
     </div>
   );

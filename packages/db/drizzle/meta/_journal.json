@@ -232,6 +232,13 @@
       "when": 1792188054078,
       "tag": "0032_content_working_copies",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792188997436,
+      "tag": "0033_customer_content_access",
+      "breakpoints": true
     }
   ]
 }

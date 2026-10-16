@@ -3,11 +3,11 @@ import type { Result } from "../common/result.ts";
 
 /** ログイン済みのユーザー。actor は権限判定（can）と操作履歴に渡す */
 export interface AuthenticatedUser {
-  actor: Extract<Actor, { kind: "sales" | "ops" }>;
+  actor: Extract<Actor, { kind: "sales" | "ops" | "customer_user" }>;
   userId: string;
   email: string;
   displayName: string;
-  role: "sales" | "ops";
+  role: "sales" | "ops" | "customer";
 }
 
 export interface RegisterSalesInput {

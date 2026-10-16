@@ -1,16 +1,9 @@
 import { createHash } from "node:crypto";
-import {
-  companies,
-  contentEntries,
-  contentOperations,
-  contentRevisions,
-  contentWorkingCopies,
-  type DbOrTx,
-  users,
-} from "@siteoffer/db";
+import { contentEntries, contentOperations, contentRevisions, contentWorkingCopies, type DbOrTx } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
 import type { Actor, Clock } from "./common/index.ts";
 import { ContentError, publishArticle, saveArticle } from "./content.ts";
+import { authorizeContentEditor } from "./content-auth.ts";
 import { findSecretInFields } from "./domain-preference/secrets.ts";
 
 export type ArticleScope = { companyId: string; entryId: string | null };
@@ -58,20 +51,7 @@ const scopeKey = (scope: ArticleScope) => scope.entryId?.toLowerCase() ?? "new";
 async function access(db: DbOrTx, actor: Actor | null, scope: ArticleScope) {
   if (!scope || !uuid.test(scope.companyId) || (scope.entryId !== null && !uuid.test(scope.entryId)))
     throw new ContentError("企業・記事を確認してください");
-  if (actor?.kind !== "ops") throw new ContentError("運営権限が必要です");
-  // The company lock serializes editor operations, manual saves and imports in the same order.
-  const [company] = await db
-    .select({ id: companies.id })
-    .from(companies)
-    .where(eq(companies.id, scope.companyId))
-    .for("update");
-  if (!company) throw new ContentError("企業がありません");
-  const [user] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")))
-    .for("share");
-  if (!user) throw new ContentError("有効な運営権限が必要です");
+  const editor = await authorizeContentEditor(db, actor, scope.companyId);
   if (scope.entryId) {
     const [entry] = await db
       .select({ id: contentEntries.id })
@@ -79,7 +59,7 @@ async function access(db: DbOrTx, actor: Actor | null, scope: ArticleScope) {
       .where(and(eq(contentEntries.id, scope.entryId), eq(contentEntries.companyId, scope.companyId)));
     if (!entry) throw new ContentError("記事がありません");
   }
-  return actor;
+  return editor;
 }
 async function readCopy(db: DbOrTx, userId: string, scope: ArticleScope): Promise<ArticleWorkingCopy> {
   const [copy] = await db

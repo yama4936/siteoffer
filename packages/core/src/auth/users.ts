@@ -1,5 +1,5 @@
 import { type DbOrTx, sessions, termsAcceptances, users } from "@siteoffer/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -33,6 +33,14 @@ async function setUserStatus(
       role: user.role,
     });
     if (!auth.ok) return auth;
+    if (actor?.kind === "ops") {
+      const [operator] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")))
+        .for("share");
+      if (!operator) return err("forbidden");
+    }
     if (user.status === status) return err("already_in_state");
     await tx.update(users).set({ status, updatedAt: clock.now() }).where(eq(users.id, user.id));
     if (status === "suspended") {

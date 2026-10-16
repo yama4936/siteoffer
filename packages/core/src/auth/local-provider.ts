@@ -19,7 +19,7 @@ import {
 type UserRow = typeof users.$inferSelect;
 
 function toAuthenticated(u: UserRow): AuthenticatedUser {
-  const actor = u.role === "ops" ? { kind: "ops" as const, userId: u.id } : { kind: "sales" as const, userId: u.id };
+  const actor = { kind: u.role === "customer" ? ("customer_user" as const) : u.role, userId: u.id };
   return { actor, userId: u.id, email: u.email, displayName: u.displayName, role: u.role };
 }
 
@@ -145,7 +145,10 @@ export function createLocalAuthProvider({ db, clock, sessionTtlMs }: LocalAuthPr
         if (!s) return;
         const [u] = await tx.select({ role: users.role }).from(users).where(eq(users.id, s.userId));
         await recordEvent(tx, clock, {
-          actor: u?.role === "ops" ? { kind: "ops", userId: s.userId } : { kind: "sales", userId: s.userId },
+          actor: {
+            kind: u?.role === "customer" ? "customer_user" : u?.role === "ops" ? "ops" : "sales",
+            userId: s.userId,
+          },
           action: "session.deleted",
           targetType: "session",
           targetId: s.id,

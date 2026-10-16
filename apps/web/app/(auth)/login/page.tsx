@@ -14,7 +14,7 @@ export default async function LoginPage() {
         <CardTitle className="text-xl">
           <h1>ログイン</h1>
         </CardTitle>
-        <CardDescription>運営・営業パートナーのアカウントでログインします。</CardDescription>
+        <CardDescription>運営・営業パートナー・顧客のアカウントでログインします。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         <LoginForm />

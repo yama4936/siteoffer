@@ -4,6 +4,8 @@ export * from "./common/index.ts";
 export * from "./consultation.ts";
 export * from "./consultation-drafts.ts";
 export * from "./content.ts";
+export * from "./content-access.ts";
+export { authorizeContentEditor } from "./content-auth.ts";
 export * from "./content-import.ts";
 export * from "./content-workspace.ts";
 export * from "./contract/index.ts";

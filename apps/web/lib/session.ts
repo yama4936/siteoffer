@@ -30,7 +30,7 @@ export async function getCurrentActor(): Promise<Actor | null> {
 }
 
 /** ログイン必須の画面・処理で使う。未ログインなら /login へ、役割が違えば / へ移動する */
-export async function requireUser(role?: "sales" | "ops"): Promise<AuthenticatedUser> {
+export async function requireUser(role?: "sales" | "ops" | "customer"): Promise<AuthenticatedUser> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   if (role && user.role !== role) redirect("/");

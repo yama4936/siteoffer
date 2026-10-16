@@ -4,6 +4,7 @@ export * from "./audit-request.ts";
 export * from "./companies.ts";
 export * from "./consultation.ts";
 export * from "./content.ts";
+export * from "./content-access.ts";
 export * from "./contract.ts";
 export * from "./delivery.ts";
 export * from "./delivery-preview.ts";

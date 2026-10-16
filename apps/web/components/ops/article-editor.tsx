@@ -17,7 +17,15 @@ function ArticlePreview({ title, body, category }: Pick<ArticleValues, "title" |
     </article>
   );
 }
-export function ArticleEditor({ initial, publicSite }: { initial: ArticleWorkspace; publicSite: boolean }) {
+export function ArticleEditor({
+  initial,
+  publicSite,
+  audience = "ops",
+}: {
+  initial: ArticleWorkspace;
+  publicSite: boolean;
+  audience?: "ops" | "customer";
+}) {
   const router = useRouter();
   const [workspace, setWorkspace] = useState(initial);
   const draft = usePersonalDraft(initial.copy, initial.current, (revision, values) =>
@@ -41,7 +49,10 @@ export function ArticleEditor({ initial, publicSite }: { initial: ArticleWorkspa
     setMessage("");
     setError("");
     setConfirmed(false);
-    draft.change({ ...draft.latest.current, [key]: value });
+    const next = { ...draft.latest.current, [key]: value };
+    if (!initial.scope.entryId && key === "title" && value.trim() && !next.slug)
+      next.slug = `news-${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID().slice(0, 8)}`;
+    draft.change(next);
   }
   function observe(next: ArticleWorkspace) {
     setWorkspace(next);
@@ -87,7 +98,9 @@ export function ArticleEditor({ initial, publicSite }: { initial: ArticleWorkspa
       setConfirmed(false);
       if (operation.kind === "save") {
         if (!initial.scope.entryId) {
-          router.replace(`/ops/content?company=${initial.scope.companyId}&entry=${result.workspace.scope.entryId}`);
+          router.replace(
+            `${audience === "customer" ? "/customer/content" : "/ops/content"}?company=${initial.scope.companyId}&entry=${result.workspace.scope.entryId}`,
+          );
           return;
         }
         draft.applyStored(result.workspace.copy, result.workspace.current);
@@ -156,7 +169,7 @@ export function ArticleEditor({ initial, publicSite }: { initial: ArticleWorkspa
       <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm leading-6">
         <p className="font-semibold">① 自分専用の作業コピー → ② 下書きとして共有 → ③ 確認して掲載</p>
         <p>
-          入力は自分専用に自動保存されます。「下書きを保存」で他の運営担当者と共有できます。掲載操作まではサイトに反映されません。
+          入力は自分専用に自動保存されます。「下書きを保存」で会社の記事として記録します。掲載操作まではサイトに反映されません。
         </p>
         <p role="status" className="mt-2 text-xs">
           作業コピー：{draft.status}
@@ -292,7 +305,7 @@ export function ArticleEditor({ initial, publicSite }: { initial: ArticleWorkspa
             />
           </label>
           <label>
-            URL名（作成後は固定）
+            {initial.scope.entryId ? "URL名（作成後は固定）" : "URL名（自動入力・変更できます）"}
             <input
               className="mt-2 block w-full rounded border p-3"
               name="slug"

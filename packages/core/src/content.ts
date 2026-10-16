@@ -1,29 +1,11 @@
-import {
-  companies,
-  contentEntries,
-  contentRevisions,
-  contracts,
-  type DbOrTx,
-  deliveries,
-  deployments,
-  users,
-} from "@siteoffer/db";
+import { contentEntries, contentRevisions, contracts, type DbOrTx, deliveries, deployments } from "@siteoffer/db";
 import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { recordEvent } from "./common/events.ts";
 import type { Actor, Clock } from "./common/index.ts";
 
-export class ContentError extends Error {}
-function operator(actor: Actor | null): asserts actor is Extract<Actor, { kind: "ops" }> {
-  if (actor?.kind !== "ops") throw new ContentError("運営権限が必要です");
-}
-async function activeOperator(db: DbOrTx, actor: Extract<Actor, { kind: "ops" }>) {
-  const [u] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")))
-    .for("share");
-  if (!u) throw new ContentError("有効な運営権限が必要です");
-}
+import { authorizeContentEditor, ContentError } from "./content-auth.ts";
+
+export { ContentError } from "./content-auth.ts";
 export type ArticleInput = {
   companyId: string;
   entryId?: string;
@@ -34,20 +16,13 @@ export type ArticleInput = {
   category: string;
 };
 export async function saveArticle(db: DbOrTx, clock: Clock, actor: Actor | null, input: ArticleInput) {
-  operator(actor);
   if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(input.slug))
     throw new ContentError("URL名は半角英数字とハイフンで80文字以内です");
   if (!input.title.trim() || input.title.length > 160 || !input.body.trim() || input.body.length > 30000)
     throw new ContentError("見出しは1〜160文字、本文は1〜30000文字で入力してください");
   if (!["news", "blog"].includes(input.category)) throw new ContentError("記事の種類が不正です");
   return db.transaction(async (tx) => {
-    const [company] = await tx
-      .select({ id: companies.id })
-      .from(companies)
-      .where(eq(companies.id, input.companyId))
-      .for("update");
-    if (!company) throw new ContentError("企業がありません");
-    await activeOperator(tx, actor);
+    const editor = await authorizeContentEditor(tx, actor, input.companyId);
     let entry: typeof contentEntries.$inferSelect;
     let revision = 1;
     if (input.entryId) {
@@ -83,11 +58,11 @@ export async function saveArticle(db: DbOrTx, clock: Clock, actor: Actor | null,
       title: input.title.trim(),
       body: input.body.trim(),
       category: input.category,
-      createdBy: actor.userId,
+      createdBy: editor.userId,
       createdAt: clock.now(),
     });
     await recordEvent(tx, clock, {
-      actor,
+      actor: editor,
       action: "content.save_draft",
       targetType: "content",
       targetId: entry.id,
@@ -109,7 +84,6 @@ export async function publishArticle(
     expectedPublicationRevision: number;
   },
 ) {
-  operator(actor);
   if (
     !Number.isSafeInteger(input.expectedRevision) ||
     input.expectedRevision < 1 ||
@@ -119,13 +93,7 @@ export async function publishArticle(
   )
     throw new ContentError("記事・掲載設定の版を確認してください");
   return db.transaction(async (tx) => {
-    const [company] = await tx
-      .select({ id: companies.id })
-      .from(companies)
-      .where(eq(companies.id, input.companyId))
-      .for("update");
-    if (!company) throw new ContentError("企業がありません");
-    await activeOperator(tx, actor);
+    const editor = await authorizeContentEditor(tx, actor, input.companyId);
     const [entry] = await tx
       .select()
       .from(contentEntries)
@@ -155,7 +123,7 @@ export async function publishArticle(
       .where(eq(contentEntries.id, entry.id))
       .returning();
     await recordEvent(tx, clock, {
-      actor,
+      actor: editor,
       action: input.revision === null ? "content.unpublish" : "content.publish",
       targetType: "content",
       targetId: entry.id,

@@ -116,7 +116,9 @@ export default async function SettingsPage({
                 <TableCell className="font-medium">{u.displayName}</TableCell>
                 <TableCell className="break-all">{u.email}</TableCell>
                 <TableCell>
-                  <Badge variant={u.role === "ops" ? "info" : "outline"}>{u.role === "ops" ? "運営" : "営業"}</Badge>
+                  <Badge variant={u.role === "ops" ? "info" : "outline"}>
+                    {u.role === "ops" ? "運営" : u.role === "customer" ? "顧客" : "営業"}
+                  </Badge>
                 </TableCell>
                 <TableCell>
                   <Badge variant={u.status === "suspended" ? "destructive" : "success"}>
@@ -126,7 +128,7 @@ export default async function SettingsPage({
                 <TableCell className="tabular-nums">{u.activeAssignments}</TableCell>
                 <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(u.createdAt)}</TableCell>
                 <TableCell className="min-w-64">
-                  {u.role === "sales" ? (
+                  {u.role !== "ops" ? (
                     <form
                       action={u.status === "active" ? suspendUserAction : reactivateUserAction}
                       className={inlineFormClass}
