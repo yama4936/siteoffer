@@ -7,6 +7,7 @@ export type SalesActionState =
       notices?: string[];
       /** 担当確保に成功したときの担当ID */
       assignmentId?: string;
+      activityId?: string;
       /** 共有リンクを発行したときのURL（トークンを含む）。この戻り値でだけ渡し、再表示はできない */
       shareUrl?: string;
       /** 共有リンクの有効期限（ISO文字列） */

@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { EXISTING_DOMAIN_REVIEW_NOTICE, NEW_DOMAIN_AVAILABILITY_NOTICE } from "@siteoffer/core";
 import { ChevronRight, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ActivityForm, ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
+import { ActivityForm } from "@/components/sales/activity-form";
+import { ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
 import { BackLink, SectionCard } from "@/components/sales/section-card";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
 import { AssignmentStatusBadge, ContractStatusBadge } from "@/components/sales/status-badge";
@@ -12,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { DescriptionList, EmptyState, Muted, PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
+import { emptyActivity } from "@/lib/sales/activity-draft-types";
+import { loadActivityDraft } from "@/lib/sales/activity-drafts";
 import {
   activityKindLabel,
   DOMAIN_INTENTS,
@@ -27,7 +31,6 @@ import { getMyAssignmentDetail } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
 import {
   issueShareAction,
-  recordActivityAction,
   releaseAction,
   reportDealAction,
   revokeShareAction,
@@ -46,6 +49,7 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
   const a = d.assignment;
   const pref = d.domainPreference;
   const firstSite = d.sites[0];
+  const draft = a.active ? await loadActivityDraft(getDb(), user.actor, a.id) : null;
 
   return (
     <>
@@ -62,6 +66,16 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
           </Link>
         }
       />
+      <nav className="mb-5 flex flex-wrap gap-2" aria-label="案件内の操作">
+        {a.active && (
+          <a href="#activity-entry" className={buttonVariants({ size: "sm" })}>
+            活動・次回予定を記録
+          </a>
+        )}
+        <a href="#activity-history" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          活動履歴を見る
+        </a>
+      </nav>
       <SectionCard title="担当の概要">
         <DescriptionList>
           <dt>担当の状態</dt>
@@ -139,12 +153,22 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
       </SectionCard>
 
       {a.active && (
-        <SectionCard title="活動を記録する">
-          <ActivityForm action={recordActivityAction} assignmentId={a.id} />
+        <SectionCard id="activity-entry" title="活動を記録する">
+          {draft && (
+            <ActivityForm
+              key={a.id}
+              assignmentId={a.id}
+              initial={draft}
+              defaults={emptyActivity(new Date())}
+              requestKey={randomUUID()}
+              nextActionLabel={formatDateTime(a.nextActionAt)}
+              previousNote={d.activities.find((x) => !!x.note)?.note ?? null}
+            />
+          )}
         </SectionCard>
       )}
 
-      <SectionCard title="活動履歴">
+      <SectionCard id="activity-history" title="活動履歴">
         {d.activities.length === 0 ? (
           <EmptyState>活動の記録はまだありません。</EmptyState>
         ) : (
@@ -161,6 +185,9 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
                   {x.consultOps && <Badge variant="warning">運営に相談</Badge>}
                 </div>
                 {x.note && <p className="whitespace-pre-wrap leading-relaxed">{x.note}</p>}
+                {x.nextActionMode === "clear" && (
+                  <div className="text-muted-foreground text-xs">次回対応日を解除しました</div>
+                )}
                 {x.nextActionAt && (
                   <div className="text-muted-foreground text-xs">次回対応日：{formatDateTime(x.nextActionAt)}</div>
                 )}

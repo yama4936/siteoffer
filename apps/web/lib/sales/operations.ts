@@ -54,7 +54,8 @@ export function parseJstDateTime(raw: string): Date | undefined | null {
   else if (DATE_ONLY.test(raw)) iso = `${raw}T00:00:00+09:00`;
   else return null;
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, raw.length) === raw ? d : null;
 }
 
 const fail = (message: string): SalesActionState => ({ status: "error", message });
@@ -127,6 +128,8 @@ export async function recordSalesActivity(deps: SalesDeps, fd: FormData): Promis
   if (!KIND_VALUES.has(kind)) return fail("活動の種類を選んでください。");
   const occurredAt = parseJstDateTime(str(fd, "occurredAt"));
   const nextActionAt = parseJstDateTime(str(fd, "nextActionAt"));
+  const nextActionMode = str(fd, "nextActionMode") || (nextActionAt ? "replace" : "keep");
+  if (!["keep", "replace", "clear"].includes(nextActionMode)) return fail("次回予定の変更方法を選んでください。");
   if (occurredAt === null) return fail("活動日時の形式が正しくありません。");
   if (nextActionAt === null) return fail("次回対応日の形式が正しくありません。");
 
@@ -152,11 +155,12 @@ export async function recordSalesActivity(deps: SalesDeps, fd: FormData): Promis
     ...(occurredAt ? { occurredAt } : {}),
     ...(note ? { note } : {}),
     ...(nextActionAt ? { nextActionAt } : {}),
+    nextActionMode: nextActionMode as "keep" | "replace" | "clear",
     consultOps: fd.get("consultOps") === "on",
     ...(decline ? { decline } : {}),
   });
   if (!r.ok) return errorState(r);
-  return { status: "ok", message: "活動を記録しました。" };
+  return { status: "ok", message: "活動を記録しました。", activityId: r.value.activity.id };
 }
 
 // ---------- ドメイン希望 ----------

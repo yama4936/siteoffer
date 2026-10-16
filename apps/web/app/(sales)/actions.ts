@@ -7,14 +7,14 @@ import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
 import type { SalesActionState } from "@/lib/sales/action-state";
+import type { ActivityCommitResult, ActivityDraftResult } from "@/lib/sales/activity-draft-types";
 import {
-  claimCompany,
-  recordSalesActivity,
-  releaseMyAssignment,
-  reportDeal,
-  type SalesDeps,
-  saveDomainWish,
-} from "@/lib/sales/operations";
+  ActivityDraftConflict,
+  ActivityDraftError,
+  commitActivityDraft,
+  saveActivityDraft,
+} from "@/lib/sales/activity-drafts";
+import { claimCompany, releaseMyAssignment, reportDeal, type SalesDeps, saveDomainWish } from "@/lib/sales/operations";
 import { issueProposalShare, revokeProposalShare } from "@/lib/sales/share";
 import { getCurrentActor } from "@/lib/session";
 
@@ -34,10 +34,39 @@ export async function releaseAction(_prev: SalesActionState, formData: FormData)
   return r;
 }
 
-export async function recordActivityAction(_prev: SalesActionState, formData: FormData): Promise<SalesActionState> {
-  const r = await recordSalesActivity(await deps(), formData);
-  if (r?.status === "ok") refresh();
-  return r;
+function activityDraftError(e: unknown): Exclude<ActivityDraftResult, { status: "ok" }> {
+  if (e instanceof ActivityDraftConflict) return { status: "conflict", snapshot: e.snapshot };
+  return {
+    status: "error",
+    message:
+      e instanceof ActivityDraftError
+        ? e.message
+        : "保存できませんでした。入力を残しています。接続を確認して再試行してください",
+  };
+}
+export async function saveActivityDraftAction(
+  assignmentId: string,
+  revision: number,
+  values: unknown,
+): Promise<ActivityDraftResult> {
+  try {
+    const d = await deps();
+    return { status: "ok", snapshot: await saveActivityDraft(d.db, d.clock, d.actor, assignmentId, revision, values) };
+  } catch (e) {
+    return activityDraftError(e);
+  }
+}
+export async function commitActivityDraftAction(
+  assignmentId: string,
+  input: { revision: number; values: unknown; requestKey: string; confirmEnd: boolean },
+): Promise<ActivityCommitResult> {
+  try {
+    const d = await deps();
+    const result = await commitActivityDraft(d.db, d.clock, d.actor, assignmentId, input);
+    return { status: "ok", ...result };
+  } catch (e) {
+    return activityDraftError(e);
+  }
 }
 
 export async function saveDomainWishAction(_prev: SalesActionState, formData: FormData): Promise<SalesActionState> {

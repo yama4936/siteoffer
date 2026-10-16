@@ -1,3 +1,4 @@
+export * from "./activity-draft.ts";
 export * from "./assignment.ts";
 export * from "./companies.ts";
 export * from "./content.ts";

@@ -579,6 +579,7 @@ export interface AssignmentDetail {
     note: string | null;
     nextActionAt: Date | null;
     consultOps: boolean;
+    nextActionMode: string;
   }[];
   domainPreference: {
     currentUrl: string | null;
@@ -688,6 +689,7 @@ export async function getMyAssignmentDetail(
       note: x.note,
       nextActionAt: x.nextActionAt,
       consultOps: x.consultOps,
+      nextActionMode: x.nextActionMode,
     })),
     domainPreference: pref
       ? {

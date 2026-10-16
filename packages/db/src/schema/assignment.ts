@@ -83,6 +83,7 @@ export const salesActivities = pgTable(
     note: text("note"),
     nextActionAt: ts("next_action_at"),
     consultOps: boolean("consult_ops").notNull().default(false),
+    nextActionMode: text("next_action_mode").notNull().default("keep"),
     createdAt: createdAt(),
   },
   (t) => [index("sales_activities_assignment").on(t.assignmentId)],
