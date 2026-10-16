@@ -15,7 +15,7 @@ import {
   saveActivityDraft,
 } from "@/lib/sales/activity-drafts";
 import { claimCompany, releaseMyAssignment, reportDeal, type SalesDeps, saveDomainWish } from "@/lib/sales/operations";
-import { checkProposalShare, issueProposalShare, revokeProposalShare } from "@/lib/sales/share";
+import { checkProposalShare, issueProposalShare, recoverProposalShare, revokeProposalShare } from "@/lib/sales/share";
 import { getCurrentActor } from "@/lib/session";
 
 async function deps(): Promise<SalesDeps> {
@@ -104,5 +104,13 @@ export async function checkShareAction(proposalVersionId: string, linkId: string
       message: "リンクの状態を確認できません。接続を確認して、もう一度コピーしてください。",
       unavailable: false,
     };
+  }
+}
+
+export async function recoverShareAction(versionId: string, linkId: string): Promise<SalesActionState> {
+  try {
+    return await recoverProposalShare(await deps(), versionId, linkId);
+  } catch {
+    return { status: "error", message: "リンクを確認できません。接続を確認して再試行してください。" };
   }
 }

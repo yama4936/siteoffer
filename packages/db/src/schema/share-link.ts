@@ -8,6 +8,10 @@ export const shareLinkPurpose = pgEnum("share_link_purpose", ["proposal", "deliv
 /** 期限付き・取り消し可能な共有リンク（11章）。トークンはハッシュだけ保存する */
 export const shareLinks = pgTable("share_links", {
   id: id(),
+  /** 再送の照合用。受付キーもハッシュだけを保存する。既存リンクはnull。 */
+  receiptKey: text("receipt_key").unique(),
+  requestHash: text("request_hash"),
+  recoveryKeyId: text("recovery_key_id"),
   tokenHash: text("token_hash").notNull().unique(),
   purpose: shareLinkPurpose("purpose").notNull(),
   companyId: uuid("company_id")

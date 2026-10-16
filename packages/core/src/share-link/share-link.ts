@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   ACTIVE_ASSIGNMENT_STATUSES,
   assignments,
@@ -9,6 +10,7 @@ import {
   proposals,
   proposalVersions,
   shareLinks,
+  users,
 } from "@siteoffer/db";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
@@ -17,7 +19,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
 import { authorizeUser } from "../permissions/policy.ts";
-import { generateShareToken, hashShareToken, isShareTokenFormat } from "./token.ts";
+import { generateShareToken, hashShareToken, isShareTokenFormat, type ShareTokenRecovery } from "./token.ts";
 
 export type SharePurpose = (typeof shareLinks.$inferSelect)["purpose"];
 export type ShareLinkRow = typeof shareLinks.$inferSelect;
@@ -32,6 +34,7 @@ export interface ShareLinkInfo {
   revokedAt: Date | null;
   createdBy: string;
   createdAt: Date;
+  recoverable: boolean;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -46,6 +49,7 @@ function toInfo(row: ShareLinkRow): ShareLinkInfo {
     revokedAt: row.revokedAt,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
+    recoverable: !!row.recoveryKeyId,
   };
 }
 
@@ -106,6 +110,8 @@ export interface IssueShareLinkInput {
   targetId: string;
   /** 有効期間（時間）。省略時は運営設定 shareLink.defaultTtlHours。営業は既定値より長くできない */
   ttlHours?: number;
+  /** 同じ利用者・受付キーの再試行は同じリンクを返す。復旧用のサーバー鍵が必要。 */
+  requestKey?: string;
 }
 
 export type IssueShareLinkError =
@@ -114,7 +120,11 @@ export type IssueShareLinkError =
   | "target_not_approved"
   | "target_no_artifact"
   | "company_suppressed"
-  | "invalid_ttl";
+  | "invalid_ttl"
+  | "invalid_request"
+  | "request_conflict"
+  | "recovery_unavailable"
+  | "link_unavailable";
 
 export interface IssuedShareLink {
   link: ShareLinkInfo;
@@ -126,15 +136,30 @@ export interface IssuedShareLink {
  * 共有リンクの発行（11章）。
  * - 営業：自分が担当中の企業の、承認済み（approved）の提案版だけ。納品のリンクは発行できない。
  * - 運営：提案（承認済みの版）・納品の版。
- * トークンは乱数で作り、DBにはハッシュだけを保存する。平文は戻り値でだけ返す。
+ * トークンは乱数、またはサーバー鍵とランダムなリンクIDから作り、DBにはハッシュだけを保存する。
+ * 復旧用の鍵はブラウザから受け取らない。平文は発行・本人の再表示の戻り値でだけ返す。
  */
 export async function issueShareLink(
   db: DbOrTx,
   clock: Clock,
   actor: Actor | null,
   input: IssueShareLinkInput,
+  recovery?: ShareTokenRecovery,
 ): Promise<Result<IssuedShareLink, IssueShareLinkError>> {
   return db.transaction(async (tx): Promise<Result<IssuedShareLink, IssueShareLinkError>> => {
+    if (!input || !["proposal", "delivery"].includes(input.purpose)) return err("invalid_request");
+    if (input.ttlHours !== undefined && (!Number.isFinite(input.ttlHours) || input.ttlHours <= 0))
+      return err("invalid_ttl");
+    if (input.requestKey !== undefined && !UUID_PATTERN.test(input.requestKey)) return err("invalid_request");
+    if (!(await currentUser(tx, actor, true))) return err("forbidden");
+    const actorId = (actor as Extract<Actor, { kind: "sales" | "ops" }>).userId;
+    const receiptKey = input.requestKey ? digest(JSON.stringify([actorId, input.requestKey])) : null;
+    const requestHash = digest(JSON.stringify([input.purpose, input.targetId, input.ttlHours ?? null]));
+    const [previous] = receiptKey
+      ? await tx.select().from(shareLinks).where(eq(shareLinks.receiptKey, receiptKey))
+      : [];
+    if (previous && previous.requestHash !== requestHash) return err("request_conflict");
+    if (input.requestKey && !recovery) return err("recovery_unavailable");
     const target = await loadTarget(tx, input.purpose, input.targetId);
     if (!target) return err("target_not_found");
 
@@ -162,6 +187,7 @@ export async function issueShareLink(
       }
     }
 
+    if (previous) return restoreToken(previous, clock, recovery);
     const defaultTtl = await getSetting(tx, "shareLink.defaultTtlHours");
     const ttlHours = input.ttlHours ?? defaultTtl;
     if (!Number.isFinite(ttlHours) || ttlHours <= 0) return err("invalid_ttl", "有効期間は正の時間で指定してください");
@@ -169,16 +195,23 @@ export async function issueShareLink(
       return err("invalid_ttl", `営業が指定できる有効期間は${defaultTtl}時間までです`);
     }
 
-    const token = generateShareToken();
+    const id = randomUUID();
+    const token = recovery ? recovery.derive(id, user.userId, input.purpose, input.targetId) : generateShareToken();
     const now = clock.now();
+    const expiresAt = new Date(now.getTime() + ttlHours * HOUR);
+    if (!Number.isFinite(expiresAt.getTime())) return err("invalid_ttl");
     const [row] = await tx
       .insert(shareLinks)
       .values({
+        id,
+        receiptKey,
+        requestHash: receiptKey ? requestHash : null,
+        recoveryKeyId: recovery?.keyId ?? null,
         tokenHash: hashShareToken(token),
         purpose: input.purpose,
         companyId: target.companyId,
         targetId: input.targetId,
-        expiresAt: new Date(now.getTime() + ttlHours * HOUR),
+        expiresAt,
         createdBy: user.userId,
         createdAt: now,
       })
@@ -194,6 +227,59 @@ export async function issueShareLink(
   });
 }
 
+const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+async function currentUser(db: DbOrTx, actor: Actor | null, lock = false) {
+  if (!actor || (actor.kind !== "sales" && actor.kind !== "ops") || !UUID_PATTERN.test(actor.userId)) return false;
+  const q = db.select({ role: users.role, status: users.status }).from(users).where(eq(users.id, actor.userId));
+  const [u] = await (lock ? q.for("update") : q);
+  return u?.status === "active" && u.role === actor.kind;
+}
+function restoreToken(
+  row: ShareLinkRow,
+  clock: Clock,
+  recovery?: ShareTokenRecovery,
+): Result<IssuedShareLink, IssueShareLinkError> {
+  if (row.revokedAt || row.expiresAt.getTime() <= clock.now().getTime()) return err("link_unavailable");
+  if (!recovery || row.recoveryKeyId !== recovery.keyId) return err("recovery_unavailable");
+  const token = recovery.derive(row.id, row.createdBy, row.purpose, row.targetId);
+  if (hashShareToken(token) !== row.tokenHash) return err("recovery_unavailable");
+  return ok({ link: toInfo(row), token });
+}
+/** 発行者のみ再表示できる。期限・承認・現在の担当を再確認し、発行や期限延長は行わない。 */
+export async function recoverShareLink(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor | null,
+  linkId: string,
+  recovery?: ShareTokenRecovery,
+): Promise<Result<IssuedShareLink, IssueShareLinkError>> {
+  return db.transaction(async (tx) => {
+    if (!UUID_PATTERN.test(linkId) || !(await currentUser(tx, actor))) return err("forbidden");
+    const [row] = await tx.select().from(shareLinks).where(eq(shareLinks.id, linkId)).for("update");
+    if (!row || row.createdBy !== (actor as Extract<Actor, { kind: "sales" | "ops" }>).userId) return err("forbidden");
+    const target = await loadTarget(tx, row.purpose, row.targetId);
+    if (!target || target.companyId !== row.companyId) return err("target_not_found");
+    const auth = authorizeUser(actor, "create", {
+      type: "shareLink",
+      purpose: row.purpose,
+      companyId: row.companyId,
+      assignedUserId: await activeAssignee(tx, row.companyId),
+      createdBy: row.createdBy,
+    });
+    if (!auth.ok) return err("forbidden");
+    if (!target.approved) return err("target_not_approved");
+    if (!target.artifactDir) return err("target_no_artifact");
+    if (row.purpose === "proposal") {
+      const [c] = await tx
+        .select({ suppression: companies.suppression })
+        .from(companies)
+        .where(eq(companies.id, row.companyId));
+      if (c?.suppression !== "none") return err("company_suppressed");
+    }
+    return restoreToken(row, clock, recovery);
+  });
+}
+
 export type RevokeShareLinkError = "forbidden" | "not_found" | "already_revoked";
 
 /** 共有リンクの取り消し。発行者と運営だけが行える。取り消した時点から閲覧できなくなる（AC-14） */
@@ -204,6 +290,7 @@ export async function revokeShareLink(
   linkId: string,
 ): Promise<Result<ShareLinkInfo, RevokeShareLinkError>> {
   return db.transaction(async (tx): Promise<Result<ShareLinkInfo, RevokeShareLinkError>> => {
+    if (!(await currentUser(tx, actor))) return err("forbidden");
     if (!UUID_PATTERN.test(linkId)) return err("not_found");
     const [link] = await tx.select().from(shareLinks).where(eq(shareLinks.id, linkId)).for("update");
     if (!link) return err("not_found");
@@ -245,6 +332,7 @@ export async function listShareLinks(
   actor: Actor | null,
   input: { purpose: SharePurpose; targetId: string },
 ): Promise<Result<ShareLinkInfo[], "forbidden" | "target_not_found">> {
+  if (!(await currentUser(db, actor))) return err("forbidden");
   const target = await loadTarget(db, input.purpose, input.targetId);
   if (!target) return err("target_not_found");
   const auth = authorizeUser(actor, "read", {

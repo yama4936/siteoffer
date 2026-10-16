@@ -5,6 +5,7 @@ export type ShareCheckResult =
 export type ShareCheckAction = (proposalVersionId: string, linkId: string) => Promise<ShareCheckResult>;
 export interface ShareHistoryItem {
   id: string;
+  recoverable?: boolean;
   createdAt: string;
   expiresAt: string;
   revokedAt: string | null;

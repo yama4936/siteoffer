@@ -21,6 +21,8 @@ import {
 } from "@/lib/sales/share-presentation";
 import { ActionMessage } from "./forms";
 
+type RecoverShareAction = (versionId: string, linkId: string) => Promise<SalesActionState>;
+
 const LABEL = { active: "有効", expired: "期限切れ", revoked: "取り消し済み" } as const;
 
 export function ShareWorkspace({
@@ -28,6 +30,7 @@ export function ShareWorkspace({
   issueAction,
   revokeAction,
   checkAction,
+  recoverAction,
   maxHours,
   historyAvailable,
   serverNow,
@@ -37,6 +40,7 @@ export function ShareWorkspace({
   issueAction: SalesAction;
   revokeAction: SalesAction;
   checkAction: ShareCheckAction;
+  recoverAction: RecoverShareAction;
   maxHours: number;
   historyAvailable: boolean;
   serverNow: string;
@@ -94,6 +98,22 @@ export function ShareWorkspace({
                   onRevoked={() => setRevoked((ids) => [...ids, l.id])}
                 />
               )}
+              {status === "active" && (
+                <div className="w-full">
+                  {l.recoverable ? (
+                    <RecoveredShare
+                      link={l}
+                      proposalVersionId={proposalVersionId}
+                      recoverAction={recoverAction}
+                      checkAction={checkAction}
+                    />
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      以前の方式で発行されたためURLを再表示できません。控えがなければ取り消して新しく発行してください。
+                    </p>
+                  )}
+                </div>
+              )}
             </li>
           );
         })}
@@ -145,7 +165,7 @@ export function ShareWorkspace({
           </div>
         )}
         <p className="text-muted-foreground text-xs">
-          日時は日本時間です。URLは発行直後にだけ表示します。控え忘れた場合は不要なリンクを取り消して、新しく発行してください。
+          日時は日本時間です。「リンクを表示」で同じURLを取り出せます。再表示しても閲覧期限は延びません。
         </p>
       </div>
     </section>
@@ -170,17 +190,24 @@ function IssueShareForm({
   onNew: () => void;
 }) {
   const [uncertain, setUncertain] = useState(false);
+  const attempt = useRef<{ key: string; ttl: string } | null>(null);
   const [ttl, setTtl] = useState("");
   const [state, formAction, pending] = useActionState(
     async (_prev: SalesActionState, fd: FormData): Promise<SalesActionState> => {
       try {
-        return await action(undefined, fd);
+        if (!attempt.current || (!uncertain && attempt.current.ttl !== ttl))
+          attempt.current = { key: crypto.randomUUID(), ttl };
+        fd.set("requestKey", attempt.current.key);
+        fd.set("ttlHours", attempt.current.ttl);
+        const result = await action(undefined, fd);
+        if (result?.status === "ok") setUncertain(false);
+        return result;
       } catch {
         // 応答を失った場合は成功・失敗を断定せず、再送によるリンクの増殖を防ぐ。
         setUncertain(true);
         return {
           status: "error",
-          message: "発行結果を受け取れませんでした。発行済みの可能性があるため、履歴を読み直して確認してください。",
+          message: "発行結果を受け取れませんでした。同じ発行を再確認できます。リンクや閲覧期限は増やしません。",
         };
       }
     },
@@ -228,7 +255,7 @@ function IssueShareForm({
             ))}
           </NativeSelect>
         </Field>
-        <Button type="submit" disabled={pending || uncertain || !options.length}>
+        <Button type="submit" disabled={pending || !options.length}>
           <Link2 />
           {pending ? "発行しています…" : "共有リンクを発行する"}
         </Button>
@@ -240,9 +267,14 @@ function IssueShareForm({
       )}
       <ActionMessage state={state} />
       {uncertain && (
-        <Button variant="outline" className="w-fit" onClick={() => window.location.reload()}>
-          ページを読み直して発行履歴を確認
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={pending}>
+            {pending ? "確認中…" : "同じ発行を再確認"}
+          </Button>
+          <Button type="button" variant="outline" disabled={pending} onClick={() => window.location.reload()}>
+            発行履歴を読み直す
+          </Button>
+        </div>
       )}
     </form>
   );
@@ -376,9 +408,60 @@ function IssuedShare({
       <p role="status" aria-live="polite" className="text-sm">
         {busy ? "共有できる状態か確認しています…" : feedback}
       </p>
-      <p className="text-muted-foreground text-xs">
-        この画面を閉じるとURLは再表示できません。必要な場所に控えてください。
-      </p>
+      <p className="text-muted-foreground text-xs">画面を閉じても、有効期間中は発行履歴から同じURLを表示できます。</p>
+    </div>
+  );
+}
+
+function RecoveredShare({
+  link,
+  proposalVersionId,
+  recoverAction,
+  checkAction,
+}: {
+  link: ShareHistoryItem;
+  proposalVersionId: string;
+  recoverAction: RecoverShareAction;
+  checkAction: ShareCheckAction;
+}) {
+  const [state, setState] = useState<SalesActionState>();
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  async function recover() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      setState(await recoverAction(proposalVersionId, link.id));
+    } catch {
+      setState({ status: "error", message: "確認できませんでした。接続を確認して再試行してください。" });
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+  if (state?.status === "ok" && state.shareUrl && state.shareExpiresAt)
+    return (
+      <div className="space-y-2">
+        <IssuedShare
+          url={state.shareUrl}
+          expiresAt={state.shareExpiresAt}
+          linkId={link.id}
+          proposalVersionId={proposalVersionId}
+          status="active"
+          checkAction={checkAction}
+        />
+        <Button variant="ghost" size="sm" onClick={() => setState(undefined)}>
+          リンクを閉じる
+        </Button>
+      </div>
+    );
+  return (
+    <div className="space-y-2">
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => void recover()}>
+        {busy ? "確認中…" : "リンクを表示"}
+      </Button>
+      <ActionMessage state={state} />
     </div>
   );
 }

@@ -1,5 +1,6 @@
+import { randomBytes, randomUUID } from "node:crypto";
 // 営業の「提案を共有」の結合テスト（PGlite）。権限・承認状態・営業抑止・取り消し（11章・AC-14・AC-17）
-import { type Actor, fixedClock, hashShareToken, verifyShareLink } from "@siteoffer/core";
+import { type Actor, createShareTokenRecovery, fixedClock, hashShareToken, verifyShareLink } from "@siteoffer/core";
 import { seedAssignment, seedCompany, seedProposalVersion, seedUser } from "@siteoffer/core/share-link/testing";
 import { appSettings, assignments, companies, type Db, proposalVersions, shareLinks, users } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
@@ -9,6 +10,7 @@ import {
   checkProposalShare,
   issueProposalShare,
   listProposalShares,
+  recoverProposalShare,
   revokeProposalShare,
   type ShareDeps,
 } from "./share.ts";
@@ -26,11 +28,13 @@ const ORIGIN = "http://preview.example.test:3200";
 
 function form(values: Record<string, string>): FormData {
   const fd = new FormData();
+  fd.set("requestKey", randomUUID());
   for (const [k, v] of Object.entries(values)) fd.set(k, v);
   return fd;
 }
 
-const deps = (actor: Actor | null): ShareDeps => ({ db, clock, actor });
+const recovery = createShareTokenRecovery(randomBytes(32).toString("base64url"));
+const deps = (actor: Actor | null): ShareDeps => ({ db, clock, actor, recovery });
 
 beforeEach(async () => {
   ({ db, close } = await createTestDb());
@@ -218,5 +222,27 @@ describe("コピー前の現在状態確認", () => {
     ).toBe("error");
     const result = await issueProposalShare(deps(salesA), form({ proposalVersionId: versionA }), ORIGIN);
     expect(result?.shareExpiresAt).toBe("2026-10-14T12:00:00.000Z");
+  });
+});
+
+describe("共有リンクの復旧", () => {
+  it("受付の再送と履歴からの再表示で同じURL・期限を取り戻す", async () => {
+    const fd = form({ proposalVersionId: versionA, ttlHours: "24" });
+    const first = await issueProposalShare(deps(salesA), fd, ORIGIN);
+    const second = await issueProposalShare(deps(salesA), fd, ORIGIN);
+    expect(second).toEqual(first);
+    const restored = await recoverProposalShare(deps(salesA), versionA, first!.shareLinkId!, ORIGIN);
+    expect(restored).toMatchObject({ status: "ok", shareUrl: first!.shareUrl, shareExpiresAt: first!.shareExpiresAt });
+    expect((await recoverProposalShare(deps(salesA), versionB, first!.shareLinkId!, ORIGIN))?.status).toBe("error");
+    expect((await recoverProposalShare(deps(salesB), versionA, first!.shareLinkId!, ORIGIN))?.status).toBe("error");
+    await revokeProposalShare(deps(salesA), form({ linkId: first!.shareLinkId! }));
+    expect((await recoverProposalShare(deps(salesA), versionA, first!.shareLinkId!, ORIGIN))?.status).toBe("error");
+    expect(await db.select().from(shareLinks)).toHaveLength(1);
+  });
+  it("受付情報の欠落を明示し、勝手に再発行しない", async () => {
+    const fd = form({ proposalVersionId: versionA });
+    fd.delete("requestKey");
+    expect((await issueProposalShare(deps(salesA), fd, ORIGIN))?.message).toContain("受付情報");
+    expect(await db.select().from(shareLinks)).toHaveLength(0);
   });
 });

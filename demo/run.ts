@@ -17,6 +17,8 @@ import net from "node:net";
 import path from "node:path";
 import { DEMO_DATABASE_URL, DEMO_PATHS, DEMO_PORTS, REPO_ROOT } from "./paths.ts";
 
+import { demoShareKey } from "./share-key.ts";
+
 const realDiscovery = process.argv.includes("--real-discovery");
 if (realDiscovery && existsSync(path.join(REPO_ROOT, ".env"))) process.loadEnvFile(path.join(REPO_ROOT, ".env"));
 if (realDiscovery && !process.env.NTA_APPLICATION_ID?.trim())
@@ -41,6 +43,7 @@ function log(msg: string) {
 function baseEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const k of [
+    "SITEOFFER_SHARE_TOKEN_KEY",
     "NTA_APPLICATION_ID",
     "PSI_API_KEY",
     "OPENAI_API_KEY",
@@ -185,6 +188,7 @@ async function main() {
   }
 
   const env = baseEnv();
+  const shareTokenKey = await demoShareKey(DEMO_PATHS.data);
   const node = process.execPath;
 
   start("db", node, ["--import", "tsx", "demo/db-server.ts"], env);
@@ -236,6 +240,7 @@ async function main() {
       PREVIEW_ORIGIN: previewOrigin,
       PREVIEW_BASE_URL: previewOrigin,
       NEXT_TELEMETRY_DISABLED: "1",
+      SITEOFFER_SHARE_TOKEN_KEY: shareTokenKey,
     },
   );
 
