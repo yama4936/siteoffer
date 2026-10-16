@@ -323,6 +323,11 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       ]);
       const args = generate.mock.calls.find(([r]) => r.purpose === "delivery_site")?.[0];
       expect(args).toBeDefined();
+      expect(args!.input.context.deliveryContract).toMatchObject({
+        scope: { description: "会社案内とお問い合わせの2ページ" },
+      });
+      expect(JSON.stringify(args!.input.context.deliveryContract)).not.toContain("private-contract.pdf");
+      expect(JSON.stringify(args!.input.context.deliveryContract)).not.toContain("999999");
       expect(
         args!.input.externalData.some((x) => x.id.startsWith("customer-revision-") && x.content.includes(comment)),
       ).toBe(true);
@@ -469,6 +474,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
 
 /** 完了した契約を直接作る（契約確認の流れは packages/core のテストで確認済み） */
 async function completedContract(db: Db, companyId: string, proposalVersionId: string): Promise<string> {
+  await db.update(proposalVersions).set({ status: "approved" }).where(eq(proposalVersions.id, proposalVersionId));
   const [sales] = await db
     .insert(users)
     .values({ email: "sales-intake@example.test", passwordHash: "x", displayName: "営業（テスト）", role: "sales" })
@@ -487,6 +493,12 @@ async function completedContract(db: Db, companyId: string, proposalVersionId: s
       proposalVersionId,
       reportedAt: new Date("2026-10-02"),
       completedAt: new Date("2026-10-03"),
+      snapshot: {
+        version: 1,
+        terms: { name: "契約時の制作", scope: { description: "会社案内とお問い合わせの2ページ" } },
+        reward: { amount: 999999 },
+        documentRef: "private-contract.pdf",
+      },
     })
     .returning();
   return c!.id;
@@ -530,7 +542,7 @@ it("受付上限を超える失敗・実行中案件があっても後続の待�
     }
     // 診断なしで停止するが、43番目の案件をこの受付で確実に処理する。
     expect(await intakeDeliveries(env.deps, createIntakeState())).toEqual([
-      { deliveryId: waiting, status: "failed", reason: "生成の入力にする診断がない" },
+      { deliveryId: waiting, status: "failed", reason: expect.stringContaining("評価済み診断がありません") },
     ]);
     expect(await intakeDeliveries(env.deps, createIntakeState())).toEqual([]);
   } finally {

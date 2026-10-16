@@ -10,6 +10,7 @@ import { notFound, redirect } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
 import { CustomerReviewLinks } from "@/components/ops/customer-review-links";
 import { DeliveryBuildRetry } from "@/components/ops/delivery-build-retry";
+import { DeliveryPreparation } from "@/components/ops/delivery-preparation";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { SubmitButton } from "@/components/ops/submit-button";
 import { Flash, Forbidden, ReturnTo } from "@/components/ops/ui";
@@ -29,6 +30,7 @@ import { DescriptionList, EmptyState, PageHeader, Section } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { listContractsAwaitingDelivery, listDeliveryDetails } from "@/lib/ops/delivery";
+import { type DeliveryPreparationData, getDeliveryPreparation } from "@/lib/ops/delivery-preparation";
 import { isUuid } from "@/lib/ops/form";
 import {
   DELIVERY_STATUS_LABEL,
@@ -74,6 +76,8 @@ export default async function DeliveryPage({
   if (contract && details.value[0]) redirect(`/ops/delivery?focus=${details.value[0].delivery.id}`);
   if ((focus && !details.value.length) || (contract && !awaiting.value.length) || (domain && !prefs.value.length))
     notFound();
+  const preparation = focus ? await getDeliveryPreparation(db, actor, focus) : null;
+  if (preparation && !preparation.ok) return <Forbidden />;
   const here = focus
     ? `/ops/delivery?focus=${focus}`
     : contract
@@ -175,7 +179,12 @@ export default async function DeliveryPage({
           {details.value.length === 0 ? <EmptyState>納品はまだありません</EmptyState> : null}
           <div className="grid gap-4">
             {details.value.map((d) => (
-              <DeliveryCard key={d.delivery.id} d={d} here={here} />
+              <DeliveryCard
+                key={d.delivery.id}
+                d={d}
+                here={here}
+                preparation={preparation?.ok ? preparation.value : undefined}
+              />
             ))}
           </div>
         </Section>
@@ -298,7 +307,15 @@ function StepButton({
   );
 }
 
-function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
+function DeliveryCard({
+  d,
+  here,
+  preparation,
+}: {
+  d: DeliveryDetail;
+  here: string;
+  preparation?: DeliveryPreparationData | undefined;
+}) {
   const { delivery } = d;
   const status = delivery.status;
   const versionLabel = new Map(d.versions.map((v) => [v.id, `第${v.version}版`]));
@@ -357,6 +374,7 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
 
       <div className="space-y-4 border-t px-5 py-4">
         <StepIndicator steps={steps} current={status} />
+        {preparation && <DeliveryPreparation data={preparation} />}
         {latestRequest && (
           <section
             aria-label="顧客からの修正依頼"
@@ -383,9 +401,20 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
               <p className="text-muted-foreground text-sm">
                 制作に進めると、新しい制作依頼を受け付けます。制作・検査が完了すると運営確認へ進みます。
               </p>
-              <StepButton deliveryId={delivery.id} to="building" here={here}>
-                制作に進める
-              </StepButton>
+              {!preparation ? (
+                <Link
+                  href={`/ops/delivery?focus=${delivery.id}`}
+                  className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                >
+                  制作内容を確認する
+                </Link>
+              ) : preparation.blockers.length ? (
+                <p className="text-sm text-amber-800">上の確認事項を解消してから、この画面を開き直してください。</p>
+              ) : (
+                <StepButton deliveryId={delivery.id} to="building" here={here}>
+                  確認して制作に進める
+                </StepButton>
+              )}
             </>
           ) : null}
           {status === "building" && (

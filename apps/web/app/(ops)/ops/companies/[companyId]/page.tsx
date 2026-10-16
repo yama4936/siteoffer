@@ -150,7 +150,9 @@ export default async function CompanyPage({
 
             <div className="space-y-2">
               <details className={detailsClass}>
-                <summary className={summaryClass}>候補を修正する</summary>
+                <summary id="company-information" className={summaryClass}>
+                  候補を修正する
+                </summary>
                 <form action={updateCandidateAction} className={stackFormClass}>
                   <ReturnTo path={here} />
                   <input type="hidden" name="companyId" value={c.id} />
@@ -363,7 +365,7 @@ export default async function CompanyPage({
         </Table>
       </Section>
 
-      <Section title="画像素材と利用許諾">
+      <Section id="image-assets" title="画像素材と利用許諾">
         <Alert>
           <AlertDescription>
             元サイトの画像は登録しただけでは営業デモや納品サイトに使えません。権利状態と利用範囲を画像ごとに確認してください。外部画像の直リンクは行いません。

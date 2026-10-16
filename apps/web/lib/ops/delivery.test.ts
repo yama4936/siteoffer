@@ -1,7 +1,7 @@
 // 運営の納品操作の結合テスト（PGlite）。運営以外は操作できない、顧客確認のURL、一覧（15・18章・AC-18）
 import { type Actor, addDeliveryVersion, decideAsCustomer, fixedClock, getCustomerReview } from "@siteoffer/core";
 import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
-import { type Db, deliveries, deployments } from "@siteoffer/db";
+import { type Db, deliveries, deployments, siteAudits, websites } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,6 +31,18 @@ beforeEach(async () => {
   deps = { db, clock };
   clock.set("2026-10-14T00:00:00Z");
   const base = await seedDeliveryBase(db);
+  const [site] = await db
+    .insert(websites)
+    .values({
+      companyId: base.company.id,
+      url: "https://fixture.example",
+      normalizedUrl: "fixture.example",
+      domain: "fixture.example",
+    })
+    .returning();
+  await db
+    .insert(siteAudits)
+    .values({ companyId: base.company.id, websiteId: site!.id, targetUrl: site!.url, status: "evaluated" });
   ops = base.ops;
   sales = base.sales;
   contractId = base.contract.id;

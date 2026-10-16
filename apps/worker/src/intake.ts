@@ -8,23 +8,14 @@ import {
   type DeliveryBuildClaim,
   failDeliveryBuild,
   INTERRUPTED_BUILD_MESSAGE,
+  loadDeliverySource,
   renewDeliveryBuild,
 } from "@siteoffer/core";
 import type { IntakePhase } from "@siteoffer/db";
-import {
-  companies,
-  contentEntries,
-  contracts,
-  deliveries,
-  deliveryBuilds,
-  designVersions,
-  discoveryJobs,
-  proposalVersions,
-  siteAudits,
-} from "@siteoffer/db";
+import { contentEntries, deliveries, deliveryBuilds, discoveryJobs } from "@siteoffer/db";
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
-import { and, asc, desc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
 import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
 import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
@@ -196,12 +187,11 @@ async function processDelivery(
     status: "skipped",
     reason: "制作の実行権限が更新されたため、この結果は反映しません",
   });
-  const [contract] = await db.select().from(contracts).where(eq(contracts.id, d.contractId));
-  if (!contract) return { deliveryId: d.id, status: "failed", reason: "契約がない" };
-  const [company] = await db.select().from(companies).where(eq(companies.id, contract.companyId));
-  if (!company) return { deliveryId: d.id, status: "failed", reason: "企業がない" };
-  const audit = await findAuditForContract(deps, contract);
-  if (!audit) return { deliveryId: d.id, status: "failed", reason: "生成の入力にする診断がない" };
+  const source = await loadDeliverySource(db, d.contractId);
+  if (!source) return { deliveryId: d.id, status: "failed", reason: "契約と企業の情報を確認できません" };
+  if (source.blockers.length) return { deliveryId: d.id, status: "failed", reason: source.blockers.join(" / ") };
+  const { company, contract } = source;
+  const audit = source.audit!;
 
   const genDeps: GenerationDeps = {
     db,
@@ -233,23 +223,26 @@ async function processDelivery(
       reason: "記事があるため、納品前に SITEOFFER_CONTENT_ORIGIN の設定が必要です",
     };
   let input = await deps.buildGenerationInput(db, { company, audit });
-  if (contract.proposalVersionId) {
-    const [selected] = await db
-      .select()
-      .from(proposalVersions)
-      .where(eq(proposalVersions.id, contract.proposalVersionId));
-    const designId = (selected?.content as { designVersionId?: string } | null)?.designVersionId;
-    if (designId) {
-      const [design] = await db.select().from(designVersions).where(eq(designVersions.id, designId));
-      if (!design || design.companyId !== company.id || design.status !== "approved")
-        return { deliveryId: d.id, status: "failed", reason: "契約した提案の承認済みデザインがありません" };
-      input = await withDesignReference(
-        input,
-        design,
-        path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId, "reference"),
-      );
-    }
-  }
+  if (source.design)
+    input = await withDesignReference(
+      input,
+      source.design,
+      path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId, "reference"),
+    );
+  // 契約書・報酬・担当者の個人情報を生成器へ渡さず、確定時の制作範囲だけを引き継ぐ。
+  input = {
+    ...input,
+    context: {
+      ...input.context,
+      deliveryContract: {
+        contractId: contract.id,
+        proposalVersionId: source.proposal?.id ?? null,
+        scope: source.scope?.scope ?? null,
+        instruction:
+          "契約時の制作範囲に従う。追加の機能・ページ・更新運用を契約済みと推測しない。不明な会社情報・権利・ドメインの取得状況を確定事実として補わない。",
+      },
+    },
+  };
   input = await withDeliveryRevision(db, d.id, company.id, input);
   if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
   const gen = await runGenerationJob(genDeps, {
@@ -311,28 +304,6 @@ async function processDelivery(
     version: added.value.version,
     movedToOpsReview: true,
   };
-}
-
-/** 契約で選んだ提案版の診断。なければ企業の最新の評価済み診断 */
-async function findAuditForContract(deps: WorkerDeps, contract: typeof contracts.$inferSelect) {
-  const { db } = deps;
-  if (contract.proposalVersionId) {
-    const [pv] = await db
-      .select({ auditId: proposalVersions.auditId })
-      .from(proposalVersions)
-      .where(eq(proposalVersions.id, contract.proposalVersionId));
-    if (pv?.auditId) {
-      const [a] = await db.select().from(siteAudits).where(eq(siteAudits.id, pv.auditId));
-      if (a) return a;
-    }
-  }
-  const [latest] = await db
-    .select()
-    .from(siteAudits)
-    .where(and(eq(siteAudits.companyId, contract.companyId), eq(siteAudits.status, "evaluated")))
-    .orderBy(desc(siteAudits.createdAt))
-    .limit(1);
-  return latest ?? null;
 }
 
 /** 受付処理を1回実行する（収集 → 納品の順） */
