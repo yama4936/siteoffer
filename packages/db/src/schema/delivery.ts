@@ -58,6 +58,8 @@ export const approvals = pgTable(
       .notNull()
       .references(() => deliveryVersions.id),
     decision: approvalDecision("decision").notNull(),
+    receiptKey: text("receipt_key").unique(),
+    payloadHash: text("payload_hash"),
     /** 修正依頼の内容（顧客の記入）。承認では任意 */
     comment: text("comment"),
     /** 判断に使った共有リンク（顧客の操作主体） */

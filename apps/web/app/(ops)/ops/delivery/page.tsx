@@ -299,12 +299,26 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
   const status = delivery.status;
   const versionLabel = new Map(d.versions.map((v) => [v.id, `第${v.version}版`]));
   const reviewVersion = d.versions.find((v) => v.id === delivery.reviewVersionId);
+  const rejectedVersion = Math.max(
+    0,
+    ...d.approvals
+      .filter((a) => a.decision === "changes_requested")
+      .map((a) => d.versions.find((v) => v.id === a.deliveryVersionId)?.version ?? 0),
+  );
+  const latestRequest = d.approvals.find(
+    (a) =>
+      a.decision === "changes_requested" &&
+      d.versions.find((v) => v.id === a.deliveryVersionId)?.version === rejectedVersion,
+  );
+  const hasRevision = d.versions.some((v) => v.version > rejectedVersion && !!v.artifactDir);
   const reviewOptions =
     status === "customer_review"
       ? reviewVersion
         ? [{ id: reviewVersion.id, label: `第${reviewVersion.version}版（顧客確認中）` }]
         : []
-      : d.versions.filter((v) => v.artifactDir).map((v) => ({ id: v.id, label: `第${v.version}版` }));
+      : d.versions
+          .filter((v) => v.artifactDir && v.version > rejectedVersion)
+          .map((v) => ({ id: v.id, label: `第${v.version}版` }));
   const locked = delivery.lockedVersionId ? (versionLabel.get(delivery.lockedVersionId) ?? "固定済み") : "未固定";
   const steps = DELIVERY_STATUSES.map((st) => ({ key: st, label: label(DELIVERY_STATUS_LABEL, st) }));
 
@@ -327,6 +341,25 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
 
       <div className="space-y-4 border-t px-5 py-4">
         <StepIndicator steps={steps} current={status} />
+        {latestRequest && (
+          <section
+            aria-label="顧客からの修正依頼"
+            className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4"
+          >
+            <h3 className="font-semibold text-sm">第{rejectedVersion}版への修正依頼</h3>
+            <p className="text-xs text-muted-foreground">受付：{fmtDate(latestRequest.decidedAt)}</p>
+            <p className="whitespace-pre-wrap break-words text-sm">{latestRequest.comment}</p>
+            <p className="text-sm">
+              {status === "building"
+                ? "修正内容を制作処理へ引き継ぎます。新しい版ができたら、反映結果と事実関係を運営で確認してください。"
+                : status === "customer_review"
+                  ? "修正版は顧客の確認待ちです。この依頼に対する修正結果をご確認いただいています。"
+                  : delivery.lockedVersionId
+                    ? "修正後の版は顧客承認済みです。この依頼は過去の記録として表示しています。"
+                    : "修正版を確認するときは、この依頼内容が反映されているかも確認してください。"}
+            </p>
+          </section>
+        )}
 
         <div className="space-y-3 rounded-lg bg-muted/50 p-4">
           {status === "info_gathering" ? (
@@ -351,12 +384,15 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
             ) : (
               <>
                 <p className="text-muted-foreground text-sm">
-                  制作版があります。内容を確認するため運営確認に回してください。
-                  差し戻し後に新しい版が要る場合、ワーカーが新しい版を作るかはワーカーの処理条件によります。
+                  {rejectedVersion && !hasRevision
+                    ? "修正版の作成待ちです。制作処理の進捗を確認し、新しい版ができるまでお待ちください。"
+                    : "制作版があります。修正依頼との照合を含め、内容を確認するため運営確認に回してください。"}
                 </p>
-                <StepButton deliveryId={delivery.id} to="ops_review" here={here}>
-                  運営確認に回す
-                </StepButton>
+                {hasRevision && (
+                  <StepButton deliveryId={delivery.id} to="ops_review" here={here}>
+                    運営確認に回す
+                  </StepButton>
+                )}
               </>
             )
           ) : null}
@@ -367,12 +403,18 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
                   ? "運営が確認した版を顧客確認に回すと、顧客に渡すURL（期限付きの共有リンク）をこの場で一度だけ表示します。"
                   : "顧客の判断（承認・修正依頼）を待っています。リンクを控え忘れた・期限が切れた場合は再発行できます。"}
               </p>
-              <CustomerReviewForm
-                action={sendToCustomerReviewAction}
-                deliveryId={delivery.id}
-                versions={reviewOptions}
-                reissue={status === "customer_review"}
-              />
+              {reviewOptions.length ? (
+                <CustomerReviewForm
+                  action={sendToCustomerReviewAction}
+                  deliveryId={delivery.id}
+                  versions={reviewOptions}
+                  reissue={status === "customer_review"}
+                />
+              ) : (
+                <p className="text-sm text-amber-800">
+                  顧客へ確認を依頼できる修正版がありません。制作へ戻して新しい版を用意してください。
+                </p>
+              )}
               <StepButton deliveryId={delivery.id} to="building" here={here} variant="outline">
                 {status === "ops_review" ? "制作に差し戻す" : "顧客確認を取り下げて制作に戻す"}
               </StepButton>
@@ -448,6 +490,7 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {v.id === delivery.lockedVersionId ? <Badge variant="success">公開対象（固定）</Badge> : null}
+                        {v.version <= rejectedVersion ? <Badge variant="warning">修正前・再提出不可</Badge> : null}
                         {v.id === delivery.reviewVersionId ? <Badge variant="warning">顧客確認中</Badge> : null}
                       </div>
                     </TableCell>

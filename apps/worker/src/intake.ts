@@ -16,6 +16,7 @@ import {
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
 import { and, asc, desc, eq, gte } from "drizzle-orm";
+import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
 import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
 import { readStepState } from "./ledger.ts";
@@ -186,6 +187,7 @@ async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string):
       input = await withDesignReference(input, design, path.join(deps.deliveryArtifactRoot, d.id, "reference"));
     }
   }
+  input = await withDeliveryRevision(db, d.id, company.id, input);
   const gen = await runGenerationJob(genDeps, {
     idempotencyKey: `${round}:delivery_site`,
     companyId: company.id,

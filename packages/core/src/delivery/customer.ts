@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { approvals, companies, contracts, type DbOrTx, deliveries, deliveryVersions } from "@siteoffer/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { verifyShareLink } from "../share-link/share-link.ts";
 import type { DeliveryRow } from "./delivery.ts";
 
@@ -95,9 +97,10 @@ export interface CustomerDecisionInput {
   decision: CustomerDecision;
   /** 修正依頼では必須。承認では任意 */
   comment?: string | null;
+  requestKey?: string;
 }
 
-export type CustomerDecisionError = "link_invalid" | "invalid_input" | "not_under_review";
+export type CustomerDecisionError = "link_invalid" | "invalid_input" | "not_under_review" | "request_conflict";
 
 export interface CustomerDecisionResult {
   delivery: DeliveryRow;
@@ -116,11 +119,19 @@ export async function decideAsCustomer(
   token: string,
   input: CustomerDecisionInput,
 ): Promise<Result<CustomerDecisionResult, CustomerDecisionError>> {
+  if (
+    !input ||
+    (input.requestKey !== undefined &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestKey))
+  )
+    return err("invalid_input");
   if (input.decision !== "approved" && input.decision !== "changes_requested") return err("invalid_input");
   const comment = typeof input.comment === "string" ? input.comment.trim() : "";
   if (comment.length > CUSTOMER_COMMENT_MAX) {
     return err("invalid_input", `コメントは${CUSTOMER_COMMENT_MAX}文字以内で入力してください`);
   }
+  if (findSecretInFields({ comment }))
+    return err("invalid_input", "パスワード・移管コード・鍵などは記入しないでください");
   if (input.decision === "changes_requested" && !comment) {
     return err("invalid_input", "修正してほしい点をご記入ください");
   }
@@ -133,6 +144,17 @@ export async function decideAsCustomer(
     const [version] = await tx.select().from(deliveryVersions).where(eq(deliveryVersions.id, link.value.targetId));
     if (!version) return err("link_invalid", "target_missing");
     const [delivery] = await tx.select().from(deliveries).where(eq(deliveries.id, version.deliveryId)).for("update");
+    const hash = (s: string) => createHash("sha256").update(s).digest("hex");
+    const receiptKey = input.requestKey ? hash(JSON.stringify([link.value.linkId, input.requestKey])) : null;
+    const payloadHash = hash(JSON.stringify([input.versionId, input.decision, comment]));
+    if (receiptKey) {
+      const [previous] = await tx.select().from(approvals).where(eq(approvals.receiptKey, receiptKey));
+      if (previous) {
+        if (previous.payloadHash !== payloadHash) return err("request_conflict", "前の送信と内容が異なります");
+        if (!delivery) return err("not_under_review");
+        return ok({ delivery, approvalId: previous.id });
+      }
+    }
     if (!delivery || !isUnderReview(delivery, version.id) || delivery.lockedVersionId !== null) {
       return err("not_under_review", "この版は現在、確認の受付を行っていません");
     }
@@ -143,6 +165,8 @@ export async function decideAsCustomer(
       .values({
         deliveryVersionId: version.id,
         decision: input.decision,
+        receiptKey,
+        payloadHash: receiptKey ? payloadHash : null,
         comment: comment || null,
         shareLinkId: link.value.linkId,
         decidedAt: now,

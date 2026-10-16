@@ -78,13 +78,17 @@ export async function submitCustomerDecision(deps: CustomerDeps, fd: FormData): 
     return fail("掲載内容（会社名・連絡先・サービス内容など）をご確認のうえ、確認のチェックを入れてください。");
   }
 
-  const r = await decideAsCustomer(deps.db, deps.clock, token, { versionId, decision, comment });
+  const requestKey = str(fd, "requestKey");
+  if (!UUID_RE.test(requestKey)) return fail("受付情報を確認できません。入力を控えてページを読み直してください。");
+  const r = await decideAsCustomer(deps.db, deps.clock, token, { versionId, decision, comment, requestKey });
   if (r.ok) return { status: "ok", message: SUCCESS[decision] };
   switch (r.error) {
     case "link_invalid":
       return fail(INVALID_LINK_MESSAGE);
     case "not_under_review":
       return fail("この版は現在、確認の受付を行っていません。最新のご案内をご確認ください。");
+    case "request_conflict":
+      return fail("前の送信と内容が異なります。最新の受付状況を確認してください。");
     case "invalid_input":
       return fail(r.message ? `${r.message}。` : "入力内容をご確認ください。");
   }

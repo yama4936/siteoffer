@@ -127,6 +127,13 @@
       "when": 1792154018572,
       "tag": "0017_mushy_lake",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792155317195,
+      "tag": "0018_spotty_banshee",
+      "breakpoints": true
     }
   ]
 }

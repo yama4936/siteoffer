@@ -292,7 +292,8 @@ export type SendToCustomerReviewError =
   | "version_not_found"
   | "invalid_transition"
   | "no_artifact"
-  | "link_failed";
+  | "link_failed"
+  | "version_requires_revision";
 
 /**
  * 運営が確認した版を顧客確認に回し、納品用の共有リンク（期限付き）を発行する。
@@ -319,6 +320,16 @@ export async function sendToCustomerReview(
       .where(and(eq(deliveryVersions.id, input.versionId), eq(deliveryVersions.deliveryId, delivery.id)));
     if (!version) return err("version_not_found");
 
+    const [rejected] = await tx
+      .select({ version: max(deliveryVersions.version) })
+      .from(approvals)
+      .innerJoin(deliveryVersions, eq(deliveryVersions.id, approvals.deliveryVersionId))
+      .where(and(eq(deliveryVersions.deliveryId, delivery.id), eq(approvals.decision, "changes_requested")));
+    if (rejected?.version !== null && rejected?.version !== undefined && version.version <= rejected.version)
+      return err(
+        "version_requires_revision",
+        "修正依頼を受けた版以前の内容は再提出できません。修正版を作成し、運営で内容を確認してください",
+      );
     const reissue = delivery.status === "customer_review" && delivery.reviewVersionId === version.id;
     if (!reissue && !canTransition(delivery.status, "customer_review")) {
       return err("invalid_transition", "運営確認中の納品だけを顧客確認に回せます");
