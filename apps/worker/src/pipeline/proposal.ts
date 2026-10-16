@@ -110,7 +110,14 @@ export const proposalStep: StepDefinition<
     const jobIds: ProposalContent["generationJobIds"] = {};
     for (const purpose of PROPOSAL_PURPOSES) {
       if (ctx.signal.aborted) throw new Error("制限時間を過ぎたため中断した");
-      const r = await generateOnce(genDeps, { key, purpose, companyId: company.id, input, attempt: ctx.attempt });
+      const r = await generateOnce(genDeps, {
+        key,
+        purpose,
+        companyId: company.id,
+        input,
+        attempt: ctx.attempt,
+        signal: ctx.signal,
+      });
       (outputs as Record<string, unknown>)[purpose] = r.output;
       jobIds[purpose] = r.jobId;
     }
@@ -144,6 +151,7 @@ export const proposalStep: StepDefinition<
       },
       workDir,
     });
+    if (ctx.signal.aborted) throw new Error("制限時間を過ぎたため中断した");
     if (!built.ok) {
       const reason = `デモのビルド・検査に失敗した（${built.reason}）：${built.message}`;
       if (built.retryable) throw new Error(reason);
@@ -199,7 +207,14 @@ export const proposalStep: StepDefinition<
 /** 生成を1件実行する。前の試行で成功した同じ用途の生成があれば、それを使う（再実行しない） */
 async function generateOnce(
   genDeps: GenerationDeps,
-  req: { key: string; purpose: ProposalPurpose; companyId: string; input: GenerationInput; attempt: number },
+  req: {
+    key: string;
+    purpose: ProposalPurpose;
+    companyId: string;
+    input: GenerationInput;
+    attempt: number;
+    signal: AbortSignal;
+  },
 ): Promise<{ jobId: string; output: unknown }> {
   for (let a = 1; a < req.attempt; a++) {
     const prev = await findGenerationJob(genDeps.db, `${req.key}:${req.purpose}:a${a}`);
@@ -210,6 +225,7 @@ async function generateOnce(
     companyId: req.companyId,
     purpose: req.purpose,
     input: req.input,
+    signal: req.signal,
   });
   if (!r.ok) {
     const msg = `生成（${req.purpose}）に失敗した：${r.message ?? r.error}`;

@@ -164,6 +164,10 @@ function runProcess(
   onTimeout: () => void,
 ): Promise<{ code: number | null; timedOut: boolean; aborted: boolean; stderr: string }> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ code: null, timedOut: false, aborted: true, stderr: "" });
+      return;
+    }
     const child = spawn(cmd, args, { env, stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     let timedOut = false;
@@ -209,6 +213,7 @@ export class DockerSandboxRunner implements SandboxRunner {
   }
 
   async run(spec: SandboxRunSpec): Promise<SandboxRunOutcome> {
+    if (spec.signal?.aborted) return { ok: false, error: "aborted", message: "中断された", result: null };
     await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify(spec.request));
     const args = buildDockerRunArgs(this.config, spec);
     const name = containerName(spec.jobId);

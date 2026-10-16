@@ -426,6 +426,45 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       vi.unstubAllEnvs();
     }
   });
+  it("制作回の更新を検出すると古い生成へ中断を伝え、待たずに新しい制作へ進める", async () => {
+    const [d] = await db.select().from(deliveries).limit(1);
+    const back = await transitionDelivery(db, clock, { kind: "system", job: "test" }, d!.id, "building");
+    if (!back.ok) throw Error(back.error);
+    let entered!: () => void,
+      signal: AbortSignal | undefined,
+      jobId = "";
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const builds = env.fake.calls.length;
+    const generate = vi.spyOn(env.deps.generation.generator, "generate").mockImplementation((req) => {
+      signal = req.signal;
+      jobId = req.jobId;
+      entered();
+      return new Promise<never>(() => {});
+    });
+    vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "https://cms.example.test");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const first = intakeDeliveries(env.deps, createIntakeState());
+      await started;
+      clock.advance(DELIVERY_BUILD_LEASE_MS + 1);
+      await retryLatest(db, clock, d!.id);
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(await first).toMatchObject([{ status: "skipped" }]);
+      expect(signal?.aborted).toBe(true);
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(env.fake.calls).toHaveLength(builds);
+      const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, jobId));
+      expect(job).toMatchObject({ status: "failed", errorCode: "aborted", attempts: 1, output: null });
+      generate.mockRestore();
+      expect(await intakeDeliveries(env.deps, createIntakeState())).toMatchObject([{ status: "version_added" }]);
+    } finally {
+      generate.mockRestore();
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 /** 完了した契約を直接作る（契約確認の流れは packages/core のテストで確認済み） */

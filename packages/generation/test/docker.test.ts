@@ -4,6 +4,7 @@ import {
   buildDockerRunArgs,
   DEFAULT_DOCKER_SANDBOX_CONFIG,
   type DockerSandboxConfig,
+  DockerSandboxRunner,
 } from "../src/sandbox/docker.ts";
 
 const config: DockerSandboxConfig = {
@@ -93,4 +94,16 @@ describe("DockerSandboxRunner の引数", () => {
     const args = buildDockerRunArgs({ ...config, user: "501:20" }, spec);
     expect(flagValues(args, "--tmpfs")).toContain("/home/codex/.codex:rw,nosuid,size=256m,uid=501,gid=20,mode=0700");
   });
+});
+
+it("開始前に中断済みなら作業ファイルもDockerプロセスも作らない", async () => {
+  const runner = new DockerSandboxRunner({ ...config, dockerPath: "must-not-start" });
+  expect(
+    await runner.run({
+      ...spec,
+      workDir: "/does-not-exist/cancelled",
+      signal: AbortSignal.abort(),
+      request: {} as never,
+    }),
+  ).toMatchObject({ ok: false, error: "aborted", result: null });
 });

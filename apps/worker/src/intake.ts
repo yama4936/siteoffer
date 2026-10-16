@@ -145,11 +145,17 @@ export async function intakeDeliveries(deps: WorkerDeps, _state: IntakeState): P
     }
     const current = claimed.value.delivery;
     const claim = { deliveryId: d.id, buildId: current.currentBuildId!, ownerId };
+    const controller = new AbortController();
     let ping: Promise<unknown> | null = null;
     const timer = setInterval(() => {
       if (!ping)
         ping = renewDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, claim)
-          .catch(() => false)
+          .then((owned) => {
+            if (!owned) controller.abort();
+          })
+          .catch(() => {
+            controller.abort();
+          })
           .finally(() => {
             ping = null;
           });
@@ -157,7 +163,7 @@ export async function intakeDeliveries(deps: WorkerDeps, _state: IntakeState): P
     timer.unref();
     let r: DeliveryIntakeResult;
     try {
-      r = await processDelivery(deps, current, deliveryRoundKey(current), claim);
+      r = await processDelivery(deps, current, deliveryRoundKey(current), claim, controller.signal);
     } catch {
       r = {
         deliveryId: d.id,
@@ -182,6 +188,7 @@ async function processDelivery(
   d: DeliveryRow,
   round: string,
   claim: DeliveryBuildClaim,
+  signal: AbortSignal,
 ): Promise<DeliveryIntakeResult> {
   const { db, clock } = deps;
   const stale = (): DeliveryIntakeResult => ({
@@ -250,7 +257,9 @@ async function processDelivery(
     companyId: company.id,
     purpose: "delivery_site",
     input,
+    signal,
   });
+  if (signal.aborted) return stale();
   if (!gen.ok)
     return {
       deliveryId: d.id,

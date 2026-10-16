@@ -4,7 +4,7 @@
  */
 import { auditEvents, companies, discoveryJobs, generationJobs, proposalVersions, siteAudits } from "@siteoffer/db";
 import { createDiscoveryJob } from "@siteoffer/discovery";
-import { MockGenerator } from "@siteoffer/generation";
+import { type Generator, MockGenerator } from "@siteoffer/generation";
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { PROPOSAL_CONTENT_KEYS, type ProposalContent } from "../src/content.ts";
@@ -305,6 +305,46 @@ describe("失敗・再試行・上限", () => {
     const last = results.at(-1)!.outcome;
     expect(last.status).toBe("failed");
     if (last.status === "failed") expect(last.reason).toContain("StepTimeoutError");
+  });
+
+  it("提案の制限時間が過ぎたら実行中の生成も閉じ、後続の生成・ビルドを始めない", async () => {
+    const fake = fakeSiteBuilder(),
+      mock = new MockGenerator({ overrides: { evaluation: generationShapedEvaluation() } });
+    let signal: AbortSignal | undefined,
+      calls = 0;
+    const generator: Generator = {
+      kind: "abort-proposal-test",
+      requestedModel: null,
+      promptVersion: (purpose) => mock.promptVersion(purpose),
+      generate: (req) => {
+        if (req.purpose === "evaluation") return mock.generate(req);
+        calls++;
+        signal = req.signal;
+        return new Promise<never>(() => {});
+      },
+    };
+    env = await setupEnv({
+      threshold: 100,
+      generator: mock,
+      siteBuilder: fake.builder,
+      policies: { proposal: { timeoutMs: 1000, maxAttempts: 1 } },
+    });
+    env.deps.generation.generator = generator;
+    await startDiscovery(env);
+    const results = await drainWithDesignApproval(env);
+    expect(results.at(-1)!.outcome).toMatchObject({ status: "failed" });
+    expect(signal?.aborted).toBe(true);
+    expect(calls).toBe(1);
+    expect(fake.calls).toHaveLength(0);
+    await expect
+      .poll(async () => {
+        const [job] = await env!.db.select().from(generationJobs).where(eq(generationJobs.purpose, "proposal_text"));
+        return job?.status;
+      })
+      .toBe("failed");
+    const [job] = await env.db.select().from(generationJobs).where(eq(generationJobs.purpose, "proposal_text"));
+    expect(job).toMatchObject({ errorCode: "aborted", attempts: 1, output: null });
+    expect((await versions(env))[0]!.status).toBe("failed");
   });
 
   it("デモの検査に通らない（再試行で変わらない）失敗は、1回で止める", async () => {
