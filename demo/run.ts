@@ -213,6 +213,8 @@ async function main() {
     SITEOFFER_AUDIT_COLLECTOR: "fixture",
     SITEOFFER_EVAL_CONFIG: DEMO_PATHS.evalConfig,
     SITEOFFER_GENERATION_INPUT: "fixture",
+    // 記事を持つローカル案件も制作できる。明示された配信先は保持する。
+    SITEOFFER_CONTENT_ORIGIN: env.SITEOFFER_CONTENT_ORIGIN?.trim() || `http://localhost:${DEMO_PORTS.web}`,
     // Astroのビルドを同時に走らせない（同時ビルドで失敗した例があった・メモリの節約）
     SITEOFFER_PROPOSAL_CONCURRENCY: "1",
     SITEOFFER_INTAKE_INTERVAL_MS: process.env.SITEOFFER_INTAKE_INTERVAL_MS ?? "3000",

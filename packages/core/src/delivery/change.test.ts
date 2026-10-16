@@ -4,6 +4,7 @@ import { createTestDb } from "@siteoffer/db/testing";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "../common/clock.ts";
+import { hasPublishedSite } from "../content.ts";
 import { issueShareLink, verifyShareLink } from "../share-link/share-link.ts";
 import { requestDeliveryChange } from "./change.ts";
 import { decideAsCustomer } from "./customer.ts";
@@ -68,6 +69,7 @@ it.each(["ready", "published", "delivered"] as const)(
       currentBuildId: null,
     });
     expect(detail.approvals).toEqual(before.approvals);
+    expect(await hasPublishedSite(db, s.company.id)).toBe(status !== "ready");
     expect(detail.versions).toEqual(before.versions);
     expect(detail.deployments).toEqual(before.deployments);
     expect((await verifyShareLink(db, clock, s.token)).ok).toBe(false);

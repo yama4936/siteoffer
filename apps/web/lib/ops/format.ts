@@ -150,3 +150,17 @@ export function rewardRuleText(rule: unknown): string {
 export function shortId(id: string): string {
   return id.slice(0, 8);
 }
+
+/** 元の掲載日など、時刻を持たない日付は日本時間の日付だけを表示する。 */
+export function fmtDateOnly(value: Date | string | null | undefined): string {
+  if (!value) return "—";
+  const date = typeof value === "string" ? new Date(value) : value;
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat("ja-JP", {
+        timeZone: "Asia/Tokyo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(date);
+}

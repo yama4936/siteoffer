@@ -182,10 +182,13 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
             登録記事 {d.articles.total}件 / 公開済み {d.articles.published}件
           </p>
           <p className="text-xs text-muted-foreground">
-            元サイトの記事が自動で移行されたことを示す件数ではありません。
+            取り込み後の記事は下書きです。内容と掲載設定を確認してください。
           </p>
           <Link href={`/ops/content?company=${d.company.id}`} className="text-sm text-primary underline">
             記事・お知らせを管理
+          </Link>
+          <Link href={`/ops/content/${d.company.id}/import`} className="block text-sm text-primary underline">
+            既存の記事を一括で取り込む
           </Link>
         </section>
       </div>

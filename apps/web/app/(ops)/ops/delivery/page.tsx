@@ -360,7 +360,7 @@ function DeliveryCard({
     <details
       id={`delivery-${delivery.id}`}
       open={status !== "delivered"}
-      className="group rounded-xl border bg-card shadow-sm"
+      className="group min-w-0 rounded-xl border bg-card shadow-sm"
     >
       <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm">
         <strong className="font-semibold text-base">{d.companyName}</strong>

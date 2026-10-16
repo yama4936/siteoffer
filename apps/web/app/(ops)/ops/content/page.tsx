@@ -7,6 +7,7 @@ import { DesignSubmit } from "@/components/ops/design-controls";
 import { Flash, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
+import { fmtDateOnly } from "@/lib/ops/format";
 import { requireUser } from "@/lib/session";
 import { publishArticleAction, saveArticleAction } from "./actions";
 import "../designs/studio.css";
@@ -72,6 +73,7 @@ export default async function ContentPage({
           <label htmlFor="content-company">企業</label>
           <div className="design-inline">
             <select name="company" id="content-company" defaultValue={companyId}>
+              {!companyList.some((c) => c.id === companyId) && <option value={companyId}>{company.name}</option>}
               {companyList.map((c) => (
                 <option value={c.id} key={c.id}>
                   {c.name}
@@ -111,6 +113,9 @@ export default async function ContentPage({
             ))}
           </nav>
           <div className="design-actions">
+            <Link className="design-button secondary" href={`/ops/content/${companyId}/import`}>
+              既存の記事を取り込む
+            </Link>
             <Link className="design-button secondary" href={`/ops/content/${companyId}/preview`}>
               掲載内容をプレビュー
             </Link>
@@ -121,6 +126,16 @@ export default async function ContentPage({
         </aside>
         <section className="design-card design-review">
           <h2>{selected ? "記事を編集" : "新しい記事"}</h2>
+          {selected?.entry.importId && (
+            <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+              <p>ファイルから取り込んだ記事です。</p>
+              <p>
+                元の掲載日：
+                {selected.entry.originalPublishedAt ? fmtDateOnly(selected.entry.originalPublishedAt) : "記録なし"}
+              </p>
+              {selected.entry.sourceUrl && <p className="break-all">元記事：{selected.entry.sourceUrl}</p>}
+            </div>
+          )}
           <form action={saveArticleAction} key={selected?.entry.id ?? "new"}>
             {hidden}
             <label>

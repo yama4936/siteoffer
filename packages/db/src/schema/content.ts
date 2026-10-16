@@ -1,7 +1,30 @@
-import { index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { createdAt, id, ts } from "./common.ts";
 import { companies } from "./companies.ts";
 import { users } from "./users.ts";
+
+export const contentImports = pgTable(
+  "content_imports",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id),
+    requestId: uuid("request_id").notNull().unique(),
+    payloadHash: text("payload_hash").notNull(),
+    fileName: text("file_name").notNull(),
+    fileSha256: text("file_sha256").notNull(),
+    format: text("format").notNull(),
+    importedCount: integer("imported_count").notNull(),
+    skippedCount: integer("skipped_count").notNull(),
+    entryIds: jsonb("entry_ids").$type<string[]>().notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("content_imports_company").on(t.companyId, t.createdAt)],
+);
 
 export const contentEntries = pgTable(
   "content_entries",
@@ -11,6 +34,9 @@ export const contentEntries = pgTable(
       .notNull()
       .references(() => companies.id),
     slug: text("slug").notNull(),
+    sourceUrl: text("source_url"),
+    originalPublishedAt: ts("original_published_at"),
+    importId: uuid("import_id").references(() => contentImports.id),
     currentRevision: integer("current_revision").notNull().default(1),
     publishedRevision: integer("published_revision"),
     publishedAt: ts("published_at"),

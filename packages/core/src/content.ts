@@ -1,11 +1,28 @@
-import { companies, contentEntries, contentRevisions, contracts, type DbOrTx, deliveries } from "@siteoffer/db";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import {
+  companies,
+  contentEntries,
+  contentRevisions,
+  contracts,
+  type DbOrTx,
+  deliveries,
+  deployments,
+  users,
+} from "@siteoffer/db";
+import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { recordEvent } from "./common/events.ts";
 import type { Actor, Clock } from "./common/index.ts";
 
 export class ContentError extends Error {}
 function operator(actor: Actor | null): asserts actor is Extract<Actor, { kind: "ops" }> {
   if (actor?.kind !== "ops") throw new ContentError("運営権限が必要です");
+}
+async function activeOperator(db: DbOrTx, actor: Extract<Actor, { kind: "ops" }>) {
+  const [u] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")))
+    .for("share");
+  if (!u) throw new ContentError("有効な運営権限が必要です");
 }
 export type ArticleInput = {
   companyId: string;
@@ -30,6 +47,7 @@ export async function saveArticle(db: DbOrTx, clock: Clock, actor: Actor | null,
       .where(eq(companies.id, input.companyId))
       .for("update");
     if (!company) throw new ContentError("企業がありません");
+    await activeOperator(tx, actor);
     let entry: typeof contentEntries.$inferSelect;
     let revision = 1;
     if (input.entryId) {
@@ -89,6 +107,7 @@ export async function publishArticle(
   return db.transaction(async (tx) => {
     const [entry] = await tx.select().from(contentEntries).where(eq(contentEntries.id, input.entryId)).for("update");
     if (!entry) throw new ContentError("記事がありません");
+    await activeOperator(tx, actor);
     if (entry.currentRevision !== input.expectedRevision)
       throw new ContentError("記事が更新されています。画面を更新して確認してください");
     if (input.revision !== null) {
@@ -122,7 +141,9 @@ export async function publishedArticles(db: DbOrTx, companyId: string) {
     .select({
       id: contentEntries.id,
       slug: contentEntries.slug,
-      publishedAt: contentEntries.publishedAt,
+      publishedAt: sql<Date>`coalesce(${contentEntries.originalPublishedAt}, ${contentEntries.publishedAt})`.mapWith(
+        contentEntries.publishedAt,
+      ),
       revision: contentRevisions.revision,
       title: contentRevisions.title,
       body: contentRevisions.body,
@@ -137,7 +158,10 @@ export async function publishedArticles(db: DbOrTx, companyId: string) {
       ),
     )
     .where(and(eq(contentEntries.companyId, companyId), isNotNull(contentEntries.publishedRevision)))
-    .orderBy(desc(contentEntries.publishedAt))
+    .orderBy(
+      desc(sql`coalesce(${contentEntries.originalPublishedAt}, ${contentEntries.publishedAt})`),
+      desc(contentEntries.id),
+    )
     .limit(500);
 }
 export async function hasPublishedSite(db: DbOrTx, companyId: string) {
@@ -149,7 +173,10 @@ export async function hasPublishedSite(db: DbOrTx, companyId: string) {
       and(
         eq(contracts.companyId, companyId),
         eq(contracts.status, "completed"),
-        inArray(deliveries.status, ["published", "delivered"]),
+        or(
+          inArray(deliveries.status, ["published", "delivered"]),
+          sql`exists (select 1 from ${deployments} where ${deployments.deliveryId}=${deliveries.id} and ${deployments.status}='recorded')`,
+        ),
       ),
     )
     .limit(1);
