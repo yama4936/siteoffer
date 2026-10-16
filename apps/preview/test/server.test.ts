@@ -1,8 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { type Actor, fixedClock, HOUR, hashShareToken, issueShareLink, revokeShareLink } from "@siteoffer/core";
+import {
+  type Actor,
+  fixedClock,
+  HOUR,
+  hashShareToken,
+  hashToken,
+  issueDeliveryPreview,
+  issueShareLink,
+  revokeShareLink,
+} from "@siteoffer/core";
 import {
   seedAssignment,
   seedCompany,
@@ -10,7 +20,7 @@ import {
   seedProposalVersion,
   seedUser,
 } from "@siteoffer/core/share-link/testing";
-import { assignments, type Db, shareLinks } from "@siteoffer/db";
+import { assignments, type Db, sessions, shareLinks } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +40,7 @@ let versionAOld: string;
 let tokenA: string;
 let tokenB: string;
 let tokenDelivery: string;
+let internalVersion: { id: string; deliveryId: string };
 let fileSymlinks = true;
 
 interface Res {
@@ -123,6 +134,7 @@ beforeAll(async () => {
   const [asg] = await db.select().from(assignments).where(eq(assignments.companyId, companyA));
   const dv = await seedDeliveryVersion(db, companyA, asg!.id, a.user.id, dir("d"));
   tokenDelivery = await issue(ops, "delivery", dv.id);
+  internalVersion = dv;
 
   server = await startPreviewServer({ db, clock, port: 0, log: (m) => logs.push(m) });
 });
@@ -320,4 +332,50 @@ describe("期限切れ・取り消し（AC-14）", () => {
     expect(logs.join("\n")).not.toContain(tExpire);
     expect(logs.join("\n")).not.toContain(tRevoke);
   });
+});
+
+async function internalGrant() {
+  if (ops.kind !== "ops") throw Error("ops required");
+  const token = randomUUID();
+  const [session] = await db
+    .insert(sessions)
+    .values({ userId: ops.userId, tokenHash: hashToken(token), expiresAt: new Date(clock.now().getTime() + HOUR) })
+    .returning();
+  const grant = await issueDeliveryPreview(db, clock, ops, token, internalVersion.deliveryId, internalVersion.id);
+  if (!grant.ok) throw Error(grant.error);
+  return { ...grant.value, sessionId: session!.id };
+}
+it("運営プレビューは独立したURLで動き、許可した管理画面だけが配信状態を確認できる", async () => {
+  const grant = await internalGrant(),
+    url = `/internal/${grant.token}`;
+  expect(await send(url)).toMatchObject({ status: 308, headers: { location: `${url}/` } });
+  const page = await send(`${url}/`);
+  expect(page.status).toBe(200);
+  expect(page.body).toBe("<html><body>DELIVERY</body></html>");
+  expect(page.headers["content-security-policy"]).toContain("connect-src 'none'");
+  expect(page.headers["content-security-policy"]).toContain("worker-src 'none'");
+  expect(page.headers["set-cookie"]).toBeUndefined();
+  const check = await send(`${url}/`, { method: "HEAD", headers: { origin: "http://localhost:3100" } });
+  expect(check.status).toBe(200);
+  expect(check.body).toBe("");
+  expect(check.headers["access-control-allow-origin"]).toBe("http://localhost:3100");
+  expect(
+    (await send(`${url}/`, { headers: { origin: "https://other.example.test" } })).headers[
+      "access-control-allow-origin"
+    ],
+  ).toBeUndefined();
+  expect((await send(`/s/${grant.token}/`)).status).toBe(404);
+  expect((await send(`/internal/${tokenDelivery}/`)).status).toBe(404);
+  for (const rest of ["/../outside.txt", "/%2e%2e/b/index.html", "/.env", "/missing.html"])
+    expect((await send(url + rest)).status).toBe(404);
+  expect((await send(`${url}/`, { method: "POST" })).status).toBe(405);
+  expect(logs.join("\n")).not.toContain(grant.token);
+});
+it("運営プレビューはログアウト後・表示期限後には配信しない", async () => {
+  const first = await internalGrant();
+  await db.delete(sessions).where(eq(sessions.id, first.sessionId));
+  expect((await send(`/internal/${first.token}/`)).status).toBe(404);
+  const second = await internalGrant();
+  clock.set(second.expiresAt);
+  expect((await send(`/internal/${second.token}/`)).status).toBe(404);
 });

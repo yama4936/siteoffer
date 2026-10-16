@@ -481,7 +481,12 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
                     <TableCell className="whitespace-nowrap font-medium">第{v.version}版</TableCell>
                     <TableCell>
                       {v.artifactDir ? (
-                        <code className="break-all text-xs">{v.artifactDir}</code>
+                        <Link
+                          href={`/ops/delivery/${delivery.id}/review?version=${v.id}`}
+                          className="font-medium text-primary underline underline-offset-4"
+                        >
+                          制作版を確認
+                        </Link>
                       ) : (
                         <Badge variant="warning">成果物なし</Badge>
                       )}

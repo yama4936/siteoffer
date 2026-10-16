@@ -134,6 +134,13 @@
       "when": 1792155317195,
       "tag": "0018_spotty_banshee",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792156921445,
+      "tag": "0019_same_mister_fear",
+      "breakpoints": true
     }
   ]
 }
