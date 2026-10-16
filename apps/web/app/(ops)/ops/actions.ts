@@ -4,7 +4,7 @@
  * 運営画面の Server Function。直接POSTでも呼べるため、権限は各処理（lib/ops/commands.ts → core）で判定する。
  * ここでは FormData を読み、処理を呼び、結果の文言を付けて元の画面へ戻すだけにする。
  */
-import { type Actor, type PaymentTargetStatus, type Result, systemClock } from "@siteoffer/core";
+import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -397,8 +397,7 @@ export async function createDeliveryAction(fd: FormData) {
 }
 
 const STEP_MESSAGES: Record<string, string> = {
-  building:
-    "制作に進めました。ワーカーが制作版を作ります（数秒〜。再読み込みで最新の状態を表示します）。版ができたら運営確認に回してください",
+  building: "制作を受け付けました。制作・検査が完了すると運営確認へ進みます。進行状態は自動更新されます",
   ops_review: "運営確認に回しました。版を確認し、顧客確認に回してください",
   delivered: "納品済みにしました",
 };
@@ -490,4 +489,18 @@ export async function retryDiscoveryJobAction(fd: FormData) {
     (d, a) => retryDiscoveryJobByOps(d, a, str(fd, "jobId")),
     "同じ条件の再試行ジョブを登録しました。収集一覧で新しいジョブを確認できます",
   );
+}
+
+export async function retryDeliveryBuildAction(deliveryId: string, buildId: string) {
+  const actor = await getCurrentActor();
+  const r = await retryDeliveryBuild(getDb(), systemClock, actor, deliveryId, buildId);
+  if (!r.ok)
+    return {
+      message:
+        r.error === "forbidden"
+          ? "運営のログイン状態を確認してください。"
+          : "制作状態が更新されています。最新の状態を確認してください。",
+    };
+  refresh();
+  return { message: "制作の再試行を受け付けました。進行状態を確認してください。" };
 }

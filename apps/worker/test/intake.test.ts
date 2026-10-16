@@ -9,8 +9,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   createDeliveryForContract,
+  DELIVERY_BUILD_LEASE_MS,
   decideAsCustomer,
   fixedClock,
+  retryDeliveryBuild,
   sendToCustomerReview,
   transitionDelivery,
 } from "@siteoffer/core";
@@ -22,6 +24,7 @@ import {
   contracts,
   type Db,
   deliveries,
+  deliveryBuilds,
   deliveryVersions,
   discoveryJobs,
   generationJobs,
@@ -33,6 +36,7 @@ import { createTestDb } from "@siteoffer/db/testing";
 import { createDiscoveryJob } from "@siteoffer/discovery";
 import { asc, desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { seedDeliveryBase } from "../../../packages/core/src/delivery/test-helpers.ts";
 import { buildWorkerDeps, resolveWorkerConfig } from "../src/config.ts";
 import { silentLogger, type WorkerDeps } from "../src/deps.ts";
 import {
@@ -199,8 +203,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     expect((await runIntakeOnce(env.deps, state)).deliveries).toEqual([]);
     expect(env.fake.calls.length).toBe(buildsBefore + 1);
 
-    // 運営確認で差し戻す → 新しい回
-    clock.advance(1000);
+    // 同じ時刻でも運営確認で差し戻すと新しい回になる
     const back = await transitionDelivery(db, clock, { kind: "system", job: "test" }, deliveryId, "building");
     if (!back.ok) throw new Error(back.error);
     const second = await intakeDeliveries(env.deps, state);
@@ -227,6 +230,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     await db.insert(deliveryVersions).values({
       deliveryId: d!.id,
       version: 3,
+      buildId: latest!.currentBuildId,
       artifactDir: path.join(env.deps.deliveryArtifactRoot, "manual"),
       createdAt: clock.now(),
     });
@@ -237,7 +241,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     expect(deliveryRoundKey(latest!)).toContain(d!.id);
   });
 
-  it("ビルドに失敗した回は記録して、同じプロセスでは繰り返さない", async () => {
+  it("ビルドに失敗した回はDBに残り、プロセスを再起動しても繰り返さない", async () => {
     const [d] = await db.select().from(deliveries).limit(1);
     clock.advance(1000);
     const back = await transitionDelivery(db, clock, { kind: "system", job: "test" }, d!.id, "building");
@@ -248,6 +252,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     const r = await intakeDeliveries(deps, state);
     expect(r[0]).toMatchObject({ deliveryId: d!.id, status: "failed" });
     expect(await intakeDeliveries(deps, state)).toEqual([]);
+    expect(await intakeDeliveries(deps, createIntakeState())).toEqual([]);
     expect(failing.calls.length).toBe(1);
     const [after] = await db.select().from(deliveries).where(eq(deliveries.id, d!.id));
     expect(after!.status).toBe("building");
@@ -261,12 +266,14 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
     await db
       .insert(contentEntries)
       .values({ companyId: contract!.companyId, slug: "delivery-news", updatedAt: clock.now() });
+    await retryLatest(db, clock, d!.id);
     vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "");
     expect(await intakeDeliveries(deps, createIntakeState())).toMatchObject([
       { status: "failed", reason: expect.stringContaining("SITEOFFER_CONTENT_ORIGIN") },
     ]);
     vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "https://cms.example.test");
-    // 前のテストでビルドに失敗した回（building のまま）を、ワーカーの再起動後（状態なし）として拾い直す。生成は前回の結果を使う
+    // 設定を直した後に、表示した失敗回を明示的に再試行する
+    await retryLatest(db, clock, d!.id);
     const r = await intakeDeliveries(deps, createIntakeState());
     expect(r).toMatchObject([{ deliveryId: d!.id, status: "version_added", movedToOpsReview: true }]);
     const [v] = await db
@@ -337,6 +344,88 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       vi.unstubAllEnvs();
     }
   });
+  it("並行する2つのワーカーは同じ制作を生成・ビルドしない", async () => {
+    const [d] = await db.select().from(deliveries).limit(1);
+    const back = await transitionDelivery(db, clock, { kind: "system", job: "test" }, d!.id, "building");
+    if (!back.ok) throw Error(back.error);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((r) => {
+        entered = r;
+      }),
+      gate = new Promise<void>((r) => {
+        release = r;
+      });
+    const builds = env.fake.calls.length;
+    const generator = vi.spyOn(env.deps.generation.generator, "generate");
+    const deps = {
+      ...env.deps,
+      siteBuilder: {
+        ...env.deps.siteBuilder,
+        buildDelivery: async (input: Parameters<typeof env.deps.siteBuilder.buildDelivery>[0]) => {
+          entered();
+          await gate;
+          return env.deps.siteBuilder.buildDelivery(input);
+        },
+      },
+    };
+    vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "https://cms.example.test");
+    try {
+      const first = intakeDeliveries(deps, createIntakeState());
+      await started;
+      expect(await intakeDeliveries(deps, createIntakeState())).toEqual([]);
+      release();
+      expect(await first).toMatchObject([{ status: "version_added", movedToOpsReview: true }]);
+      expect(env.fake.calls.length).toBe(builds + 1);
+      expect(generator.mock.calls.filter(([r]) => r.purpose === "delivery_site")).toHaveLength(1);
+    } finally {
+      release();
+      generator.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+  it("期限切れの古いワーカーが遅れて完了しても再試行後の版を上書きしない", async () => {
+    const [d] = await db.select().from(deliveries).limit(1);
+    const back = await transitionDelivery(db, clock, { kind: "system", job: "test" }, d!.id, "building");
+    if (!back.ok) throw Error(back.error);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((r) => {
+        entered = r;
+      }),
+      gate = new Promise<void>((r) => {
+        release = r;
+      });
+    const oldDeps = {
+      ...env.deps,
+      siteBuilder: {
+        ...env.deps.siteBuilder,
+        buildDelivery: async (input: Parameters<typeof env.deps.siteBuilder.buildDelivery>[0]) => {
+          entered();
+          await gate;
+          return env.deps.siteBuilder.buildDelivery(input);
+        },
+      },
+    };
+    vi.stubEnv("SITEOFFER_CONTENT_ORIGIN", "https://cms.example.test");
+    try {
+      const first = intakeDeliveries(oldDeps, createIntakeState());
+      await started;
+      clock.advance(DELIVERY_BUILD_LEASE_MS + 1);
+      expect(await intakeDeliveries(env.deps, createIntakeState())).toMatchObject([{ status: "failed" }]);
+      await retryLatest(db, clock, d!.id);
+      const second = await intakeDeliveries(env.deps, createIntakeState());
+      expect(second).toMatchObject([{ status: "version_added" }]);
+      const before = await db.select().from(deliveryVersions).where(eq(deliveryVersions.deliveryId, d!.id));
+      release();
+      expect(await first).toMatchObject([{ status: "skipped" }]);
+      expect(await db.select().from(deliveryVersions).where(eq(deliveryVersions.deliveryId, d!.id))).toEqual(before);
+      const [current] = await db.select().from(deliveries).where(eq(deliveries.id, d!.id));
+      expect(current!.status).toBe("ops_review");
+      expect(env.fake.calls.at(-1)).not.toBe(env.fake.calls.at(-2));
+    } finally {
+      release();
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 /** 完了した契約を直接作る（契約確認の流れは packages/core のテストで確認済み） */
@@ -363,3 +452,50 @@ async function completedContract(db: Db, companyId: string, proposalVersionId: s
     .returning();
   return c!.id;
 }
+
+async function retryLatest(db: Db, clock: ReturnType<typeof fixedClock>, deliveryId: string) {
+  let [ops] = await db.select().from(users).where(eq(users.role, "ops")).limit(1);
+  if (!ops)
+    [ops] = await db
+      .insert(users)
+      .values({ email: "retry-ops@example.test", passwordHash: "x", displayName: "運営", role: "ops" })
+      .returning();
+  const [d] = await db.select().from(deliveries).where(eq(deliveries.id, deliveryId));
+  const r = await retryDeliveryBuild(db, clock, { kind: "ops", userId: ops!.id }, deliveryId, d!.currentBuildId!);
+  if (!r.ok) throw Error(r.error);
+}
+
+it("受付上限を超える失敗・実行中案件があっても後続の待機案件を受け付ける", async () => {
+  const { db, close } = await createTestDb();
+  const clock = fixedClock("2026-10-16T00:00:00Z");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "siteoffer-intake-fairness-"));
+  try {
+    const env = await setupDemo(db, dir, clock);
+    let waiting = "";
+    for (let i = 0; i < 43; i++) {
+      const b = await seedDeliveryBase(db);
+      const made = await createDeliveryForContract(db, clock, b.ops, b.contract.id);
+      if (!made.ok) throw Error(made.error);
+      const started = await transitionDelivery(db, clock, b.ops, made.value.delivery.id, "building");
+      if (!started.ok) throw Error(started.error);
+      if (i === 42) waiting = started.value.id;
+      else
+        await db
+          .update(deliveryBuilds)
+          .set({
+            status: i < 21 ? "failed" : "running",
+            leaseUntil: i < 21 ? null : new Date(clock.now().getTime() + DELIVERY_BUILD_LEASE_MS),
+          })
+          .where(eq(deliveryBuilds.id, started.value.currentBuildId!));
+      clock.advance(1);
+    }
+    // 診断なしで停止するが、43番目の案件をこの受付で確実に処理する。
+    expect(await intakeDeliveries(env.deps, createIntakeState())).toEqual([
+      { deliveryId: waiting, status: "failed", reason: "生成の入力にする診断がない" },
+    ]);
+    expect(await intakeDeliveries(env.deps, createIntakeState())).toEqual([]);
+  } finally {
+    await close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

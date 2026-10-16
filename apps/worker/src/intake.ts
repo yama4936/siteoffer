@@ -1,13 +1,22 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
-import { type Actor, addDeliveryVersion, canTransition, transitionDelivery } from "@siteoffer/core";
+import {
+  type Actor,
+  claimDeliveryBuild,
+  completeDeliveryBuild,
+  type DeliveryBuildClaim,
+  failDeliveryBuild,
+  INTERRUPTED_BUILD_MESSAGE,
+  renewDeliveryBuild,
+} from "@siteoffer/core";
 import type { IntakePhase } from "@siteoffer/db";
 import {
   companies,
   contentEntries,
   contracts,
   deliveries,
-  deliveryVersions,
+  deliveryBuilds,
   designVersions,
   discoveryJobs,
   proposalVersions,
@@ -15,7 +24,7 @@ import {
 } from "@siteoffer/db";
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
-import { and, asc, desc, eq, gte } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
 import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
 import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
@@ -38,12 +47,10 @@ const BATCH = 20;
 export interface IntakeState {
   /** このプロセスで送った収集ジョブ（同じ行を何度も送らない。プロセスをまたぐ二重投入はキューの singletonKey と実行台帳で防ぐ） */
   sentDiscovery: Set<string>;
-  /** このプロセスで制作版の作成をあきらめた回（同じ失敗を繰り返さない）。キーは deliveryRoundKey */
-  failedDeliveryRounds: Set<string>;
 }
 
 export function createIntakeState(): IntakeState {
-  return { sentDiscovery: new Set(), failedDeliveryRounds: new Set() };
+  return { sentDiscovery: new Set() };
 }
 
 /** status=queued の収集ジョブを収集キューへ送る。送ったジョブIDを返す */
@@ -81,12 +88,10 @@ export async function intakeDiscoveryJobs(deps: WorkerDeps, state: IntakeState):
 
 type DeliveryRow = typeof deliveries.$inferSelect;
 
-/**
- * 制作の「回」のキー。制作（building）に入った時刻（deliveries.updated_at。状態の変更でだけ更新される）で区別する。
- * 運営確認・顧客確認から制作へ戻すと新しい回になり、新しい版を作る。
- */
-export function deliveryRoundKey(d: Pick<DeliveryRow, "id" | "updatedAt">): string {
-  return `delivery:${d.id}:${d.updatedAt.getTime()}`;
+/** 制作回のIDで区別する。同じ時刻のやり直しも別の依頼になる。 */
+export function deliveryRoundKey(d: Pick<DeliveryRow, "id" | "currentBuildId">): string {
+  if (!d.currentBuildId) throw Error("制作回が未受付です");
+  return `delivery:${d.id}:${d.currentBuildId}`;
 }
 
 export type DeliveryIntakeResult =
@@ -97,46 +102,93 @@ export type DeliveryIntakeResult =
 
 /**
  * 制作中（building）で、その回の制作版がない納品に版を作る。
- * 生成（delivery_site）→ Astroで納品サイトをビルド・検査 → addDeliveryVersion（system）→ 遷移規則に従って運営確認（ops_review）へ。
+ * DBの実行権限を保持して生成・ビルドし、版追加と運営確認への移行を一括確定する。
  * その回の版がすでにあり、まだ制作中のもの（前回の運営確認への移動が失敗した等）は、移動だけを行う。
  */
-export async function intakeDeliveries(deps: WorkerDeps, state: IntakeState): Promise<DeliveryIntakeResult[]> {
+export async function intakeDeliveries(deps: WorkerDeps, _state: IntakeState): Promise<DeliveryIntakeResult[]> {
   const rows = await deps.db
-    .select()
+    .select(getTableColumns(deliveries))
     .from(deliveries)
-    .where(eq(deliveries.status, "building"))
+    .leftJoin(
+      deliveryBuilds,
+      and(eq(deliveryBuilds.id, deliveries.currentBuildId), eq(deliveryBuilds.deliveryId, deliveries.id)),
+    )
+    // 失敗済み・他ワーカーの実行中案件が受付枠を埋めないよう、上限を適用する前に絞る。
+    .where(
+      and(
+        eq(deliveries.status, "building"),
+        isNull(deliveries.lockedVersionId),
+        or(
+          isNull(deliveryBuilds.id),
+          eq(deliveryBuilds.status, "queued"),
+          and(
+            eq(deliveryBuilds.status, "running"),
+            or(isNull(deliveryBuilds.leaseUntil), lte(deliveryBuilds.leaseUntil, deps.clock.now())),
+          ),
+        ),
+      ),
+    )
     .orderBy(asc(deliveries.updatedAt))
     .limit(BATCH);
   const results: DeliveryIntakeResult[] = [];
   for (const d of rows) {
-    const round = deliveryRoundKey(d);
-    if (state.failedDeliveryRounds.has(round)) continue;
-    const r = await processDelivery(deps, d, round);
-    if (r.status === "failed") {
-      state.failedDeliveryRounds.add(round);
-      deps.logger.error("納品の制作版を作れなかった", { deliveryId: d.id, reason: r.reason });
-    } else if (r.status !== "skipped") {
-      deps.logger.info("納品の制作版を処理した", { ...r });
+    const ownerId = randomUUID();
+    const claimed = await claimDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, d.id, ownerId);
+    if (!claimed.ok) {
+      if (claimed.error === "interrupted")
+        results.push({ deliveryId: d.id, status: "failed", reason: INTERRUPTED_BUILD_MESSAGE });
+      continue;
     }
+    if (claimed.value.completed) {
+      results.push({ deliveryId: d.id, status: "moved_to_ops_review", movedToOpsReview: true });
+      continue;
+    }
+    const current = claimed.value.delivery;
+    const claim = { deliveryId: d.id, buildId: current.currentBuildId!, ownerId };
+    let ping: Promise<unknown> | null = null;
+    const timer = setInterval(() => {
+      if (!ping)
+        ping = renewDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, claim)
+          .catch(() => false)
+          .finally(() => {
+            ping = null;
+          });
+    }, 20000);
+    timer.unref();
+    let r: DeliveryIntakeResult;
+    try {
+      r = await processDelivery(deps, current, deliveryRoundKey(current), claim);
+    } catch {
+      r = {
+        deliveryId: d.id,
+        status: "failed",
+        reason: "制作処理を完了できませんでした。ワーカーと設定を確認して再試行してください。",
+      };
+    } finally {
+      clearInterval(timer);
+      if (ping) await ping;
+    }
+    if (r.status === "failed") {
+      await failDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, claim, r.reason);
+      deps.logger.error("納品の制作版を作れなかった", { deliveryId: d.id, reason: r.reason });
+    } else if (r.status !== "skipped") deps.logger.info("納品の制作版を処理した", { ...r });
     results.push(r);
   }
   return results;
 }
 
-async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string): Promise<DeliveryIntakeResult> {
+async function processDelivery(
+  deps: WorkerDeps,
+  d: DeliveryRow,
+  round: string,
+  claim: DeliveryBuildClaim,
+): Promise<DeliveryIntakeResult> {
   const { db, clock } = deps;
-  const [existing] = await db
-    .select({ id: deliveryVersions.id })
-    .from(deliveryVersions)
-    .where(and(eq(deliveryVersions.deliveryId, d.id), gte(deliveryVersions.createdAt, d.updatedAt)))
-    .limit(1);
-  if (existing) {
-    const moved = await moveToOpsReview(deps, d.id);
-    return moved
-      ? { deliveryId: d.id, status: "moved_to_ops_review", movedToOpsReview: true }
-      : { deliveryId: d.id, status: "skipped", reason: "その回の制作版はあるが、運営確認へ進めない" };
-  }
-
+  const stale = (): DeliveryIntakeResult => ({
+    deliveryId: d.id,
+    status: "skipped",
+    reason: "制作の実行権限が更新されたため、この結果は反映しません",
+  });
   const [contract] = await db.select().from(contracts).where(eq(contracts.id, d.contractId));
   if (!contract) return { deliveryId: d.id, status: "failed", reason: "契約がない" };
   const [company] = await db.select().from(companies).where(eq(companies.id, contract.companyId));
@@ -184,23 +236,38 @@ async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string):
       const [design] = await db.select().from(designVersions).where(eq(designVersions.id, designId));
       if (!design || design.companyId !== company.id || design.status !== "approved")
         return { deliveryId: d.id, status: "failed", reason: "契約した提案の承認済みデザインがありません" };
-      input = await withDesignReference(input, design, path.join(deps.deliveryArtifactRoot, d.id, "reference"));
+      input = await withDesignReference(
+        input,
+        design,
+        path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId, "reference"),
+      );
     }
   }
   input = await withDeliveryRevision(db, d.id, company.id, input);
+  if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
   const gen = await runGenerationJob(genDeps, {
     idempotencyKey: `${round}:delivery_site`,
     companyId: company.id,
     purpose: "delivery_site",
     input,
   });
-  if (!gen.ok) return { deliveryId: d.id, status: "failed", reason: `生成に失敗した：${gen.message ?? gen.error}` };
+  if (!gen.ok)
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "サイトの生成に失敗しました。生成履歴と設定を確認して再試行してください。",
+    };
   if (gen.value.output === null) {
-    return { deliveryId: d.id, status: "failed", reason: `生成ジョブが ${gen.value.job.status}（出力なし）` };
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "生成結果を確認できませんでした。生成履歴を確認して再試行してください。",
+    };
   }
   const output = gen.value.output as SiteGenerationOutput;
 
-  const workDir = path.join(deps.deliveryArtifactRoot, d.id, String(d.updatedAt.getTime()));
+  if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
+  const workDir = path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId);
   const built = await deps.siteBuilder.buildDelivery({
     siteInput: {
       ...siteGenerationToSiteInput(output, { mode: "delivery" }),
@@ -212,41 +279,29 @@ async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string):
     return {
       deliveryId: d.id,
       status: "failed",
-      reason: `納品サイトのビルド・検査に失敗した（${built.reason}）：${built.message}`,
+      reason: "納品サイトのビルド・検査に失敗しました。生成内容と制作環境を確認して再試行してください。",
     };
   }
 
-  const added = await addDeliveryVersion(db, clock, INTAKE_ACTOR, d.id, {
+  const added = await completeDeliveryBuild(db, clock, INTAKE_ACTOR, claim, {
     artifactDir: built.distDir,
     generationJobId: gen.value.job.id,
   });
-  if (!added.ok) {
-    return { deliveryId: d.id, status: "failed", reason: `制作版を追加できなかった：${added.message ?? added.error}` };
-  }
-  const moved = await moveToOpsReview(deps, d.id);
+  if (!added.ok)
+    return added.error === "stale_build"
+      ? stale()
+      : {
+          deliveryId: d.id,
+          status: "failed",
+          reason: "制作版を確定できませんでした。制作の状態を確認して再試行してください。",
+        };
   return {
     deliveryId: d.id,
     status: "version_added",
     versionId: added.value.id,
     version: added.value.version,
-    movedToOpsReview: moved,
+    movedToOpsReview: true,
   };
-}
-
-/** 遷移規則（DELIVERY_TRANSITIONS）で許される場合だけ運営確認へ進める */
-async function moveToOpsReview(deps: WorkerDeps, deliveryId: string): Promise<boolean> {
-  const [d] = await deps.db.select().from(deliveries).where(eq(deliveries.id, deliveryId));
-  if (!d || !canTransition(d.status, "ops_review")) return false;
-  const r = await transitionDelivery(
-    deps.db,
-    deps.clock,
-    INTAKE_ACTOR,
-    deliveryId,
-    "ops_review",
-    "ワーカーが制作版を作成したため運営確認へ",
-  );
-  if (!r.ok) deps.logger.warn("運営確認へ進められなかった", { deliveryId, error: r.error, message: r.message });
-  return r.ok;
 }
 
 /** 契約で選んだ提案版の診断。なければ企業の最新の評価済み診断 */

@@ -29,9 +29,37 @@ export const deliveries = pgTable("deliveries", {
    * 顧客の承認・修正依頼はこの版のリンクでだけ受け付ける（別の版・前の回のリンクを拒否する）
    */
   reviewVersionId: uuid("review_version_id"),
+  /** 時刻ではなく制作回のIDで現在の依頼を識別する */
+  currentBuildId: uuid("current_build_id"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+export const deliveryBuildStatus = pgEnum("delivery_build_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+export const deliveryBuilds = pgTable(
+  "delivery_builds",
+  {
+    id: id(),
+    deliveryId: uuid("delivery_id")
+      .notNull()
+      .references(() => deliveries.id),
+    previousId: uuid("previous_id"),
+    status: deliveryBuildStatus("status").notNull().default("queued"),
+    ownerId: uuid("owner_id"),
+    leaseUntil: ts("lease_until"),
+    error: text("error"),
+    createdAt: createdAt(),
+    startedAt: ts("started_at"),
+    finishedAt: ts("finished_at"),
+  },
+  (t) => [index("delivery_builds_delivery").on(t.deliveryId, t.createdAt)],
+);
 
 export const deliveryVersions = pgTable(
   "delivery_versions",
@@ -41,6 +69,7 @@ export const deliveryVersions = pgTable(
       .notNull()
       .references(() => deliveries.id),
     version: integer("version").notNull(),
+    buildId: uuid("build_id").references(() => deliveryBuilds.id),
     artifactDir: text("artifact_dir"),
     generationJobId: uuid("generation_job_id").references(() => generationJobs.id),
     createdAt: createdAt(),

@@ -51,6 +51,7 @@ export default async function DeliveryReviewPage({
   const eligible =
     selected.artifactDir &&
     selected.version > rejectedVersion &&
+    (!d.delivery.currentBuildId || selected.buildId === d.delivery.currentBuildId) &&
     (d.delivery.status === "ops_review" ||
       (d.delivery.status === "customer_review" && d.delivery.reviewVersionId === selected.id));
   const viewVersion = (v: typeof selected) => ({ id: v.id, version: v.version, available: !!v.artifactDir });

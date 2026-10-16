@@ -4,17 +4,20 @@ import {
   contracts,
   type DbOrTx,
   deliveries,
+  deliveryBuilds,
   deliveryVersions,
   deployments,
   generationJobs,
 } from "@siteoffer/db";
-import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, max } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { authorize } from "../permissions/policy.ts";
 import { type IssuedShareLink, issueShareLink } from "../share-link/share-link.ts";
+import type { DeliveryBuildClaim } from "./build.ts";
+import { beginDeliveryBuild } from "./build-state.ts";
 
 /**
  * 納品（15・18章）。
@@ -92,6 +95,7 @@ const snapshot = (d: DeliveryRow) => ({
   status: d.status,
   lockedVersionId: d.lockedVersionId,
   reviewVersionId: d.reviewVersionId,
+  currentBuildId: d.currentBuildId,
 });
 
 // ---------------------------------------------------------------------------
@@ -149,6 +153,8 @@ export interface AddDeliveryVersionInput {
   artifactDir: string;
   /** 生成ジョブ（generation_jobs.id）。手作業の版などで無ければ省略 */
   generationJobId?: string | null;
+  /** ワーカーの完了処理だけが渡す実行権限 */
+  buildClaim?: DeliveryBuildClaim;
 }
 
 export type AddDeliveryVersionError =
@@ -156,7 +162,8 @@ export type AddDeliveryVersionError =
   | "not_found"
   | "invalid_state"
   | "invalid_input"
-  | "generation_job_not_found";
+  | "generation_job_not_found"
+  | "stale_build";
 
 /**
  * 制作版を追加する。版番号は納品ごとに1から連番。既存の版は書き換えない（再生成は新しい版）。
@@ -182,18 +189,45 @@ export async function addDeliveryVersion(
     const delivery = await lockDelivery(tx, deliveryId);
     if (!delivery) return err("not_found");
     if (delivery.status === "delivered") return err("invalid_state", "納品済みの案件には版を追加できません");
+    const [build] = delivery.currentBuildId
+      ? await tx
+          .select()
+          .from(deliveryBuilds)
+          .where(and(eq(deliveryBuilds.id, delivery.currentBuildId), eq(deliveryBuilds.deliveryId, delivery.id)))
+          .for("update")
+      : [];
+    if (input.buildClaim) {
+      const claim = input.buildClaim;
+      if (
+        staff.value.kind !== "system" ||
+        delivery.status !== "building" ||
+        delivery.lockedVersionId ||
+        delivery.currentBuildId !== claim.buildId ||
+        claim.deliveryId !== delivery.id ||
+        !build ||
+        build.status !== "running" ||
+        build.ownerId !== claim.ownerId ||
+        !build.leaseUntil ||
+        build.leaseUntil <= clock.now()
+      )
+        return err("stale_build");
+    } else if (build?.status === "running") return err("invalid_state", "制作処理の実行中は別の版を追加できません");
     if (jobId !== null) {
       const [job] = await tx
-        .select({ companyId: generationJobs.companyId })
+        .select({ companyId: generationJobs.companyId, purpose: generationJobs.purpose, status: generationJobs.status })
         .from(generationJobs)
         .where(eq(generationJobs.id, jobId));
-      if (!job) return err("generation_job_not_found");
+      if (!job || (input.buildClaim && (job.purpose !== "delivery_site" || job.status !== "succeeded")))
+        return err("generation_job_not_found");
       // 別企業の生成ジョブを紐づけない
       const [contract] = await tx
         .select({ companyId: contracts.companyId })
         .from(contracts)
         .where(eq(contracts.id, delivery.contractId));
-      if (job.companyId !== null && job.companyId !== contract?.companyId) {
+      if (
+        (input.buildClaim && job.companyId !== contract?.companyId) ||
+        (job.companyId !== null && job.companyId !== contract?.companyId)
+      ) {
         return err("generation_job_not_found", "この企業の生成ジョブではありません");
       }
     }
@@ -204,14 +238,21 @@ export async function addDeliveryVersion(
     const version = (agg?.v ?? 0) + 1;
     const [row] = await tx
       .insert(deliveryVersions)
-      .values({ deliveryId: delivery.id, version, artifactDir, generationJobId: jobId, createdAt: clock.now() })
+      .values({
+        deliveryId: delivery.id,
+        version,
+        artifactDir,
+        generationJobId: jobId,
+        buildId: delivery.currentBuildId,
+        createdAt: clock.now(),
+      })
       .returning();
     await recordEvent(tx, clock, {
       actor: staff.value,
       action: "delivery.version_add",
       targetType: "delivery",
       targetId: delivery.id,
-      after: { versionId: row!.id, version, artifactDir, generationJobId: jobId },
+      after: { versionId: row!.id, version, artifactDir, generationJobId: jobId, buildId: delivery.currentBuildId },
     });
     return ok(row!);
   });
@@ -252,16 +293,41 @@ export async function transitionDelivery(
       return err("invalid_transition", `${delivery.status} から ${to} へは変更できません`);
     }
     if (to === "ops_review") {
+      const [build] = delivery.currentBuildId
+        ? await tx
+            .select()
+            .from(deliveryBuilds)
+            .where(and(eq(deliveryBuilds.id, delivery.currentBuildId), eq(deliveryBuilds.deliveryId, delivery.id)))
+            .for("update")
+        : [];
+      if (build?.status === "running") return err("invalid_transition", "制作処理が実行中です。完了までお待ちください");
       const [v] = await tx
         .select({ id: deliveryVersions.id })
         .from(deliveryVersions)
-        .where(eq(deliveryVersions.deliveryId, delivery.id))
+        .where(
+          and(
+            eq(deliveryVersions.deliveryId, delivery.id),
+            isNotNull(deliveryVersions.artifactDir),
+            delivery.currentBuildId ? eq(deliveryVersions.buildId, delivery.currentBuildId) : undefined,
+          ),
+        )
         .limit(1);
-      if (!v) return err("no_version", "運営確認に回す制作版がありません");
+      if (!v) return err("no_version", "今回の制作に対応する版がありません。制作の完了をお待ちください");
+      if (build && build.status !== "succeeded")
+        await tx
+          .update(deliveryBuilds)
+          .set({ status: "succeeded", leaseUntil: null, finishedAt: clock.now() })
+          .where(eq(deliveryBuilds.id, build.id));
     }
+    const build = to === "building" ? await beginDeliveryBuild(tx, clock, delivery) : null;
     const [row] = await tx
       .update(deliveries)
-      .set({ status: to, reviewVersionId: null, updatedAt: clock.now() })
+      .set({
+        status: to,
+        reviewVersionId: null,
+        currentBuildId: build?.id ?? delivery.currentBuildId,
+        updatedAt: clock.now(),
+      })
       .where(and(eq(deliveries.id, delivery.id), eq(deliveries.status, delivery.status)))
       .returning();
     await recordEvent(tx, clock, {
@@ -319,6 +385,8 @@ export async function sendToCustomerReview(
       .from(deliveryVersions)
       .where(and(eq(deliveryVersions.id, input.versionId), eq(deliveryVersions.deliveryId, delivery.id)));
     if (!version) return err("version_not_found");
+    if (delivery.currentBuildId && version.buildId !== delivery.currentBuildId)
+      return err("version_requires_revision", "前の制作回の版は再提出できません。今回の制作版を確認してください");
 
     const [rejected] = await tx
       .select({ version: max(deliveryVersions.version) })
@@ -442,6 +510,7 @@ export async function recordPublication(
 // 読み取り（運営）
 
 export interface DeliveryDetail {
+  build: typeof deliveryBuilds.$inferSelect | null;
   delivery: DeliveryRow;
   companyId: string;
   companyName: string;
@@ -472,6 +541,12 @@ export async function getDeliveryDetail(
     .from(deliveryVersions)
     .where(eq(deliveryVersions.deliveryId, deliveryId))
     .orderBy(desc(deliveryVersions.version));
+  const [build] = head.delivery.currentBuildId
+    ? await db
+        .select()
+        .from(deliveryBuilds)
+        .where(and(eq(deliveryBuilds.id, head.delivery.currentBuildId), eq(deliveryBuilds.deliveryId, deliveryId)))
+    : [];
   const versionIds = versions.map((v) => v.id);
   const approvalRows =
     versionIds.length === 0
@@ -488,6 +563,7 @@ export async function getDeliveryDetail(
     .orderBy(asc(deployments.createdAt));
   return ok({
     delivery: head.delivery,
+    build: build ?? null,
     companyId: head.companyId,
     companyName: head.companyName,
     contractId: head.delivery.contractId,

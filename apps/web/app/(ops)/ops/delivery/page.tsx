@@ -8,6 +8,8 @@ import {
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
+import { DeliveryBuildRetry } from "@/components/ops/delivery-build-retry";
+import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { SubmitButton } from "@/components/ops/submit-button";
 import { Flash, Forbidden, ReturnTo } from "@/components/ops/ui";
 import {
@@ -18,7 +20,6 @@ import {
   SubHeading,
   statusTone,
 } from "@/components/ops/ui-parts-2";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,6 +93,7 @@ export default async function DeliveryPage({
         </p>
       )}
       <Flash searchParams={sp} />
+      {details.value.some((d) => d.delivery.status === "building") && <DiscoveryRefresh />}
       <nav className="mb-6 flex flex-wrap gap-3 text-sm" aria-label="制作・公開の作業">
         <Link className="text-primary underline" href="/ops">
           今日の仕事へ
@@ -164,7 +166,8 @@ export default async function DeliveryPage({
           description={
             <>
               流れ：{DELIVERY_STATUSES.map((st) => label(DELIVERY_STATUS_LABEL, st)).join(" → ")}。
-              制作版はワーカーが作ります。状態はこの画面を<a href={here}>再読み込み</a>すると最新になります。
+              制作版はワーカーが作ります。制作中は状態を自動更新します。<a href={here}>手動で更新する</a>
+              こともできます。
             </>
           }
         >
@@ -310,14 +313,26 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
       a.decision === "changes_requested" &&
       d.versions.find((v) => v.id === a.deliveryVersionId)?.version === rejectedVersion,
   );
-  const hasRevision = d.versions.some((v) => v.version > rejectedVersion && !!v.artifactDir);
+  const hasRevision = d.versions.some(
+    (v) =>
+      v.version > rejectedVersion &&
+      !!v.artifactDir &&
+      (!delivery.currentBuildId || v.buildId === delivery.currentBuildId),
+  );
+  const interrupted = d.build?.status === "running" && (!d.build.leaseUntil || d.build.leaseUntil <= new Date());
+  const failed = d.build?.status === "failed" || interrupted;
   const reviewOptions =
     status === "customer_review"
       ? reviewVersion
         ? [{ id: reviewVersion.id, label: `第${reviewVersion.version}版（顧客確認中）` }]
         : []
       : d.versions
-          .filter((v) => v.artifactDir && v.version > rejectedVersion)
+          .filter(
+            (v) =>
+              v.artifactDir &&
+              v.version > rejectedVersion &&
+              (!delivery.currentBuildId || v.buildId === delivery.currentBuildId),
+          )
           .map((v) => ({ id: v.id, label: `第${v.version}版` }));
   const locked = delivery.lockedVersionId ? (versionLabel.get(delivery.lockedVersionId) ?? "固定済み") : "未固定";
   const steps = DELIVERY_STATUSES.map((st) => ({ key: st, label: label(DELIVERY_STATUS_LABEL, st) }));
@@ -365,37 +380,49 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
           {status === "info_gathering" ? (
             <>
               <p className="text-muted-foreground text-sm">
-                制作に進めると、ワーカーが制作版を作ります（制作中で版のない納品を拾って処理します。数秒〜）。
+                制作に進めると、新しい制作依頼を受け付けます。制作・検査が完了すると運営確認へ進みます。
               </p>
               <StepButton deliveryId={delivery.id} to="building" here={here}>
                 制作に進める
               </StepButton>
             </>
           ) : null}
-          {status === "building" ? (
-            d.versions.length === 0 ? (
-              <Alert variant="warning">
-                <AlertDescription>
-                  <p>
-                    ワーカーが制作版を作っています（数秒〜）。<a href={here}>再読み込み</a>すると版が表示されます。
+          {status === "building" && (
+            <section aria-label="制作処理の状態" className="space-y-3">
+              <p className="font-medium text-sm">
+                {failed
+                  ? "制作が停止しています"
+                  : d.build?.status === "running"
+                    ? "制作・検査を進めています"
+                    : "制作の受付待ちです"}
+              </p>
+              {failed ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    {interrupted
+                      ? "制作処理との接続が途切れました。ワーカーの稼働を確認してください。"
+                      : d.build?.error}
                   </p>
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <>
-                <p className="text-muted-foreground text-sm">
-                  {rejectedVersion && !hasRevision
-                    ? "修正版の作成待ちです。制作処理の進捗を確認し、新しい版ができるまでお待ちください。"
-                    : "制作版があります。修正依頼との照合を含め、内容を確認するため運営確認に回してください。"}
+                  <p className="text-xs text-muted-foreground">
+                    設定や入力内容を確認して再試行してください。新しい制作依頼として処理します。
+                  </p>
+                  <DeliveryBuildRetry key={d.build!.id} deliveryId={delivery.id} buildId={d.build!.id} />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  完了すると新しい版が運営確認へ進みます。再登録は不要です。
                 </p>
-                {hasRevision && (
-                  <StepButton deliveryId={delivery.id} to="ops_review" here={here}>
-                    運営確認に回す
-                  </StepButton>
-                )}
-              </>
-            )
-          ) : null}
+              )}
+              <Link href="/ops/processing" className="text-sm text-primary underline">
+                ワーカーの状態を確認
+              </Link>
+              {hasRevision && d.build?.status !== "running" && (
+                <StepButton deliveryId={delivery.id} to="ops_review" here={here}>
+                  運営確認に回す
+                </StepButton>
+              )}
+            </section>
+          )}
           {status === "ops_review" || status === "customer_review" ? (
             <>
               <p className="text-muted-foreground text-sm">

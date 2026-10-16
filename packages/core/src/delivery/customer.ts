@@ -6,6 +6,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { verifyShareLink } from "../share-link/share-link.ts";
+import { beginDeliveryBuild } from "./build-state.ts";
 import type { DeliveryRow } from "./delivery.ts";
 
 /**
@@ -174,12 +175,13 @@ export async function decideAsCustomer(
       .returning();
 
     const approved = input.decision === "approved";
+    const build = approved ? null : await beginDeliveryBuild(tx, clock, delivery);
     const [row] = await tx
       .update(deliveries)
       .set(
         approved
           ? { status: "ready", lockedVersionId: version.id, reviewVersionId: null, updatedAt: now }
-          : { status: "building", reviewVersionId: null, updatedAt: now },
+          : { status: "building", reviewVersionId: null, currentBuildId: build!.id, updatedAt: now },
       )
       .where(
         and(

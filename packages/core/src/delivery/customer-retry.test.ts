@@ -109,12 +109,14 @@ it("修正前の版をそのまま、またはもっと古い版を顧客確認�
       comment: "修正",
     }),
   );
-  must(await transitionDelivery(db, clock, b.ops, b.delivery.id, "ops_review"));
+  expect(await transitionDelivery(db, clock, b.ops, b.delivery.id, "ops_review")).toMatchObject({
+    ok: false,
+    error: "no_version",
+  });
   expect(await sendToCustomerReview(db, clock, b.ops, b.delivery.id, { versionId: b.v.id })).toMatchObject({
     ok: false,
     error: "version_requires_revision",
   });
-  must(await transitionDelivery(db, clock, b.ops, b.delivery.id, "building"));
   const v2 = must(await addDeliveryVersion(db, clock, b.ops, b.delivery.id, { artifactDir: "/fixture/v2" }));
   must(await transitionDelivery(db, clock, b.ops, b.delivery.id, "ops_review"));
   const review = must(await sendToCustomerReview(db, clock, b.ops, b.delivery.id, { versionId: v2.id }));
@@ -125,7 +127,10 @@ it("修正前の版をそのまま、またはもっと古い版を顧客確認�
       comment: "もう一度修正",
     }),
   );
-  must(await transitionDelivery(db, clock, b.ops, b.delivery.id, "ops_review"));
+  expect(await transitionDelivery(db, clock, b.ops, b.delivery.id, "ops_review")).toMatchObject({
+    ok: false,
+    error: "no_version",
+  });
   for (const versionId of [b.v.id, v2.id])
     expect(await sendToCustomerReview(db, clock, b.ops, b.delivery.id, { versionId })).toMatchObject({
       ok: false,
