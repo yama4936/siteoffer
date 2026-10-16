@@ -17,6 +17,7 @@ import {
   DEFAULT_SETTINGS,
   err,
   extendAssignment,
+  findSalesContract,
   liftSuppression,
   markRewardPaid,
   nextSalesOfferVersion,
@@ -628,6 +629,8 @@ export async function makeSellable(
     await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.companyId, input.companyId)).for("update");
     const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
     if (!company) return fail("not_found");
+    if (await findSalesContract(tx, company.id))
+      return fail("company_contracted", "契約確認中または契約済みのため、営業へ引き継げません");
     const latest = await latestProposalVersion(tx, company.id);
     if (input.expectedProposalVersionId && latest?.id !== input.expectedProposalVersionId.toLowerCase())
       return fail("proposal_changed", "確認した提案版から更新されています。最新版を確認して選び直してください");

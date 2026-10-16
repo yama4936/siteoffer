@@ -5,6 +5,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { findSalesContract } from "../contract/customer.ts";
 import { authorizeUser } from "../permissions/policy.ts";
 import { isTermsReadyForSales } from "../reward/rule.ts";
 import { getSalesOffer } from "../sales-offer/offer.ts";
@@ -21,6 +22,7 @@ export type ClaimError =
   | "forbidden"
   | "company_not_found"
   | "company_not_sellable"
+  | "company_contracted"
   | "offer_not_ready"
   | "offer_changed"
   | "company_suppressed"
@@ -53,6 +55,8 @@ export async function claimAssignment(
 
       const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("update");
       if (!company) return fail("company_not_found");
+      if (await findSalesContract(tx, company.id))
+        return fail("company_contracted", "契約確認中または契約済みのため、新しい担当は確保できません");
       if (company.suppression !== "none") fail("company_suppressed", `営業抑止中（${company.suppression}）`);
       if (company.pipelineStatus !== "sellable") fail("company_not_sellable");
 

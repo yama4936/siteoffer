@@ -173,7 +173,7 @@ export default async function ContractsPage({
 
       <Section
         title="契約（成約報告）"
-        description="営業ユーザーの成約報告だけでは報酬は発生しません。運営が契約資料を確認して契約完了にしたときに、報酬が1回だけ発生します。入金と報酬は別に記録します。"
+        description="営業ユーザーの成約報告だけでは報酬は発生しません。運営が契約資料を確認して契約完了にしたときに、報酬が1回だけ発生します。契約確定時に納品準備も作成します。入金と報酬は別に記録します。"
       >
         {list.value.length === 0 ? <EmptyState>契約はまだありません</EmptyState> : null}
         <div className="grid gap-4">
@@ -207,6 +207,15 @@ export default async function ContractsPage({
                   {c.status === "completed" ? (
                     <>
                       <div className="tabular-nums">完了 {fmtDate(c.completedAt)}</div>
+                      <Link
+                        href={`/ops/delivery?contract=${c.id}`}
+                        className="inline-flex rounded-md bg-primary px-3 py-2 font-medium text-primary-foreground"
+                      >
+                        納品準備を開く
+                      </Link>
+                      <p className="text-xs text-muted-foreground">
+                        会社情報・素材・ドメインを確認し、制作へ進みます。
+                      </p>
                       <details>
                         <summary className={summaryClass}>契約時点の写し</summary>
                         <div className="mt-2">

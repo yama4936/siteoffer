@@ -1,4 +1,4 @@
-import { type Actor, err, ok } from "@siteoffer/core";
+import { type Actor, err, hasSalesContract, ok } from "@siteoffer/core";
 import { type DbOrTx, users } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
 import { isUuid } from "./form";
@@ -25,7 +25,7 @@ export async function getReviewInbox(
   const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",o.id as "salesOfferId",
    v.id as "versionId",v.version,v.status as "versionStatus",coalesce(v.created_at,c.created_at) as since,
    coalesce(v.status='in_review' and c.suppression='none',false) as pending,
-   coalesce(v.status='approved' and c.suppression='none' and (c.pipeline_status<>'sellable' or (o.id is null and not exists(select 1 from contracts ct where ct.company_id=c.id and ct.status='completed'))),false) as ready
+   coalesce(v.status='approved' and c.suppression='none' and not ${hasSalesContract(sql`c.id`)} and (c.pipeline_status<>'sellable' or o.id is null),false) as ready
    from companies c left join proposals p on p.company_id=c.id
    left join lateral(select id,version,status,created_at from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
    left join lateral(select id from sales_offers where company_id=c.id and is_public=true order by version desc limit 1) o on true

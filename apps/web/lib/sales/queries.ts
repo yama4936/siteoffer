@@ -11,6 +11,7 @@ import {
   can,
   err,
   getSalesOffer,
+  hasSalesContract,
   isActiveStatus,
   isTermsReadyForSales,
   listActivities,
@@ -37,7 +38,7 @@ import {
   websites,
 } from "@siteoffer/db";
 import { type CallScript, callScriptSchema, type ProposalText, proposalTextSchema } from "@siteoffer/schemas";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, not, sql } from "drizzle-orm";
 
 type QueryError = "forbidden" | "not_found";
 
@@ -170,6 +171,7 @@ export async function listSellableCompanies(
     .where(
       and(
         eq(companies.pipelineStatus, "sellable"),
+        not(hasSalesContract(companies.id)),
         prefecture ? eq(companies.prefecture, prefecture) : undefined,
         city ? eq(companies.city, city) : undefined,
         industry ? eq(companies.industry, industry) : undefined,
@@ -209,7 +211,7 @@ export async function getCompanyFilterOptions(db: DbOrTx): Promise<CompanyFilter
   const rows = await db
     .selectDistinct({ prefecture: companies.prefecture, city: companies.city, industry: companies.industry })
     .from(companies)
-    .where(eq(companies.pipelineStatus, "sellable"));
+    .where(and(eq(companies.pipelineStatus, "sellable"), not(hasSalesContract(companies.id))));
   const prefectures = new Set<string>();
   const cities = new Map<string, { prefecture: string | null; city: string }>();
   const industries = new Set<string>();
@@ -392,15 +394,24 @@ export async function findReadableCompany(db: DbOrTx, actor: Actor | null, compa
   const [company] = await db.select().from(companies).where(eq(companies.id, companyId));
   if (!company) return err("not_found");
   const active = (await activeAssignmentsByCompany(db, [company.id])).get(company.id);
+  const customerContracts = await db
+    .select({ userId: contracts.salesUserId, id: contracts.assignmentId, salesOfferId: contracts.salesOfferId })
+    .from(contracts)
+    .where(
+      and(eq(contracts.companyId, company.id), inArray(contracts.status, ["reported", "under_review", "completed"])),
+    )
+    .orderBy(desc(contracts.reportedAt), desc(contracts.id));
+  const ownContract = customerContracts.find((c) => c.userId === user.value.userId);
+  const owned = ownContract ?? (active?.userId === user.value.userId ? active : undefined);
   const resource = {
     type: "company" as const,
     companyId: company.id,
-    sellable: company.pipelineStatus === "sellable",
-    assignedUserId: active?.userId ?? null,
+    sellable: company.pipelineStatus === "sellable" && customerContracts.length === 0,
+    assignedUserId: owned?.userId ?? active?.userId ?? null,
   };
   // 見られない企業は存在も明かさない
   if (!can(user.value, "read", resource)) return err("not_found");
-  return ok({ user: user.value, company, active, resource });
+  return ok({ user: user.value, company, active, owned, resource });
 }
 
 /** 企業詳細。営業可能な企業か自分の担当企業だけ（can の company.read） */
@@ -411,8 +422,8 @@ export async function getCompanyDetail(
 ): Promise<Result<CompanyDetail, QueryError>> {
   const found = await findReadableCompany(db, actor, companyId);
   if (!found.ok) return found;
-  const { user: viewer, company, active, resource } = found.value;
-  const shared = sharedState(viewer.userId, active);
+  const { user: viewer, company, active, owned, resource } = found.value;
+  const shared = sharedState(viewer.userId, owned ?? active);
 
   const sites = await db
     .select({ url: websites.url, domain: websites.domain, isPrimary: websites.isPrimary })
@@ -430,7 +441,7 @@ export async function getCompanyDetail(
     ? await db.select().from(findings).where(eq(findings.auditId, audit.id)).orderBy(asc(findings.itemCode))
     : [];
 
-  const mine = active?.userId === viewer.userId ? active : null;
+  const mine = owned;
   const bound = await getSalesOffer(db, company.id, mine?.salesOfferId);
   const pv = bound?.proposal ?? null;
   const terms = bound ? [offerTerms(bound)] : [];

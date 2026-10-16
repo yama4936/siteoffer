@@ -67,6 +67,7 @@ const MESSAGES: Record<string, string> = {
   not_found: "対象が見つかりません。",
   assignment_not_found: "担当が見つかりません。",
   company_not_found: "企業が見つかりません。",
+  company_contracted: "契約確認中または契約済みです。新しい担当は確保できません。",
   company_not_sellable: "この企業は現在、営業候補として公開されていません。",
   company_suppressed: "この企業は営業拒否などにより、現在は担当を確保できません。",
   already_assigned: "この企業は他の営業ユーザーが担当中です。",
@@ -77,6 +78,7 @@ const MESSAGES: Record<string, string> = {
   not_active: "この担当はすでに終了しています。",
   invalid_input: "入力内容を確認してください。",
   stronger_suppression_exists: "この企業にはより強い営業抑止が記録済みです。",
+  contract_pending: "契約確認中です。担当を手放す場合は、運営に成約報告の差し戻しを依頼してください。",
   already_reported: "この担当はすでに成約報告済みです。",
   invalid_state: "現在の状態ではこの操作は行えません。",
   secret_like_value:

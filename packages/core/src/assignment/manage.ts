@@ -1,4 +1,4 @@
-import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, type DbOrTx } from "@siteoffer/db";
+import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, contracts, type DbOrTx } from "@siteoffer/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import { type Clock, HOUR } from "../common/clock.ts";
@@ -19,7 +19,7 @@ import {
   snapshot,
 } from "./shared.ts";
 
-export type ReleaseError = "not_found" | "forbidden" | "not_active";
+export type ReleaseError = "not_found" | "forbidden" | "not_active" | "contract_pending";
 
 /**
  * 担当の解除。営業は自分の担当を手放せる。運営は全件を解除できる。
@@ -39,6 +39,20 @@ export async function releaseAssignment(
     if (!loaded.ok) return fail(loaded.error);
     const before = loaded.value;
     if (!isActiveStatus(before.status)) fail("not_active");
+    if (
+      (
+        await tx
+          .select({ id: contracts.id })
+          .from(contracts)
+          .where(
+            and(
+              eq(contracts.assignmentId, before.id),
+              inArray(contracts.status, ["reported", "under_review", "completed"]),
+            ),
+          )
+      ).length
+    )
+      return fail("contract_pending", "契約確認中の担当は変更・解除できません。先に運営が成約報告を差し戻してください");
     const now = clock.now();
     const [after] = await tx
       .update(assignments)
@@ -63,6 +77,7 @@ export type ReassignError =
   | "not_found"
   | "not_active"
   | "same_user"
+  | "contract_pending"
   | "limit_reached"
   | "company_suppressed"
   | "already_assigned"
@@ -97,6 +112,23 @@ export async function reassignAssignment(
       if (!loaded.ok) return fail(loaded.error);
       const before = loaded.value;
       if (!isActiveStatus(before.status)) fail("not_active");
+      if (
+        (
+          await tx
+            .select({ id: contracts.id })
+            .from(contracts)
+            .where(
+              and(
+                eq(contracts.assignmentId, before.id),
+                inArray(contracts.status, ["reported", "under_review", "completed"]),
+              ),
+            )
+        ).length
+      )
+        return fail(
+          "contract_pending",
+          "契約確認中の担当は変更・解除できません。先に運営が成約報告を差し戻してください",
+        );
       if (before.userId === input.toUserId) fail("same_user");
 
       const user = await lockActiveSalesUser(tx, input.toUserId);
