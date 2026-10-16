@@ -105,6 +105,7 @@ export async function runTx<T, E extends string>(
 export function snapshot(a: Assignment) {
   return {
     companyId: a.companyId,
+    salesOfferId: a.salesOfferId,
     userId: a.userId,
     status: a.status,
     expiresAt: a.expiresAt?.toISOString() ?? null,

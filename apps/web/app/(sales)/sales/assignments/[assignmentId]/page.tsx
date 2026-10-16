@@ -8,7 +8,7 @@ import { ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/compone
 import { BackLink, SectionCard } from "@/components/sales/section-card";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
 import { AssignmentStatusBadge, ContractStatusBadge } from "@/components/sales/status-badge";
-import { ExternalLink } from "@/components/sales/views";
+import { ExternalLink, TermsTable } from "@/components/sales/views";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -261,7 +261,7 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
         )}
       </SectionCard>
 
-      {d.showReport && (
+      {(d.showReport || d.contracts.some((c) => c.status === "reported" || c.status === "under_review")) && (
         <SectionCard title="成約報告">
           {d.terms.length === 0 && (
             <Alert variant="warning">
@@ -269,12 +269,23 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
               <AlertDescription>販売条件・報酬条件：未設定（運営に確認してください）</AlertDescription>
             </Alert>
           )}
-          <ContractReportForm
-            action={reportDealAction}
-            assignmentId={a.id}
-            proposalVersionId={d.proposalVersionId}
-            terms={d.terms.map((t) => ({ id: t.id, label: `${t.name}（${formatYen(t.price)}）` }))}
-          />
+          <TermsTable terms={d.terms} />
+          {d.showReport ? (
+            <ContractReportForm
+              action={reportDealAction}
+              assignmentId={a.id}
+              salesOfferId={d.salesOfferId}
+              proposalVersionId={d.proposalVersionId}
+              terms={d.terms.map((t) => ({ id: t.id, label: `${t.name}（${formatYen(t.price)}）` }))}
+            />
+          ) : (
+            <p
+              role="status"
+              className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"
+            >
+              成約報告を受け付けました。運営が契約資料を確認しています。報酬は契約完了時に確定します。
+            </p>
+          )}
         </SectionCard>
       )}
 

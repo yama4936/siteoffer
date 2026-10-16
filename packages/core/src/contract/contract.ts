@@ -1,5 +1,6 @@
 import {
   assignments,
+  companies,
   contracts,
   type DbOrTx,
   productTerms,
@@ -18,6 +19,7 @@ import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { authorizeUser } from "../permissions/policy.ts";
 import type { Reward } from "../reward/reward.ts";
 import { calculateRewardAmount, parseRewardRule, type RewardRule, termsReadinessIssues } from "../reward/rule.ts";
+import { getSalesOffer } from "../sales-offer/offer.ts";
 
 export type Contract = typeof contracts.$inferSelect;
 
@@ -68,7 +70,9 @@ export type ContractError =
   | "terms_not_found"
   | "terms_not_ready"
   | "document_required"
-  | "proposal_version_mismatch";
+  | "proposal_version_mismatch"
+  | "offer_not_ready"
+  | "offer_mismatch";
 
 const REPORTABLE_ASSIGNMENT_STATUSES = [
   "claimed",
@@ -99,6 +103,7 @@ export async function reportContract(
   actor: Actor,
   input: {
     assignmentId: string;
+    salesOfferId?: string | null;
     productTermsId?: string | null;
     proposalVersionId?: string | null;
     documentRef?: string | null;
@@ -128,6 +133,23 @@ export async function reportContract(
       if (open) return err("already_reported");
       if (!(REPORTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status)) return err("invalid_state");
 
+      // Existing assignments with no historical binding require an explicit selection from the current offer.
+      if (!a.salesOfferId)
+        await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, a.companyId)).for("share");
+      const bound = await getSalesOffer(tx, a.companyId, a.salesOfferId);
+      if (a.salesOfferId && !bound)
+        return err("offer_not_ready", "引き継ぎ条件を確認できません。運営に相談してください");
+      if (input.salesOfferId && input.salesOfferId.toLowerCase() !== bound?.offer.id)
+        return err("offer_mismatch", "引き継ぎ条件が更新されています。画面を開き直して確認してください");
+      if (bound) {
+        if (!a.salesOfferId && !input.salesOfferId)
+          return err("offer_mismatch", "運営が確認した引き継ぎ条件を画面で確認してください");
+        if (
+          (input.productTermsId && input.productTermsId.toLowerCase() !== bound.terms.id) ||
+          (input.proposalVersionId && input.proposalVersionId.toLowerCase() !== bound.proposal.id)
+        )
+          return err("offer_mismatch", "担当案件の提案版・販売条件と一致しません");
+      }
       const now = clock.now();
       const [contract] = await tx
         .insert(contracts)
@@ -136,8 +158,9 @@ export async function reportContract(
           assignmentId: a.id,
           salesUserId: actor.userId,
           status: "reported",
-          productTermsId: input.productTermsId ?? null,
-          proposalVersionId: input.proposalVersionId ?? null,
+          salesOfferId: bound?.offer.id ?? null,
+          productTermsId: bound?.terms.id ?? input.productTermsId ?? null,
+          proposalVersionId: bound?.proposal.id ?? input.proposalVersionId ?? null,
           documentRef: input.documentRef?.trim() || null,
           reportNote: input.reportNote?.trim() || null,
           reportedAt: now,
@@ -146,7 +169,7 @@ export async function reportContract(
         .returning();
       const [assignmentAfter] = await tx
         .update(assignments)
-        .set({ status: "contract_pending", lastActivityAt: now })
+        .set({ status: "contract_pending", lastActivityAt: now, salesOfferId: bound?.offer.id ?? a.salesOfferId })
         .where(eq(assignments.id, a.id))
         .returning();
 
@@ -258,11 +281,24 @@ export async function confirmContract(
     const documentRef = input.documentRef?.trim() || contract.documentRef;
     if (!documentRef) return err("document_required", "契約資料を登録してから確認してください");
 
-    const termsId = input.productTermsId ?? contract.productTermsId;
+    const bound = contract.salesOfferId ? await getSalesOffer(tx, contract.companyId, contract.salesOfferId) : null;
+    if (contract.salesOfferId && !bound) return err("offer_not_ready", "契約の引き継ぎ条件を確認できません");
+    if (
+      bound &&
+      (contract.productTermsId !== bound.terms.id ||
+        contract.proposalVersionId !== bound.proposal.id ||
+        (input.productTermsId && input.productTermsId.toLowerCase() !== bound.terms.id) ||
+        (input.proposalVersionId && input.proposalVersionId.toLowerCase() !== bound.proposal.id))
+    )
+      return err(
+        "offer_mismatch",
+        "報告済みの販売条件・提案版は変更できません。条件変更が必要な場合は理由を添えて差し戻してください",
+      );
+    const termsId = bound?.terms.id ?? input.productTermsId ?? contract.productTermsId;
     if (!termsId) return err("terms_not_found");
-    const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, termsId));
+    const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, termsId)).for("share");
     if (!terms) return err("terms_not_found");
-    const issues = termsReadinessIssues(terms);
+    const issues = termsReadinessIssues(bound ? { ...terms, active: true } : terms);
     if (issues.length > 0) return err("terms_not_ready", issues.join(","));
     const rule = parseRewardRule(terms.rewardRule);
     if (!rule.ok) return err("terms_not_ready", rule.error);

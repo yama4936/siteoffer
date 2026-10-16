@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_DESIGN_BRIEF } from "@siteoffer/core";
-import { companies, type Db, designVersions, proposalDocuments, proposalVersions } from "@siteoffer/db";
+import { companies, type Db, designVersions, proposalDocuments, proposalVersions, salesOffers } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { renderProposalPdf, serveProposalPdf } from "./proposal-pdf";
-import { seedCandidate, seedUser } from "./test-seed";
+import { seedCandidate, seedTerms, seedUser } from "./test-seed";
 
 let db: Db, close: () => Promise<void>;
 beforeEach(async () => {
@@ -52,8 +52,21 @@ it("PDFを保存し、キャッシュ後も権限・承認・版の整合性を�
   expect(bytes.subarray(0, 4).toString()).toBe("%PDF");
   expect((await PDFDocument.load(bytes)).getPageCount()).toBeGreaterThanOrEqual(4);
   await db.update(companies).set({ pipelineStatus: "sellable" }).where(eq(companies.id, c.company.id));
+  const terms = await seedTerms(db, {
+    version: "fixture-offer",
+    price: 100000,
+    rewardRule: { type: "fixed", amount: 10000 },
+  });
+  await db
+    .insert(salesOffers)
+    .values({ companyId: c.company.id, version: 1, productTermsId: terms.id, proposalVersionId: c.version!.id });
   const again = await serveProposalPdf(db, sales, "proposal", c.version!.id);
-  expect(Buffer.from(await again.arrayBuffer())).toEqual(bytes);
+  expect(again.status).toBe(200);
+  expect(
+    createHash("sha256")
+      .update(Buffer.from(await again.arrayBuffer()))
+      .digest("hex"),
+  ).toBe(createHash("sha256").update(bytes).digest("hex"));
   const documents = await db.select().from(proposalDocuments);
   expect(documents).toHaveLength(1);
   expect((documents[0]!.snapshot as { status: string }).status).toContain("架空デモ");

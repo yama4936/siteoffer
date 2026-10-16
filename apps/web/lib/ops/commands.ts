@@ -47,6 +47,7 @@ import {
   productTerms,
   proposals,
   proposalVersions,
+  salesOffers,
   users,
   websites,
 } from "@siteoffer/db";
@@ -591,7 +592,7 @@ export function sellableIssueText(issue: SellableIssue): string {
 /**
  * 営業可能にする（AC-09・14章）。サーバー側で次をすべて確かめる：
  * 運営だけ／最新の提案版が承認済み／販売条件・報酬条件が設定済み（isTermsReadyForSales）／営業抑止がない。
- * 使った提案版と条件の版は操作履歴に残す（companies に条件の版を持つ列がないため。報告参照）。
+ * 使った提案版と条件の版をsales_offersに固定し、操作履歴と一括で保存する。
  */
 export async function makeSellable(
   { db, clock }: OpsDeps,
@@ -635,27 +636,23 @@ export async function makeSellable(
       if (!t) return fail("terms_not_found", "販売条件・報酬条件の版が見つかりません");
       terms = t;
     }
-    const issues = sellableIssues({ company, latestVersion: latest, terms });
+    const [previousOffer] = await tx
+      .select()
+      .from(salesOffers)
+      .where(eq(salesOffers.companyId, company.id))
+      .orderBy(desc(salesOffers.version))
+      .limit(1);
+    const issues = sellableIssues({ company, latestVersion: latest, terms }).filter(
+      (issue) => issue !== "already_sellable" || !!previousOffer,
+    );
     if (
       input.allowExisting &&
       issues.length === 1 &&
       issues[0] === "already_sellable" &&
       input.expectedProposalVersionId
     ) {
-      const [last] = await tx
-        .select({ after: auditEvents.after })
-        .from(auditEvents)
-        .where(
-          and(
-            eq(auditEvents.targetType, "company"),
-            eq(auditEvents.targetId, company.id),
-            eq(auditEvents.action, "company.make_sellable"),
-          ),
-        )
-        .orderBy(desc(auditEvents.createdAt), desc(auditEvents.id))
-        .limit(1);
-      const recorded = last?.after as { proposalVersionId?: string; productTermsId?: string } | undefined;
-      if (recorded?.proposalVersionId === latest?.id && recorded?.productTermsId === terms?.id) return company;
+      if (previousOffer?.proposalVersionId === latest?.id && previousOffer?.productTermsId === terms?.id)
+        return company;
     }
     if (
       input.expectedCompanyUpdatedAt !== undefined &&
@@ -664,6 +661,17 @@ export async function makeSellable(
       return fail("company_changed", "企業の状態が更新されています。現在の内容を確認して選び直してください");
     if (issues.length > 0) return fail(issues[0]!, issues.map(sellableIssueText).join(" / "));
     const now = clock.now();
+    const [offer] = await tx
+      .insert(salesOffers)
+      .values({
+        companyId: company.id,
+        version: (previousOffer?.version ?? 0) + 1,
+        productTermsId: terms!.id,
+        proposalVersionId: latest!.id,
+        createdBy: ops.value.userId,
+        createdAt: now,
+      })
+      .returning();
     const [after] = await tx
       .update(companies)
       .set({ pipelineStatus: "sellable", updatedAt: now })
@@ -681,6 +689,7 @@ export async function makeSellable(
         proposalVersion: latest!.version,
         productTermsId: terms!.id,
         productTermsVersion: terms!.version,
+        salesOfferId: offer!.id,
       },
     });
     return after!;

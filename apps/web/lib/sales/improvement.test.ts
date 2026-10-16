@@ -4,7 +4,17 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { type Actor, claimAssignment, fixedClock } from "@siteoffer/core";
-import { companies, type Db, siteAudits, users, websites } from "@siteoffer/db";
+import {
+  companies,
+  type Db,
+  productTerms,
+  proposals,
+  proposalVersions,
+  salesOffers,
+  siteAudits,
+  users,
+  websites,
+} from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -127,6 +137,24 @@ describe("権限", () => {
     expect(r.ok && r.value.artifactDir).toBe(dir);
     expect(r.ok && r.value.audit?.totalScore).toBe("48.5");
 
+    const [t] = await db
+      .insert(productTerms)
+      .values({
+        version: "improvement-test",
+        name: "架空条件",
+        scope: {},
+        price: 100000,
+        rewardRule: { type: "fixed", amount: 10000 },
+      })
+      .returning();
+    const [p] = await db.insert(proposals).values({ companyId: c.id }).returning();
+    const [v] = await db
+      .insert(proposalVersions)
+      .values({ proposalId: p!.id, version: 1, status: "approved" })
+      .returning();
+    await db
+      .insert(salesOffers)
+      .values({ companyId: c.id, version: 1, productTermsId: t!.id, proposalVersionId: v!.id });
     const claimed = await claimAssignment(db, fixedClock("2026-10-14T00:00:00Z"), me.actor, c.id);
     expect(claimed.ok).toBe(true);
     await db.update(companies).set({ pipelineStatus: "on_hold" }).where(eq(companies.id, c.id));

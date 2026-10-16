@@ -20,7 +20,8 @@ export function ReadyCandidates({ data }: { data: SalesReadiness }) {
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
   const c = data.selected;
-  const eligible = c?.versionStatus === "approved" && c.status !== "sellable" && c.suppression === "none";
+  const eligible =
+    c?.versionStatus === "approved" && (c.status !== "sellable" || !c.salesOfferId) && c.suppression === "none";
   const terms = data.terms.find((t) => t.id === termsId);
   function href(page: number, company?: string) {
     const q = new URLSearchParams({ page: String(page) });

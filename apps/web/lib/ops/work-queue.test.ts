@@ -103,7 +103,8 @@ it("superseded proposal reviews move to sales readiness after approval", async (
     .values({ proposalId: c.proposal.id, version: 2, status: "approved", auditId: c.audit.id });
   expect((await queue()).items).toMatchObject([{ group: "sales_ready", id: c.company.id }]);
   await db.update(companies).set({ pipelineStatus: "sellable" }).where(eq(companies.id, c.company.id));
-  expect((await queue()).items).toHaveLength(0);
+  // A legacy sellable flag alone does not prove which offer was handed off.
+  expect((await queue()).items).toMatchObject([{ group: "sales_ready", id: c.company.id }]);
 });
 it("preparation only includes eligible companies and moves to design when started", async () => {
   const c = await seedCandidate(db, { versionStatus: null });

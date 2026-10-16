@@ -1,28 +1,15 @@
+import { productTerms } from "./product-terms.ts";
+import { salesOffers } from "./sales-offer.ts";
+
+export { productTerms } from "./product-terms.ts";
+
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { assignments } from "./assignment.ts";
 import { createdAt, id, ts } from "./common.ts";
 import { companies } from "./companies.ts";
 import { proposalVersions } from "./proposal.ts";
 import { users } from "./users.ts";
-
-/**
- * 販売条件と報酬条件（14章）。版を持ち、契約時点の内容は contracts.snapshot に写す。
- * 金額の値は未決。テストではテスト内の値だけを使う。
- */
-export const productTerms = pgTable("product_terms", {
-  id: id(),
-  version: text("version").notNull().unique(),
-  name: text("name").notNull(),
-  scope: jsonb("scope").notNull(),
-  /** 円。未設定なら営業可能にできない */
-  price: integer("price"),
-  monthlyFee: integer("monthly_fee"),
-  /** 報酬の算式（定額・割合など）。未設定なら営業可能にできない */
-  rewardRule: jsonb("reward_rule"),
-  active: boolean("active").notNull().default(true),
-  createdAt: createdAt(),
-});
 
 export const contractStatus = pgEnum("contract_status", [
   "reported",
@@ -46,6 +33,7 @@ export const contracts = pgTable(
       .notNull()
       .references(() => users.id),
     status: contractStatus("status").notNull().default("reported"),
+    salesOfferId: uuid("sales_offer_id").references(() => salesOffers.id),
     productTermsId: uuid("product_terms_id").references(() => productTerms.id),
     proposalVersionId: uuid("proposal_version_id").references(() => proposalVersions.id),
     /** 価格・範囲・提案版・ドメイン対応・継続費用・担当・報酬条件の写し。完了時に固定 */

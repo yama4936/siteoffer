@@ -116,6 +116,7 @@ export async function reassignAssignment(
         .insert(assignments)
         .values({
           companyId: before.companyId,
+          salesOfferId: before.salesOfferId,
           userId: input.toUserId,
           status: before.status,
           claimedAt: now,

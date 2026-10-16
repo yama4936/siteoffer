@@ -40,7 +40,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       ? `/sales/companies/${c.id}/site/index.html`
       : null;
   const action = d.showClaim ? (
-    <ClaimButton action={claimAction} companyId={c.id} />
+    <ClaimButton action={claimAction} companyId={c.id} salesOfferId={d.salesOfferId!} />
   ) : d.assignment === "mine" && d.myAssignmentId ? (
     <Link href={`/sales/assignments/${d.myAssignmentId}`} className="review-primary">
       担当案件を開く <ArrowRight size={18} />

@@ -76,7 +76,7 @@ export default async function ContractsPage({
         description={
           <>
             販売価格・報酬額は未決です。既存の版は書き換えず、新しい版を作ります。完了した契約は完了時の写しで固定され、後の変更の影響を受けません（AC-16）。
-            価格・報酬条件が未設定の版は保存できますが、その版では営業可能にできません。
+            価格・報酬条件が未設定の版は保存できますが、その版では営業可能にできません。無効化は新しい担当確保を止め、すでに引き継いだ商談の条件は維持します。
           </>
         }
       >
@@ -224,21 +224,37 @@ export default async function ContractsPage({
                       <form action={confirmContractAction} className="grid gap-2">
                         <ReturnTo path={here} />
                         <input type="hidden" name="contractId" value={c.id} />
-                        <NativeSelect
-                          name="productTermsId"
-                          defaultValue={c.productTermsId ?? ""}
-                          aria-label="条件の版"
-                          className="h-8"
-                        >
-                          <option value="">条件の版（報告時の版を使う）</option>
-                          {terms.value
-                            .filter((t) => isTermsReadyForSales(t))
-                            .map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.version}：{yen(t.price)} / {rewardRuleText(t.rewardRule)}
-                              </option>
-                            ))}
-                        </NativeSelect>
+                        {c.salesOfferId ? (
+                          <div className="rounded border p-2 text-sm">
+                            <p className="font-medium">報告時の引き継ぎ条件で確定</p>
+                            {terms.value
+                              .filter((t) => t.id === c.productTermsId)
+                              .map((t) => (
+                                <p key={t.id}>
+                                  {t.name}（{t.version}）<br />
+                                  {yen(t.price)} / 月額 {t.monthlyFee === null ? "未設定" : yen(t.monthlyFee)}
+                                  <br />
+                                  {rewardRuleText(t.rewardRule)}
+                                </p>
+                              ))}
+                          </div>
+                        ) : (
+                          <NativeSelect
+                            name="productTermsId"
+                            defaultValue={c.productTermsId ?? ""}
+                            aria-label="条件の版"
+                            className="h-8"
+                          >
+                            <option value="">条件の版（報告時の版を使う）</option>
+                            {terms.value
+                              .filter((t) => isTermsReadyForSales(t))
+                              .map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.version}：{yen(t.price)} / {rewardRuleText(t.rewardRule)}
+                                </option>
+                              ))}
+                          </NativeSelect>
+                        )}
                         <Input
                           name="documentRef"
                           placeholder="契約資料の参照（未登録なら必須）"

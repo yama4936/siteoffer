@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { boolean, index, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { createdAt, id, ts } from "./common.ts";
 import { companies } from "./companies.ts";
+import { salesOffers } from "./sales-offer.ts";
 import { users } from "./users.ts";
 
 /** 担当の状態（18章「担当」）。released・lost・completed 以外が「有効な担当」 */
@@ -34,6 +35,7 @@ export const assignments = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
+    salesOfferId: uuid("sales_offer_id").references(() => salesOffers.id),
     status: assignmentStatus("status").notNull().default("claimed"),
     claimedAt: ts("claimed_at").notNull(),
     expiresAt: ts("expires_at"),

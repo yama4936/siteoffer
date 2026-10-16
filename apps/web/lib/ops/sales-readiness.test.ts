@@ -117,7 +117,7 @@ it("最新版未承認・営業抑止・営業可能済みを候補から除き�
   await db.update(companies).set({ suppression: "none", pipelineStatus: "sellable" });
   expect(await getSalesReadiness(db, s.actor, { companyId: s.c.id })).toMatchObject({
     ok: true,
-    value: { total: 0, selected: { status: "sellable" } },
+    value: { total: 1, selected: { status: "sellable", salesOfferId: null } },
   });
 });
 it("選択肢は有効な条件だけを返し、価格・報酬未設定は使用不可として示す", async () => {

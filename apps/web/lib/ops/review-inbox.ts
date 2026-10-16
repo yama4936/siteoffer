@@ -22,12 +22,13 @@ export async function getReviewInbox(
   )
     return err("invalid_input");
   const query = input.query?.trim() ?? "";
-  const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",
+  const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",o.id as "salesOfferId",
    v.id as "versionId",v.version,v.status as "versionStatus",coalesce(v.created_at,c.created_at) as since,
    coalesce(v.status='in_review' and c.suppression='none',false) as pending,
-   coalesce(v.status='approved' and c.suppression='none' and c.pipeline_status<>'sellable',false) as ready
+   coalesce(v.status='approved' and c.suppression='none' and (c.pipeline_status<>'sellable' or (o.id is null and not exists(select 1 from contracts ct where ct.company_id=c.id and ct.status='completed'))),false) as ready
    from companies c left join proposals p on p.company_id=c.id
    left join lateral(select id,version,status,created_at from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
+   left join lateral(select id from sales_offers where company_id=c.id order by version desc limit 1) o on true
    where true ${input.companyId ? sql`and c.id=${input.companyId}` : sql``} ${query ? sql`and position(lower(${query}) in lower(c.name||' '||coalesce(c.prefecture,'')||' '||coalesce(c.city,'')||' '||coalesce(c.industry,'')))>0` : sql``}`;
   const count = await db.execute(
     sql`select count(*)::int as "all",count(*) filter(where pending)::int as pending,count(*) filter(where ready)::int as ready from (${base}) inbox`,
@@ -55,6 +56,7 @@ export async function getReviewInbox(
         pending: boolean;
         since: Date | string;
         updatedAt: Date | string;
+        salesOfferId: string | null;
       }[];
     }
   ).rows;
@@ -78,6 +80,7 @@ export async function getReviewInbox(
       versionStatus: r.versionStatus,
       since: new Date(r.since).toISOString(),
       updatedAt: new Date(r.updatedAt).toISOString(),
+      salesOfferId: r.salesOfferId,
     })),
   });
 }

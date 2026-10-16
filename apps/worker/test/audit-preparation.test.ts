@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { fixedClock, recordEvent } from "@siteoffer/core";
-import { auditEvents, auditRequests, companies, type Db, siteAudits, users, websites } from "@siteoffer/db";
+import {
+  assignments,
+  auditEvents,
+  auditRequests,
+  companies,
+  contracts,
+  type Db,
+  proposals,
+  siteAudits,
+  users,
+  websites,
+} from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -286,3 +297,53 @@ it("UUIDの大文字小文字を正規化し、実行時にも初回診断の条
     "別の診断",
   );
 });
+
+it.each(["assignment", "contract", "proposal"])(
+  "%s履歴がある旧案件を初回診断の一覧・受付・実行へ戻さない",
+  async (kind) => {
+    async function progress(companyId: string) {
+      if (kind === "proposal") {
+        await db.insert(proposals).values({ companyId });
+      } else {
+        const [a] = await db
+          .insert(assignments)
+          .values({
+            companyId,
+            userId: ops.userId,
+            status: "completed",
+            claimedAt: clock.now(),
+            lastActivityAt: clock.now(),
+          })
+          .returning();
+        if (kind === "contract")
+          await db.insert(contracts).values({
+            companyId,
+            assignmentId: a!.id,
+            salesUserId: ops.userId,
+            status: "completed",
+            reportedAt: clock.now(),
+          });
+      }
+    }
+    const selected = await seed();
+    await progress(selected.c.id);
+    expect(await listAuditPreparation(db, ops, { companyId: selected.c.id })).toMatchObject({
+      ok: true,
+      value: { total: 0 },
+    });
+    expect(await requestPreparedAudits(db, clock, ops, [selected.input])).toMatchObject({
+      ok: true,
+      value: { items: [{ ok: false }] },
+    });
+    expect(await db.select().from(auditRequests)).toHaveLength(0);
+    const queued = await seed();
+    expect(await requestPreparedAudits(db, clock, ops, [queued.input])).toMatchObject({
+      ok: true,
+      value: { items: [{ ok: true }] },
+    });
+    await progress(queued.c.id);
+    expect(
+      await validateAuditRequest(db, { companyId: queued.c.id, requestKey: `ops:${queued.input.requestId}` }),
+    ).toContain("営業・提案の履歴");
+  },
+);

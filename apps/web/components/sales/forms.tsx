@@ -43,11 +43,20 @@ function Hint({ children }: { children: ReactNode }) {
 /** ラジオボタン・チェックボックスと文言を横に並べるラベル */
 const choiceLabelClass = "items-start font-normal leading-snug [&>input]:mt-0.5";
 
-export function ClaimButton({ action, companyId }: { action: SalesAction; companyId: string }) {
+export function ClaimButton({
+  action,
+  companyId,
+  salesOfferId,
+}: {
+  action: SalesAction;
+  companyId: string;
+  salesOfferId: string;
+}) {
   const [state, formAction, pending] = useActionState(action, undefined);
   return (
     <form action={formAction} className="grid max-w-xl gap-3">
       <input type="hidden" name="companyId" value={companyId} />
+      <input type="hidden" name="salesOfferId" value={salesOfferId} />
       <Button type="submit" size="lg" className="w-full sm:w-fit" disabled={pending}>
         {pending ? "確保しています…" : "この企業の担当を確保する"}
       </Button>
@@ -195,37 +204,49 @@ export function DomainPreferenceForm({
 export function ContractReportForm({
   action,
   assignmentId,
+  salesOfferId,
   proposalVersionId,
   terms,
 }: {
   action: SalesAction;
   assignmentId: string;
+  salesOfferId: string | null;
   proposalVersionId: string | null;
   terms: { id: string; label: string }[];
 }) {
   const [state, formAction, pending] = useActionState(action, undefined);
+  const [documentRef, setDocumentRef] = useState("");
+  const [reportNote, setReportNote] = useState("");
   return (
     <form action={formAction} className="grid max-w-xl gap-4">
       <input type="hidden" name="assignmentId" value={assignmentId} />
       {proposalVersionId && <input type="hidden" name="proposalVersionId" value={proposalVersionId} />}
-      <Field label="販売条件" htmlFor="contract-product-terms">
-        <NativeSelect id="contract-product-terms" name="productTermsId" defaultValue={terms[0]?.id ?? ""}>
-          <option value="">選択しない（運営が確認時に設定）</option>
-          {terms.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-            </option>
-          ))}
-        </NativeSelect>
-      </Field>
+      {salesOfferId && <input type="hidden" name="salesOfferId" value={salesOfferId} />}
+      {terms[0] && <input type="hidden" name="productTermsId" value={terms[0].id} />}
+      <p className="text-sm">
+        運営が確認した販売条件で報告します。条件の変更が必要な場合は、営業からの相談で運営に連絡してください。
+      </p>
       <Field label="契約資料（ファイル名・保管場所など）" htmlFor="contract-document-ref">
-        <Input id="contract-document-ref" name="documentRef" maxLength={500} />
+        <Input
+          id="contract-document-ref"
+          name="documentRef"
+          maxLength={500}
+          value={documentRef}
+          onChange={(e) => setDocumentRef(e.target.value)}
+        />
       </Field>
       <Field label="報告メモ" htmlFor="contract-report-note">
-        <Textarea id="contract-report-note" name="reportNote" rows={3} maxLength={2000} />
+        <Textarea
+          id="contract-report-note"
+          name="reportNote"
+          rows={3}
+          maxLength={2000}
+          value={reportNote}
+          onChange={(e) => setReportNote(e.target.value)}
+        />
       </Field>
       <Hint>成約報告だけでは報酬は確定しません。運営が契約資料を確認し、契約完了にした時点で報酬が発生します。</Hint>
-      <Button type="submit" className="w-fit" disabled={pending}>
+      <Button type="submit" className="w-fit" disabled={pending || !salesOfferId || terms.length !== 1}>
         成約を報告する
       </Button>
       <ActionMessage state={state} />

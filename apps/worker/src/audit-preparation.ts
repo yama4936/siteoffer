@@ -2,7 +2,7 @@ import { type Actor, type Clock, err, ok } from "@siteoffer/core";
 import type { DbOrTx } from "@siteoffer/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { isAuditOperator, requestAuditByOps } from "./audit-request.ts";
+import { isAuditOperator, requestAuditByOps, salesHistoryExists } from "./audit-request.ts";
 import { checkPublicHttpUrl } from "./url.ts";
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -21,6 +21,7 @@ export async function listAuditPreparation(
     from companies c left join lateral (select id,url from websites where company_id=c.id and kind='current'
       order by is_primary desc,created_at asc limit 1) w on true
     where c.suppression='none' and c.official_site_status='confirmed' and c.pipeline_status in ('collected','site_confirmed')
+      and not ${salesHistoryExists(sql`c.id`)}
       and not exists(select 1 from audit_requests r where r.company_id=c.id)
       and not exists(select 1 from site_audits a where a.company_id=c.id)
       and not exists(select 1 from design_versions d where d.company_id=c.id)

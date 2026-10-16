@@ -17,6 +17,7 @@ export * from "./image-assets.ts";
 export * from "./pipeline-handoff.ts";
 export * from "./proposal.ts";
 export * from "./review-draft.ts";
+export * from "./sales-offer.ts";
 export * from "./settings.ts";
 export * from "./share-link.ts";
 export * from "./site-audit.ts";

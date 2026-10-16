@@ -1,13 +1,13 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { companies, type Db, proposalVersions } from "@siteoffer/db";
+import { companies, type Db, proposalVersions, salesOffers } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { serveSalesPreview } from "../sales/site-preview";
 import { serveOpsPreview } from "./preview";
-import { seedCandidate, seedUser } from "./test-seed";
+import { seedCandidate, seedTerms, seedUser } from "./test-seed";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -29,6 +29,14 @@ it("sales sees only the approved version of a readable company", async () => {
   await db.update(proposalVersions).set({ demoArtifactDir: root }).where(eq(proposalVersions.id, version!.id));
   expect((await serveSalesPreview(db, sales, company.id, "/index.html")).status).toBe(404);
   await db.update(companies).set({ pipelineStatus: "sellable" }).where(eq(companies.id, company.id));
+  const terms = await seedTerms(db, {
+    version: "fixture-offer",
+    price: 100000,
+    rewardRule: { type: "fixed", amount: 10000 },
+  });
+  await db
+    .insert(salesOffers)
+    .values({ companyId: company.id, version: 1, productTermsId: terms.id, proposalVersionId: version!.id });
   await db.insert(proposalVersions).values({
     proposalId: proposal.id,
     version: 2,

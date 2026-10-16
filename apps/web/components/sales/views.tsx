@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import { FindingSections } from "@/components/audit/finding-sections";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FINDING_STATUS_LABELS, formatYen, SUPPRESSION_LABELS } from "@/lib/sales/labels";
 import type { FindingView, SharedAssignmentState, TermsView } from "@/lib/sales/queries";
 import { cn } from "@/lib/utils";
@@ -205,34 +204,41 @@ export function TermsTable({ terms }: { terms: TermsView[] }) {
     );
   return (
     <div className="space-y-2">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>商品</TableHead>
-            <TableHead>販売価格</TableHead>
-            <TableHead>継続費用（月額）</TableHead>
-            <TableHead>報酬条件</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {terms.map((t) => (
-            <TableRow key={t.id}>
-              <TableCell>
-                <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-                  <span className="font-medium">{t.name}</span>
-                  <span className="text-muted-foreground text-xs">（版 {t.version}）</span>
-                  {!t.ready && <Badge variant="destructive">条件未設定</Badge>}
-                </div>
-              </TableCell>
-              <TableCell className="whitespace-nowrap tabular-nums">{formatYen(t.price)}</TableCell>
-              <TableCell className="whitespace-nowrap tabular-nums">
+      {terms.map((t) => (
+        <section
+          key={t.id}
+          aria-label="販売条件の詳細"
+          className="min-w-0 space-y-4 rounded-xl border bg-background p-4"
+        >
+          <div className="min-w-0 space-y-1">
+            <p className="break-words font-semibold">{t.name}</p>
+            <p className="break-all text-muted-foreground text-xs">版 {t.version}</p>
+            {!t.ready && <Badge variant="destructive">条件未設定</Badge>}
+          </div>
+          <dl className="grid gap-4 rounded-lg bg-muted/50 p-3 sm:grid-cols-3">
+            <div>
+              <dt className="text-muted-foreground text-xs">販売価格</dt>
+              <dd className="mt-1 font-semibold text-lg tabular-nums">{formatYen(t.price)}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">継続費用（月額）</dt>
+              <dd className="mt-1 font-semibold text-lg tabular-nums">
                 {t.monthlyFee === null ? "なし・未設定" : formatYen(t.monthlyFee)}
-              </TableCell>
-              <TableCell>{rewardText(t)}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">報酬条件</dt>
+              <dd className="mt-1 font-medium text-sm tabular-nums">{rewardText(t)}</dd>
+            </div>
+          </dl>
+          {t.scope && (
+            <div className="space-y-1">
+              <p className="text-muted-foreground text-xs">提供範囲</p>
+              <p className="whitespace-pre-wrap break-words text-sm">{t.scope}</p>
+            </div>
+          )}
+        </section>
+      ))}
       <p className="text-muted-foreground text-xs">
         報酬は運営が契約資料を確認して契約完了にした時点で発生します。価格・報酬条件は運営が設定します。
       </p>

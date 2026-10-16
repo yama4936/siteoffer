@@ -10,6 +10,7 @@ import {
   authorize,
   can,
   err,
+  getSalesOffer,
   isActiveStatus,
   isTermsReadyForSales,
   listActivities,
@@ -29,8 +30,6 @@ import {
   domainPreferences,
   findings,
   productTerms,
-  proposals,
-  proposalVersions,
   rewardAdjustments,
   rewards,
   siteAudits,
@@ -89,14 +88,19 @@ const clean = (v: string | undefined) => {
 
 /** 有効な担当（企業ごとに最大1件）。担当者のIDは呼び出し側で自分かどうかの判定だけに使う */
 async function activeAssignmentsByCompany(db: DbOrTx, companyIds: string[]) {
-  if (companyIds.length === 0) return new Map<string, { id: string; userId: string }>();
+  if (companyIds.length === 0) return new Map<string, { id: string; userId: string; salesOfferId: string | null }>();
   const rows = await db
-    .select({ id: assignments.id, userId: assignments.userId, companyId: assignments.companyId })
+    .select({
+      id: assignments.id,
+      userId: assignments.userId,
+      companyId: assignments.companyId,
+      salesOfferId: assignments.salesOfferId,
+    })
     .from(assignments)
     .where(
       and(inArray(assignments.companyId, companyIds), inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES])),
     );
-  return new Map(rows.map((r) => [r.companyId, { id: r.id, userId: r.userId }]));
+  return new Map(rows.map((r) => [r.companyId, { id: r.id, userId: r.userId, salesOfferId: r.salesOfferId }]));
 }
 
 function sharedState(actorUserId: string, a: { id: string; userId: string } | undefined) {
@@ -229,6 +233,7 @@ export interface TermsView {
   version: string;
   price: number | null;
   monthlyFee: number | null;
+  scope?: string;
   reward: RewardRule | null;
   /** 販売条件・報酬条件の両方が設定済みか（14章） */
   ready: boolean;
@@ -257,6 +262,22 @@ export async function listActiveTerms(db: DbOrTx, actor: Actor | null): Promise<
       };
     }),
   );
+}
+
+function offerTerms(bound: NonNullable<Awaited<ReturnType<typeof getSalesOffer>>>): TermsView {
+  const t = bound.terms;
+  const rule = parseRewardRule(t.rewardRule);
+  const scope = t.scope as { description?: unknown };
+  return {
+    id: t.id,
+    name: t.name,
+    version: t.version,
+    price: t.price,
+    monthlyFee: t.monthlyFee,
+    reward: rule.ok ? rule.value : null,
+    scope: typeof scope?.description === "string" ? scope.description : "詳しい提供範囲は運営に確認してください",
+    ready: isTermsReadyForSales({ ...t, active: true }),
+  };
 }
 
 // ---------- 企業詳細 ----------
@@ -297,6 +318,7 @@ export interface CompanyDetail {
   myAssignmentId: string | null;
   /** 確保ボタンを出すか（表示用。確保できるかの判定は claimAssignment が行う） */
   showClaim: boolean;
+  salesOfferId: string | null;
   audit: {
     id: string;
     status: string;
@@ -407,21 +429,10 @@ export async function getCompanyDetail(
     ? await db.select().from(findings).where(eq(findings.auditId, audit.id)).orderBy(asc(findings.itemCode))
     : [];
 
-  // 運営レビュー済み（approved）の最新版だけを営業に見せる
-  const [pv] = await db
-    .select({
-      id: proposalVersions.id,
-      version: proposalVersions.version,
-      content: proposalVersions.content,
-      demoArtifactDir: proposalVersions.demoArtifactDir,
-    })
-    .from(proposalVersions)
-    .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
-    .where(and(eq(proposals.companyId, company.id), eq(proposalVersions.status, "approved")))
-    .orderBy(desc(proposalVersions.version))
-    .limit(1);
-
-  const terms = await listActiveTerms(db, viewer);
+  const mine = active?.userId === viewer.userId ? active : null;
+  const bound = await getSalesOffer(db, company.id, mine?.salesOfferId);
+  const pv = bound?.proposal ?? null;
+  const terms = bound ? [offerTerms(bound)] : [];
 
   return ok({
     company: {
@@ -436,10 +447,14 @@ export async function getCompanyDetail(
       recontactAfter: company.recontactAfter,
     },
     sites,
+    salesOfferId: bound?.offer.id ?? null,
     ...shared,
     showClaim:
       viewer.kind === "sales" &&
       shared.assignment === "none" &&
+      !!bound &&
+      isTermsReadyForSales(bound.terms) &&
+      bound.proposal.status === "approved" &&
       company.suppression === "none" &&
       can(viewer, "claim", resource),
     audit: audit
@@ -476,7 +491,7 @@ export async function getCompanyDetail(
           callScript: pickContent(pv.content, ["callScript"], callScriptSchema),
         }
       : null,
-    terms: terms.ok ? terms.value : [],
+    terms,
   });
 }
 
@@ -605,6 +620,7 @@ export interface AssignmentDetail {
   /** 成約報告フォームを出すか（表示用。報告できるかの判定は reportContract が行う） */
   showReport: boolean;
   terms: TermsView[];
+  salesOfferId: string | null;
   proposalVersionId: string | null;
   /** 承認済みの最新の提案版に改善デモがあるか（共有リンクを発行できるか） */
   proposalHasDemo: boolean;
@@ -651,15 +667,9 @@ export async function getMyAssignmentDetail(
         .orderBy(desc(contracts.reportedAt))
     : [];
 
-  const [pv] = await db
-    .select({ id: proposalVersions.id, demoArtifactDir: proposalVersions.demoArtifactDir })
-    .from(proposalVersions)
-    .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
-    .where(and(eq(proposals.companyId, company.id), eq(proposalVersions.status, "approved")))
-    .orderBy(desc(proposalVersions.version))
-    .limit(1);
-
-  const terms = await listActiveTerms(db, user.value);
+  const bound = await getSalesOffer(db, company.id, a.salesOfferId);
+  const pv = bound?.proposal ?? null;
+  const terms = bound ? [offerTerms(bound)] : [];
 
   return ok({
     assignment: {
@@ -718,7 +728,8 @@ export async function getMyAssignmentDetail(
       user.value.kind === "sales" &&
       REPORT_FORM_STATUSES.includes(a.status) &&
       !contractRows.some((c) => OPEN_CONTRACT.includes(c.status)),
-    terms: terms.ok ? terms.value.filter((t) => t.ready) : [],
+    terms,
+    salesOfferId: bound?.offer.id ?? null,
     proposalVersionId: pv?.id ?? null,
     proposalHasDemo: pv ? pv.demoArtifactDir !== null : false,
   });

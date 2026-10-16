@@ -37,7 +37,7 @@ export function isUuid(v: string | undefined | null): v is string {
 }
 
 /** 戻り先は運営画面の中だけに限る（外部への移動に使わせない） */
-export function safeReturnTo(value: FormDataEntryValue | null, fallback = "/ops"): string {
+export function safeReturnTo(value: unknown, fallback = "/ops"): string {
   if (typeof value !== "string") return fallback;
   if (!value.startsWith("/ops") || value.startsWith("//") || value.includes("\\")) return fallback;
   if (value.length > 4 && !["/", "?", "#"].includes(value[4]!)) return fallback;

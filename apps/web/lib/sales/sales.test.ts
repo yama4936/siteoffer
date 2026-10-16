@@ -6,6 +6,7 @@ import {
   claimAssignment,
   confirmContract,
   fixedClock,
+  getSalesOffer,
   HOUR,
   scheduleRewardPayment,
 } from "@siteoffer/core";
@@ -16,6 +17,7 @@ import {
   productTerms,
   proposals,
   proposalVersions,
+  salesOffers,
   siteAudits,
   users,
   websites,
@@ -68,6 +70,20 @@ async function company(values: Partial<typeof companies.$inferInsert> = {}) {
     .insert(companies)
     .values({ name: `架空工務店${seq}`, pipelineStatus: "sellable", prefecture: "愛知県", city: "名古屋市", ...values })
     .returning();
+  if (c!.pipelineStatus === "sellable") {
+    const existing = await db.select().from(productTerms);
+    const t =
+      existing.find((t) => t.price !== null && t.rewardRule !== null) ??
+      (await terms({ price: 300000, rewardRule: { type: "fixed", amount: 30000 } }));
+    const [p] = await db.insert(proposals).values({ companyId: c!.id }).returning();
+    const [v] = await db
+      .insert(proposalVersions)
+      .values({ proposalId: p!.id, version: 1, status: "approved" })
+      .returning();
+    await db
+      .insert(salesOffers)
+      .values({ companyId: c!.id, version: 1, productTermsId: t.id, proposalVersionId: v!.id });
+  }
   return c!;
 }
 
@@ -260,7 +276,7 @@ describe("企業詳細", () => {
         inference: true,
       },
     ]);
-    const [proposal] = await db.insert(proposals).values({ companyId: c.id }).returning();
+    const [proposal] = await db.select().from(proposals).where(eq(proposals.companyId, c.id));
     const callScript = {
       opening: "非公式の改善提案のご案内です",
       sections: [{ title: "用件", lines: ["ホームページについてご提案があります"] }],
@@ -268,10 +284,13 @@ describe("企業詳細", () => {
       closing: "ありがとうございました",
       doNotSay: ["必ず売上が上がる"],
     };
-    await db.insert(proposalVersions).values([
-      { proposalId: proposal!.id, version: 1, status: "approved", content: { callScript }, demoArtifactDir: "/tmp/x" },
-      { proposalId: proposal!.id, version: 2, status: "in_review", content: { callScript } },
-    ]);
+    await db
+      .update(proposalVersions)
+      .set({ content: { callScript }, demoArtifactDir: "/tmp/x" })
+      .where(eq(proposalVersions.proposalId, proposal!.id));
+    await db
+      .insert(proposalVersions)
+      .values({ proposalId: proposal!.id, version: 2, status: "in_review", content: { callScript } });
     await terms({ price: 300000, rewardRule: { type: "fixed", amount: 30000 } });
     await terms({ price: null, rewardRule: null });
 
@@ -292,7 +311,7 @@ describe("企業詳細", () => {
     // 版IDから組み立てた固定のURLは返さない（企業に見せるURLは共有リンクで発行する）
     expect(d.proposal?.hasDemo).toBe(true);
     expect(JSON.stringify(d.proposal)).not.toContain("/demo/");
-    expect(d.terms.map((t) => t.ready).sort()).toEqual([false, true]);
+    expect(d.terms.map((t) => t.ready)).toEqual([true]);
   });
 
   it("他人の担当企業は担当中とだけ表示し、確保ボタンを出さない", async () => {
@@ -349,7 +368,10 @@ describe("サーバー処理", () => {
     const me = await user("sales");
     const other = await user("sales");
     const c = await company();
-    const r1 = await claimCompany({ db, clock, actor: me.actor }, form({ companyId: c.id }));
+    const r1 = await claimCompany(
+      { db, clock, actor: me.actor },
+      form({ companyId: c.id, salesOfferId: (await getSalesOffer(db, c.id))!.offer.id }),
+    );
     expect(r1).toMatchObject({ status: "ok" });
     expect(r1?.assignmentId).toBeTruthy();
     const r2 = await claimCompany({ db, clock, actor: other.actor }, form({ companyId: c.id }));
@@ -459,7 +481,7 @@ describe("サーバー処理", () => {
     const other = await user("sales");
     const c = await company();
     const a = await claim(me.actor, c.id);
-    const t = await terms({ price: 300000, rewardRule: { type: "fixed", amount: 30000 } });
+    const t = (await getSalesOffer(db, c.id, a.salesOfferId))!.terms;
 
     const ng = await reportDeal({ db, clock, actor: other.actor }, form({ assignmentId: a.id }));
     expect(ng?.status).toBe("error");

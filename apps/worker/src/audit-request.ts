@@ -10,13 +10,19 @@ import {
   users,
   websites,
 } from "@siteoffer/db";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 import { getAuditRecoveryCandidates } from "./audit-recovery.ts";
 import { PROTECTED } from "./pipeline/status.ts";
 import { stepKeys } from "./queues.ts";
 import { checkPublicHttpUrl } from "./url.ts";
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+/** 旧データの進行状態が未更新でも、営業へ進んだ企業を初回診断へ戻さない。 */
+export function salesHistoryExists(companyId: SQL) {
+  return sql`(exists(select 1 from assignments where company_id=${companyId})
+    or exists(select 1 from contracts where company_id=${companyId})
+    or exists(select 1 from proposals where company_id=${companyId}))`;
+}
 export function auditRequestPayload(r: { id: string; companyId: string }) {
   return { companyId: r.companyId, requestKey: `ops:${r.id}` };
 }
@@ -180,7 +186,8 @@ export async function requestAuditByOps(
     }
     if (input.initialOnly) {
       const prior = await tx.execute(sql`select 1 from audit_requests where company_id=${company.id}::uuid
-        union all select 1 from site_audits where company_id=${company.id}::uuid limit 1`);
+        union all select 1 from site_audits where company_id=${company.id}::uuid
+        union all select 1 where ${salesHistoryExists(sql`${company.id}::uuid`)} limit 1`);
       if (
         !["collected", "site_confirmed"].includes(company.pipelineStatus) ||
         (prior as { rows: unknown[] }).rows.length
@@ -238,6 +245,9 @@ export async function validateAuditRequest(db: DbOrTx, payload: { companyId: str
     and e.target_type='company' and e.target_id=${r.companyId} and e."after"->>'requestId'=${r.id}
     and e."after"->>'initialOnly'='true' limit 1`);
   if ((firstOnly as { rows: unknown[] }).rows.length) {
+    const sales = await db.execute(sql`select 1 where ${salesHistoryExists(sql`${r.companyId}::uuid`)}`);
+    if ((sales as { rows: unknown[] }).rows.length)
+      return "受付後に営業・提案の履歴が見つかりました。現在の案件と契約を確認してください。";
     const other = await db.execute(sql`select 1 from site_audits a where a.company_id=${r.companyId}::uuid
       and not exists(select 1 from audit_events e where e.target_type='site_audit' and e.target_id=a.id::text
         and e.action='site_audit.started' and e."after"->>'workerStepKey'=${auditRequestKey(r)}) limit 1`);

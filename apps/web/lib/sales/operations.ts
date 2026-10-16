@@ -100,7 +100,7 @@ export async function claimCompany(deps: SalesDeps, fd: FormData): Promise<Sales
   const companyId = id(fd, "companyId");
   if (!companyId) return fail("企業が指定されていません。");
   if (!deps.actor) return fail(MESSAGES.unauthenticated!);
-  const r = await claimAssignment(deps.db, deps.clock, deps.actor, companyId);
+  const r = await claimAssignment(deps.db, deps.clock, deps.actor, companyId, id(fd, "salesOfferId") || "");
   if (!r.ok) return errorState(r);
   return { status: "ok", message: "担当を確保しました。", assignmentId: r.value.id };
 }
@@ -218,6 +218,7 @@ export async function reportDeal(deps: SalesDeps, fd: FormData): Promise<SalesAc
   if (!deps.actor) return fail(MESSAGES.unauthenticated!);
   const r = await reportContract(deps.db, deps.clock, deps.actor, {
     assignmentId,
+    salesOfferId: id(fd, "salesOfferId") || null,
     productTermsId: id(fd, "productTermsId") || null,
     proposalVersionId: id(fd, "proposalVersionId") || null,
     documentRef: optStr(fd, "documentRef") ?? null,
