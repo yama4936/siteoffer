@@ -95,13 +95,18 @@ it("only latest actionable design versions are visible; in-flight and suppressed
   await db.update(companies).set({ suppression: "do_not_contact" }).where(eq(companies.id, c.company.id));
   expect((await queue()).items).toHaveLength(0);
 });
-it("superseded proposal reviews disappear and preparation only includes eligible companies", async () => {
+it("superseded proposal reviews move to sales readiness after approval", async () => {
   const c = await seedCandidate(db);
   expect((await queue()).items.some((i) => i.id === c.version!.id)).toBe(true);
   await db
     .insert(proposalVersions)
     .values({ proposalId: c.proposal.id, version: 2, status: "approved", auditId: c.audit.id });
+  expect((await queue()).items).toMatchObject([{ group: "sales_ready", id: c.company.id }]);
+  await db.update(companies).set({ pipelineStatus: "sellable" }).where(eq(companies.id, c.company.id));
   expect((await queue()).items).toHaveLength(0);
+});
+it("preparation only includes eligible companies and moves to design when started", async () => {
+  const c = await seedCandidate(db, { versionStatus: null });
   await db.update(companies).set({ pipelineStatus: "audited" }).where(eq(companies.id, c.company.id));
   expect((await queue()).items).toHaveLength(0);
   await db.update(siteAudits).set({ decision: "create" }).where(eq(siteAudits.id, c.audit.id));

@@ -26,12 +26,14 @@ import { alias } from "drizzle-orm/pg-core";
 import { currentDeliveryBuild, deliveryNeedsAttention } from "./delivery-processing";
 import { isUuid } from "./form";
 import { requireOps } from "./guard";
+import { getReviewInbox } from "./review-inbox";
 
 export const WORK_GROUPS = {
   discovery: { label: "収集の復旧", href: "/ops/discovery" },
   audit_attention: { label: "診断の対応", href: "/ops/processing#audit-attention" },
   design: { label: "デザイン", href: "/ops/designs" },
   proposal: { label: "提案レビュー", href: "/ops/review" },
+  sales_ready: { label: "営業への引き継ぎ", href: "/ops/review/ready" },
   consultation: { label: "営業からの相談", href: "/ops/consultations" },
   assignment: { label: "担当の調整", href: "/ops/assignments" },
   contract: { label: "契約確認", href: "/ops/contracts" },
@@ -87,6 +89,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     deliveryRecovery,
     auditAttention,
     auditPreparation,
+    salesReady,
   ] = await Promise.all([
     db
       .select({
@@ -325,10 +328,22 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
       .limit(PER_GROUP),
     getAuditAttentionWork(db, actor),
     listAuditPreparation(db, actor),
+    getReviewInbox(db, actor, { view: "ready" }),
   ]);
   if (!auditAttention.ok) return auditAttention;
   if (!auditPreparation.ok) return auditPreparation;
+  if (!salesReady.ok) return salesReady;
   const items: WorkItem[] = [
+    ...salesReady.value.items.map((r) => ({
+      id: r.id,
+      group: "sales_ready" as const,
+      title: r.name,
+      reason: `第${r.version}版は承認済みです。販売条件を確認して営業へ引き継げます。`,
+      action: "販売条件を確認",
+      href: `/ops/review/ready?company=${r.id}`,
+      since: r.since,
+      priority: 2,
+    })),
     ...auditPreparation.value.items.map((r) => ({
       id: r.companyId,
       group: "audit_preparation" as const,
@@ -510,6 +525,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     audit_preparation: [{ total: auditPreparation.value.total }],
     design,
     proposal,
+    sales_ready: [{ total: salesReady.value.total }],
     assignment,
     consultation,
     contract,

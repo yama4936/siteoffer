@@ -626,11 +626,11 @@ export function ReviewWorkspace({
               <h3>このあと</h3>
               <p>
                 {canReview
-                  ? "承認後、販売条件・報酬条件を選ぶと営業可能にできます。"
+                  ? "承認後、販売条件を確認して営業へ引き継げます。"
                   : c.pipelineStatus === "sellable"
                     ? "営業可能な案件です。担当・引き継ぎから営業の進行状況を確認できます。"
                     : version?.status === "approved"
-                      ? "承認済みです。下の「販売条件を選んで営業可能にする」から次へ進めます。"
+                      ? "承認済みです。「販売条件を確認して営業へ」から次へ進めます。"
                       : "企業情報と素材を整え、提案を準備してください。"}
               </p>
               {version?.note && <p className="previous-note">前回の確認メモ：{version.note}</p>}
@@ -654,15 +654,21 @@ export function ReviewWorkspace({
               >
                 修正を依頼
               </button>
-              <button
-                type="button"
-                className="review-primary"
-                disabled={locked || !!draft.conflict || REVIEW_CHECKS.some(([key]) => !draft.values[key])}
-                onClick={() => submit("approved")}
-              >
-                {pending ? "保存中…" : "提案を承認"}
-                <ArrowRight size={18} />
-              </button>
+              {version?.isLatest && version.status === "approved" && c.pipelineStatus !== "sellable" ? (
+                <Link className="review-primary" href={`/ops/review/ready?company=${c.id}`}>
+                  販売条件を確認して営業へ <ArrowRight size={18} />
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  className="review-primary"
+                  disabled={locked || !!draft.conflict || REVIEW_CHECKS.some(([key]) => !draft.values[key])}
+                  onClick={() => submit("approved")}
+                >
+                  {pending ? "保存中…" : "提案を承認"}
+                  <ArrowRight size={18} />
+                </button>
+              )}
             </div>
           </footer>
         </>

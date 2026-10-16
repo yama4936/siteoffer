@@ -1337,8 +1337,228 @@
   padding: 8px;
   border-radius: 6px;
 }
+.sales-ready-page p {
+  line-height: 1.8;
+}
 .review-draft-panel details p {
   white-space: pre-wrap;
+}
+.sales-ready-page {
+  max-width: 1300px;
+  margin: 0 auto;
+}
+.sales-ready-page > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+.sales-ready-page h1 {
+  font-size: 28px;
+  font-weight: 750;
+  margin: 4px 0 10px;
+}
+.sales-ready-page h2 {
+  font-size: 20px;
+  font-weight: 700;
+}
+.sales-ready-kicker {
+  color: #3854c8;
+  font-size: 12px;
+  font-weight: 600;
+}
+.sales-ready-page a {
+  color: #254bd5;
+  text-underline-offset: 3px;
+}
+.sales-ready-page a:hover {
+  text-decoration: underline;
+}
+.sales-ready-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.sales-ready-list,
+.sales-ready-detail {
+  background: white;
+  border: 1px solid var(--ops-line);
+  border-radius: 12px;
+  min-width: 0;
+}
+.sales-ready-list {
+  padding: 18px;
+}
+.sales-ready-list h2 {
+  display: flex;
+  justify-content: space-between;
+  font-size: 16px;
+}
+.sales-ready-list form {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+.sales-ready-list input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #ced7e8;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.sales-ready-list form button {
+  flex-shrink: 0;
+  color: #254bd5;
+  padding: 8px;
+  border: 1px solid #ced7e8;
+  border-radius: 6px;
+}
+.sales-ready-items {
+  max-height: 62dvh;
+  overflow-y: auto;
+  margin: 12px -18px 0;
+}
+.sales-ready-items a {
+  display: block;
+  padding: 16px 18px;
+  color: #183052;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid #e9eef7;
+  overflow-wrap: anywhere;
+}
+.sales-ready-items a[aria-current="page"] {
+  border-left-color: #3258ee;
+  background: #eef3ff;
+}
+.sales-ready-items strong,
+.sales-ready-items small,
+.sales-ready-items span {
+  display: block;
+}
+.sales-ready-items small {
+  margin: 5px 0;
+  color: #64748b;
+}
+.sales-ready-items span {
+  color: #237354;
+  font-size: 12px;
+}
+.sales-ready-list h2 span {
+  color: #3854c8;
+}
+.sales-ready-list nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 18px;
+  font-size: 12px;
+}
+.sales-ready-detail {
+  padding: 26px;
+  display: grid;
+  gap: 16px;
+}
+.sales-ready-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+.sales-ready-detail select {
+  min-width: 0;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #c3cee4;
+  border-radius: 7px;
+  background: white;
+}
+.sales-ready-terms {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px 18px;
+  padding: 18px 0;
+}
+.sales-ready-terms dt {
+  color: #64748b;
+}
+.sales-ready-terms dd {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.sales-ready-confirmation {
+  background: #f5f8ff;
+  border: 1px solid #cbd8fb;
+  border-radius: 10px;
+  padding: 22px;
+}
+.sales-ready-confirmation h3 {
+  font-weight: 700;
+  font-size: 18px;
+}
+.sales-ready-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+.sales-ready-success,
+.sales-ready-error {
+  padding: 14px;
+  border-radius: 7px;
+  overflow-wrap: anywhere;
+}
+.sales-ready-success {
+  background: #edf8f2;
+  color: #1d654a;
+}
+.sales-ready-error {
+  background: #fff2e5;
+  color: #8c4d15;
+}
+.sales-ready-empty {
+  padding: 22px 0;
+  display: grid;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .sales-ready-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sales-ready-page > header {
+    align-items: start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .sales-ready-items {
+    display: flex;
+    overflow-x: auto;
+  }
+  .sales-ready-items a {
+    flex: 0 0 220px;
+  }
+}
+@media (max-width: 600px) {
+  .sales-ready-detail {
+    padding: 18px;
+  }
+  .sales-ready-confirmation {
+    padding: 14px;
+  }
+  .sales-ready-terms {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .sales-ready-terms dd {
+    margin-bottom: 12px;
+  }
+  .sales-ready-buttons > button {
+    flex: 1;
+  }
 }
 @media (min-width: 1251px) {
   .review-queue {

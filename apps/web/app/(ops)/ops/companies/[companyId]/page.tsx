@@ -264,6 +264,7 @@ export default async function CompanyPage({
                 <form action={makeSellableAction} className="grid gap-2">
                   <ReturnTo path={here} />
                   <input type="hidden" name="companyId" value={c.id} />
+                  <input type="hidden" name="proposalVersionId" value={latest?.id ?? ""} />
                   <NativeSelect name="productTermsId" defaultValue="" aria-label="販売条件・報酬条件の版">
                     <option value="">販売条件・報酬条件の版を選ぶ</option>
                     {terms.value.map((t) => {

@@ -189,7 +189,12 @@ export async function reviewProposalAction(fd: FormData) {
 export async function makeSellableAction(fd: FormData) {
   await run(
     fd,
-    (d, a) => makeSellable(d, a, { companyId: str(fd, "companyId"), productTermsId: optStr(fd, "productTermsId") }),
+    (d, a) =>
+      makeSellable(d, a, {
+        companyId: str(fd, "companyId"),
+        productTermsId: optStr(fd, "productTermsId"),
+        expectedProposalVersionId: str(fd, "proposalVersionId"),
+      }),
     "営業可能にしました",
   );
 }

@@ -6,7 +6,7 @@ import { isUuid } from "./form";
 export async function getReviewInbox(
   db: DbOrTx,
   actor: Actor | null,
-  input: { view?: string; query?: string; page?: number } = {},
+  input: { view?: string; query?: string; page?: number; companyId?: string } = {},
 ) {
   if (actor?.kind !== "ops" || !isUuid(actor.userId)) return err("forbidden");
   const [user] = await db
@@ -15,23 +15,29 @@ export async function getReviewInbox(
     .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")));
   if (!user) return err("forbidden");
   const view = input.view ?? "pending";
-  if (!["pending", "all"].includes(view) || (input.query?.length ?? 0) > 200) return err("invalid_input");
+  if (
+    !["pending", "ready", "all"].includes(view) ||
+    (input.query?.length ?? 0) > 200 ||
+    (input.companyId !== undefined && !isUuid(input.companyId))
+  )
+    return err("invalid_input");
   const query = input.query?.trim() ?? "";
-  const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,
+  const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",
    v.id as "versionId",v.version,v.status as "versionStatus",coalesce(v.created_at,c.created_at) as since,
-   coalesce(v.status='in_review' and c.suppression='none',false) as pending
+   coalesce(v.status='in_review' and c.suppression='none',false) as pending,
+   coalesce(v.status='approved' and c.suppression='none' and c.pipeline_status<>'sellable',false) as ready
    from companies c left join proposals p on p.company_id=c.id
    left join lateral(select id,version,status,created_at from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
-   where true ${query ? sql`and position(lower(${query}) in lower(c.name||' '||coalesce(c.prefecture,'')||' '||coalesce(c.city,'')||' '||coalesce(c.industry,'')))>0` : sql``}`;
+   where true ${input.companyId ? sql`and c.id=${input.companyId}` : sql``} ${query ? sql`and position(lower(${query}) in lower(c.name||' '||coalesce(c.prefecture,'')||' '||coalesce(c.city,'')||' '||coalesce(c.industry,'')))>0` : sql``}`;
   const count = await db.execute(
-    sql`select count(*)::int as "all",count(*) filter(where pending)::int as pending from (${base}) inbox`,
+    sql`select count(*)::int as "all",count(*) filter(where pending)::int as pending,count(*) filter(where ready)::int as ready from (${base}) inbox`,
   );
-  const counts = (count as { rows: { all: number; pending: number }[] }).rows[0]!;
-  const total = view === "pending" ? counts.pending : counts.all;
+  const counts = (count as { rows: { all: number; pending: number; ready: number }[] }).rows[0]!;
+  const total = counts[view as "pending" | "ready" | "all"];
   const pages = Math.max(1, Math.ceil(total / 20));
   const page = Math.min(pages, Math.max(1, Number.isSafeInteger(input.page) ? input.page! : 1));
   const result =
-    await db.execute(sql`select * from (${base}) inbox where ${view === "pending" ? sql`pending` : sql`true`}
+    await db.execute(sql`select * from (${base}) inbox where ${view === "pending" ? sql`pending` : view === "ready" ? sql`ready` : sql`true`}
    order by pending desc,since asc,id asc limit 20 offset ${(page - 1) * 20}`);
   const rows = (
     result as {
@@ -47,11 +53,13 @@ export async function getReviewInbox(
         version: number | null;
         versionStatus: string | null;
         pending: boolean;
+        since: Date | string;
+        updatedAt: Date | string;
       }[];
     }
   ).rows;
   return ok({
-    view: view as "pending" | "all",
+    view: view as "pending" | "ready" | "all",
     query,
     page,
     pages,
@@ -68,6 +76,8 @@ export async function getReviewInbox(
       versionId: r.versionId,
       version: r.version,
       versionStatus: r.versionStatus,
+      since: new Date(r.since).toISOString(),
+      updatedAt: new Date(r.updatedAt).toISOString(),
     })),
   });
 }

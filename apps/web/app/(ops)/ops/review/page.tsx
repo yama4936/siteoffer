@@ -1,10 +1,10 @@
-import { notFound } from "next/navigation";
-import { ReadyCandidates } from "@/components/ops/ready-candidates";
+import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
 import { ReviewWorkspace } from "@/components/ops/review-workspace";
 import { Flash, Forbidden, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
-import { getCompanyDetail, listReviewQueue } from "@/lib/ops/queries";
+import { getCompanyDetail } from "@/lib/ops/queries";
 import { EMPTY_REVIEW_DRAFT } from "@/lib/ops/review-draft-types";
 import { loadReviewDraft } from "@/lib/ops/review-drafts";
 import { getReviewInbox } from "@/lib/ops/review-inbox";
@@ -26,8 +26,8 @@ export default async function ReviewPage({
     page: Number(sp.reviewPage),
   });
   if (!inbox.ok) return inbox.error === "forbidden" ? <Forbidden /> : notFound();
-  const queue = await listReviewQueue(db, actor);
-  if (!queue.ok) return <Forbidden />;
+  if (inbox.value.view === "ready")
+    redirect(`/ops/review/ready?${new URLSearchParams({ q: inbox.value.query, page: String(inbox.value.page) })}`);
   const requested = first(sp, "company");
   if (requested && !isUuid(requested)) notFound();
   const selectedId = requested ?? inbox.value.items[0]?.id;
@@ -108,10 +108,11 @@ export default async function ReviewPage({
             : null
         }
       />
-      <details className="review-ready">
-        <summary>販売条件を選んで営業可能にする · {queue.value.readyCandidates.length} 件</summary>
-        <ReadyCandidates />
-      </details>
+      <div className="review-ready">
+        <Link href={`/ops/review/ready?${new URLSearchParams({ q: inbox.value.query })}`}>
+          営業への引き継ぎ · {inbox.value.counts.ready}社 →
+        </Link>
+      </div>
     </>
   );
 }

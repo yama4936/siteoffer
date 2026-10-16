@@ -47,6 +47,7 @@ import {
   productTerms,
   proposals,
   proposalVersions,
+  users,
   websites,
 } from "@siteoffer/db";
 import {
@@ -56,6 +57,7 @@ import {
   NtaCorporateNumberProvider,
 } from "@siteoffer/discovery";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { isUuid } from "./form.ts";
 import { type OpsActor, requireOps } from "./guard.ts";
 import { type SellableIssue, sellableIssues } from "./sellable.ts";
 
@@ -594,21 +596,72 @@ export function sellableIssueText(issue: SellableIssue): string {
 export async function makeSellable(
   { db, clock }: OpsDeps,
   actor: Actor | null,
-  input: { companyId: string; productTermsId: string | null },
+  input: {
+    companyId: string;
+    productTermsId: string | null;
+    expectedProposalVersionId?: string;
+    expectedCompanyUpdatedAt?: string;
+    allowExisting?: boolean;
+  },
 ): Promise<Result<Company, string>> {
   const ops = authorizeCompanyManage(actor, input.companyId);
   if (!ops.ok) return ops;
+  if (
+    !isUuid(ops.value.userId) ||
+    !isUuid(input.companyId) ||
+    (input.productTermsId !== null && !isUuid(input.productTermsId)) ||
+    (input.expectedProposalVersionId !== undefined && !isUuid(input.expectedProposalVersionId)) ||
+    (input.expectedCompanyUpdatedAt !== undefined &&
+      (!input.expectedCompanyUpdatedAt || !Number.isFinite(Date.parse(input.expectedCompanyUpdatedAt))))
+  )
+    return err("invalid_input", "対象の企業・提案版・販売条件を確認してください");
   return inTx(db, async (tx, fail) => {
+    const [user] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, ops.value.userId), eq(users.role, "ops"), eq(users.status, "active")))
+      .for("share");
+    if (!user) return fail("forbidden", "有効な運営アカウントでログインしてください");
+    // Match review's parent-before-company order; also blocks insertion of a new proposal version.
+    await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.companyId, input.companyId)).for("update");
     const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
     if (!company) return fail("not_found");
     const latest = await latestProposalVersion(tx, company.id);
+    if (input.expectedProposalVersionId && latest?.id !== input.expectedProposalVersionId.toLowerCase())
+      return fail("proposal_changed", "確認した提案版から更新されています。最新版を確認して選び直してください");
     let terms: typeof productTerms.$inferSelect | null = null;
     if (input.productTermsId) {
-      const [t] = await tx.select().from(productTerms).where(eq(productTerms.id, input.productTermsId));
+      const [t] = await tx.select().from(productTerms).where(eq(productTerms.id, input.productTermsId)).for("share");
       if (!t) return fail("terms_not_found", "販売条件・報酬条件の版が見つかりません");
       terms = t;
     }
     const issues = sellableIssues({ company, latestVersion: latest, terms });
+    if (
+      input.allowExisting &&
+      issues.length === 1 &&
+      issues[0] === "already_sellable" &&
+      input.expectedProposalVersionId
+    ) {
+      const [last] = await tx
+        .select({ after: auditEvents.after })
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.targetType, "company"),
+            eq(auditEvents.targetId, company.id),
+            eq(auditEvents.action, "company.make_sellable"),
+          ),
+        )
+        .orderBy(desc(auditEvents.createdAt), desc(auditEvents.id))
+        .limit(1);
+      const recorded = last?.after as { proposalVersionId?: string; productTermsId?: string } | undefined;
+      if (recorded?.proposalVersionId === latest?.id && recorded?.productTermsId === terms?.id) return company;
+    }
+    if (
+      input.expectedCompanyUpdatedAt !== undefined &&
+      company.updatedAt.getTime() !== Date.parse(input.expectedCompanyUpdatedAt)
+    )
+      return fail("company_changed", "企業の状態が更新されています。現在の内容を確認して選び直してください");
     if (issues.length > 0) return fail(issues[0]!, issues.map(sellableIssueText).join(" / "));
     const now = clock.now();
     const [after] = await tx
