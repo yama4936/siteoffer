@@ -24,6 +24,7 @@ export async function runScore(
   runner: PythonRunner,
   options: AuditOptions,
   evaluationPath: string,
+  signal?: AbortSignal,
 ): Promise<Result<{ evaluation: Json; summary: ScoreSummary; table: string }, ScoreError>> {
   const run = await runner.run(
     scriptPaths(options.paths).score,
@@ -31,8 +32,10 @@ export async function runScore(
     {
       cwd: options.paths.repoRoot,
       timeoutMs: options.scriptTimeoutMs,
+      ...(signal ? { signal } : {}),
     },
   );
+  if (run.aborted) return err("score_failed", "採点処理を中断しました");
   if (run.timedOut) return err("score_failed", "score.py がタイムアウトした");
   if (run.exitCode === 1) return err("score_validation_failed", tail(run.stderr, 2000));
   if (run.exitCode !== 0)
@@ -70,6 +73,7 @@ export async function runDecide(
   runner: PythonRunner,
   options: AuditOptions,
   evaluationPath: string,
+  signal?: AbortSignal,
 ): Promise<Result<DecideResult, "decide_failed">> {
   // --threshold はユーザーがその場で明示した値だけに使う（site-proposal）。アプリからは渡さない
   const run = await runner.run(
@@ -78,8 +82,10 @@ export async function runDecide(
     {
       cwd: options.paths.repoRoot,
       timeoutMs: options.scriptTimeoutMs,
+      ...(signal ? { signal } : {}),
     },
   );
+  if (run.aborted) return err("decide_failed", "判定処理を中断しました");
   if (run.timedOut) return err("decide_failed", "decide.py がタイムアウトした");
   if (run.exitCode !== 0)
     return err("decide_failed", `decide.py が異常終了した（exit ${run.exitCode}）: ${tail(run.stderr)}`);

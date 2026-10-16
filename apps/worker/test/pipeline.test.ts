@@ -2,11 +2,19 @@
  * パイプライン（収集 → 診断 → 生成 → 運営確認待ち）。PGlite・フィクスチャの取得元・モック生成器で確認する。
  * Astroのビルドはモック（実ビルドは pipeline-astro.test.ts の1回だけ）。モックでの成功は実生成の成功ではない。
  */
-import { auditEvents, companies, discoveryJobs, generationJobs, proposalVersions, siteAudits } from "@siteoffer/db";
+import {
+  auditEvents,
+  companies,
+  discoveryJobs,
+  generationJobs,
+  proposalVersions,
+  siteAudits,
+  websites,
+} from "@siteoffer/db";
 import { createDiscoveryJob } from "@siteoffer/discovery";
 import { type Generator, MockGenerator } from "@siteoffer/generation";
 import { and, asc, eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROPOSAL_CONTENT_KEYS, type ProposalContent } from "../src/content.ts";
 import { executeStep } from "../src/execute.ts";
 import { claimStep, readStepState, STEP_TARGET } from "../src/ledger.ts";
@@ -224,6 +232,42 @@ describe("二重投入", () => {
 });
 
 describe("失敗・再試行・上限", () => {
+  it("診断の時間切れを採点へ伝え、診断を閉じて提案キューへ進めない", async () => {
+    env = await setupEnv({ threshold: 100, policies: { audit: { timeoutMs: 2_000, maxAttempts: 1 } } });
+    const e = env;
+    const [c] = await e.db
+      .insert(companies)
+      .values({ name: "中断試験", officialSiteStatus: "confirmed", pipelineStatus: "site_confirmed" })
+      .returning();
+    await e.db.insert(websites).values({
+      companyId: c!.id,
+      url: "https://audit.example/",
+      normalizedUrl: "https://audit.example/",
+      domain: "audit.example",
+      kind: "current",
+      isPrimary: true,
+    });
+    let signal: AbortSignal | undefined;
+    e.deps.audit.generator = {
+      async generate(input) {
+        signal = input.signal;
+        return new Promise(() => {});
+      },
+    };
+    expect(await executeStep(e.deps, auditStep, { companyId: c!.id, requestKey: "cancel-audit" })).toMatchObject({
+      status: "failed",
+    });
+    expect(signal?.aborted).toBe(true);
+    await vi.waitFor(async () => {
+      const [audit] = await e.db.select().from(siteAudits);
+      expect(audit).toMatchObject({ status: "failed", failureReason: expect.stringContaining("中断") });
+    });
+    const [current] = await e.db.select().from(companies).where(eq(companies.id, c!.id));
+    expect(current!.pipelineStatus).toBe("failed");
+    expect(e.queue.size).toBe(0);
+    expect(await versions(e)).toHaveLength(0);
+  });
+
   it("生成の失敗は再試行し、上限（3回）で止めて理由を記録し、提案版と企業を failed にする", async () => {
     const generator = new MockGenerator({
       overrides: { evaluation: generationShapedEvaluation(), proposal_text: { summary: "" } },

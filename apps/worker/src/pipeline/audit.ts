@@ -27,7 +27,7 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
   queue: QUEUES.audit,
   kind: "audit",
   key: stepKeys.audit,
-  async run(deps, payload) {
+  async run(deps, payload, ctx) {
     const { db, clock } = deps;
     const [company] = await db.select().from(companies).where(eq(companies.id, payload.companyId));
     if (!company) throw new PreconditionError(`企業がない：${payload.companyId}`);
@@ -47,7 +47,12 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     const urlCheck = checkPublicHttpUrl(site.url);
     if (!urlCheck.ok) throw new PermanentError(`診断できないURL：${urlCheck.reason}`);
 
-    const r = await runSiteAudit(db, clock, deps.audit, { websiteId: site.id, actor: PIPELINE_ACTOR });
+    const r = await runSiteAudit(db, clock, deps.audit, {
+      websiteId: site.id,
+      actor: PIPELINE_ACTOR,
+      signal: ctx.signal,
+    });
+    if (ctx.signal.aborted) throw new Error("診断処理が中断されました");
     if (!r.ok) throw new PermanentError(`${r.error}: ${r.message ?? ""}`);
     const out = r.value;
     if (out.status === "failed") throw new Error(`診断に失敗した：${out.failureReason ?? "理由不明"}`);

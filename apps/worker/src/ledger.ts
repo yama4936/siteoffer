@@ -21,12 +21,12 @@ export const STEP_ACTIONS = {
 } as const;
 
 export interface StepState {
-  /** 開始した回数（＝試行回数） */
+  /** 開始済みの最新試行番号（開始イベントの重複は数えない） */
   attempts: number;
   succeeded: boolean;
   /** 再試行しない失敗（上限到達・再試行不能）で終わった */
   gaveUp: boolean;
-  /** 開始の記録より終了の記録が少ない＝実行中（またはプロセスが落ちて残った） */
+  /** 最新試行に終了記録がない＝実行中（またはプロセスが落ちて残った） */
   running: boolean;
   /** 最後に開始した時刻 */
   lastStartedAt: Date | null;
@@ -61,32 +61,42 @@ export async function readStepState(db: Db, key: string): Promise<StepState> {
 }
 
 export function foldStepEvents(rows: { action: string; after: unknown; createdAt: Date }[]): StepState {
-  let started = 0;
-  let finished = 0;
-  let succeeded = false;
-  let gaveUp = false;
-  let lastStartedAt: Date | null = null;
-  let lastFailure: string | null = null;
-  let lastFailureAttempt = -1;
+  // 試行単位で集計する。古い試行の遅い終了や重複イベントで現在の実行状態を変えない。
+  const attempts = new Map<
+    number,
+    { startedAt: Date | null; terminal: { action: string; after: StepEventAfter; createdAt: Date } | null }
+  >();
   for (const r of rows) {
     const after = (r.after ?? {}) as StepEventAfter;
+    const attempt = after.attempt;
+    if (!Number.isSafeInteger(attempt) || attempt! < 1) continue;
+    const state = attempts.get(attempt!) ?? { startedAt: null, terminal: null };
     if (r.action === STEP_ACTIONS.started) {
-      started++;
-      if (!lastStartedAt || r.createdAt >= lastStartedAt) lastStartedAt = r.createdAt;
-    } else if (r.action === STEP_ACTIONS.succeeded) {
-      finished++;
-      succeeded = true;
-    } else if (r.action === STEP_ACTIONS.failed) {
-      finished++;
-      if (after.final) gaveUp = true;
-      const a = after.attempt ?? 0;
-      if (a >= lastFailureAttempt) {
-        lastFailureAttempt = a;
-        lastFailure = after.reason ?? null;
+      if (!state.startedAt || r.createdAt < state.startedAt) state.startedAt = r.createdAt;
+    } else if (r.action === STEP_ACTIONS.succeeded || r.action === STEP_ACTIONS.failed) {
+      // 旧記録に相反する終了がある場合は先の確定を採用。同時刻で判別できない場合は成功と断定しない。
+      if (
+        !state.terminal ||
+        r.createdAt < state.terminal.createdAt ||
+        (r.createdAt.getTime() === state.terminal.createdAt.getTime() && r.action === STEP_ACTIONS.failed)
+      ) {
+        state.terminal = { action: r.action, after, createdAt: r.createdAt };
       }
     }
+    attempts.set(attempt!, state);
   }
-  return { attempts: started, succeeded, gaveUp, running: started > finished, lastStartedAt, lastFailure };
+  const started = [...attempts.entries()].filter(([, s]) => !!s.startedAt).sort(([a], [b]) => a - b);
+  const latest = started.at(-1);
+  const terminal = latest?.[1].terminal;
+  const failure = started.filter(([, s]) => s.terminal?.action === STEP_ACTIONS.failed).at(-1)?.[1].terminal;
+  return {
+    attempts: latest?.[0] ?? 0,
+    succeeded: terminal?.action === STEP_ACTIONS.succeeded,
+    gaveUp: terminal?.action === STEP_ACTIONS.failed && terminal.after.final === true,
+    running: !!latest && !terminal,
+    lastStartedAt: latest?.[1].startedAt ?? null,
+    lastFailure: failure?.after.reason ?? null,
+  };
 }
 
 /**
@@ -159,8 +169,15 @@ export async function finishStep(
     actor: Actor;
     outcome: { ok: true; summary?: unknown } | { ok: false; reason: string; final: boolean };
   },
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${input.key}`}))`);
+    const rows = await tx
+      .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
+      .from(auditEvents)
+      .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, input.key)));
+    const state = foldStepEvents(rows);
+    if (!state.running || state.attempts !== input.attempt) return false;
     if (input.outcome.ok) {
       await recordEvent(tx, clock, {
         actor: input.actor,
@@ -183,5 +200,6 @@ export async function finishStep(
         } satisfies StepEventAfter,
       });
     }
+    return true;
   });
 }

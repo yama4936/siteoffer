@@ -39,6 +39,7 @@ export interface StepDefinition<P, R> {
 }
 
 export type StepOutcome<R> =
+  | { status: "superseded"; key: string; attempt: number }
   | { status: "succeeded"; key: string; attempt: number; result: R }
   /** 同じキーが成功済み・実行中・上限到達済みのため実行しなかった */
   | { status: "duplicate"; key: string; state: "succeeded" | "running" | "gave_up"; attempts: number }
@@ -88,25 +89,27 @@ export async function executeStep<P, R>(
 
   try {
     const result = await Promise.race([def.run(deps, payload, { attempt, signal: ac.signal }), timeout]);
-    await finishStep(deps.db, deps.clock, {
+    const recorded = await finishStep(deps.db, deps.clock, {
       key,
       queue: def.queue,
       attempt,
       actor: WORKER_ACTOR,
       outcome: { ok: true, summary: def.summarize?.(result) },
     });
+    if (!recorded) return { status: "superseded", key, attempt };
     return { status: "succeeded", key, attempt, result };
   } catch (e) {
     const error = e as Error;
     const reason = `${error.name === "Error" ? "" : `${error.name}: `}${error.message}`.slice(0, 2000);
     const final = e instanceof PermanentError || attempt >= policy.maxAttempts;
-    await finishStep(deps.db, deps.clock, {
+    const recorded = await finishStep(deps.db, deps.clock, {
       key,
       queue: def.queue,
       attempt,
       actor: WORKER_ACTOR,
       outcome: { ok: false, reason, final },
     });
+    if (!recorded) return { status: "superseded", key, attempt };
     if (final) {
       deps.logger.warn("ステップを止めた", { queue: def.queue, key, attempt, reason });
       if (!(e instanceof PreconditionError)) await def.onGiveUp?.(deps, payload, reason);
