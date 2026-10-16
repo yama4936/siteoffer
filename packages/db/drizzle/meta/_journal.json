@@ -148,6 +148,13 @@
       "when": 1792158392552,
       "tag": "0020_worthless_satana",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792163018903,
+      "tag": "0021_lean_black_queen",
+      "breakpoints": true
     }
   ]
 }

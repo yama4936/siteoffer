@@ -15,6 +15,8 @@ export const QUEUES = {
   expireAssignments: "maintenance.expire-assignments",
   /** 定期：実行中のまま残った収集ジョブを失敗に戻す */
   recoverDiscovery: "maintenance.recover-stale-discovery",
+  /** 定期：稼働通知が途切れた生成ジョブの履歴を閉じる */
+  recoverGeneration: "maintenance.recover-stale-generation",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -77,4 +79,5 @@ export const DEFAULT_POLICIES: Record<StepKind, StepPolicy> = {
 export const DEFAULT_SCHEDULES = {
   expireAssignments: "*/10 * * * *",
   recoverDiscovery: "*/15 * * * *",
+  recoverGeneration: "* * * * *",
 } as const;

@@ -1,4 +1,5 @@
 import { releaseExpiredAssignments } from "@siteoffer/core";
+import { recoverExpiredGenerationJobs } from "@siteoffer/generation";
 import type { JobQueue, WorkerDeps } from "./deps.ts";
 import { executeStep, type StepOutcome } from "./execute.ts";
 import { auditStep } from "./pipeline/audit.ts";
@@ -36,6 +37,11 @@ export function createWorkerRuntime(deps: WorkerDeps) {
         const result = await releaseExpiredAssignments(deps.db, deps.clock);
         if (result.released.length || result.escalated.length) deps.logger.info("担当の期限を処理した", { ...result });
         return { status: "maintenance", result };
+      }
+      case QUEUES.recoverGeneration: {
+        const recovered = await recoverExpiredGenerationJobs(deps.db, deps.clock);
+        if (recovered.length) deps.logger.warn("接続が途切れた生成履歴を閉じました", { recovered });
+        return { status: "maintenance", result: { recovered } };
       }
       case QUEUES.recoverDiscovery: {
         const recovered = await recoverStaleDiscoveryJobs(deps.db, deps.clock, deps.discoveryStaleAfterMs);

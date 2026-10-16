@@ -3,6 +3,7 @@ export * from "./config.ts";
 export * from "./facts.ts";
 export * from "./jobs.ts";
 export * from "./json-schema.ts";
+export * from "./lease.ts";
 export * from "./limiter.ts";
 export * from "./mock.ts";
 export * from "./prompt.ts";

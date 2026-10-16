@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./images": "./src/images.ts"
+    "./images": "./src/images.ts",
+    "./lease": "./src/lease.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

@@ -54,6 +54,7 @@ export async function registerQueues(
   for (const [name, cron] of [
     [QUEUES.expireAssignments, config.schedules.expireAssignments],
     [QUEUES.recoverDiscovery, config.schedules.recoverDiscovery],
+    [QUEUES.recoverGeneration, config.schedules.recoverGeneration],
   ] as const) {
     await boss.createQueue(name, { policy: "singleton", retryLimit: 2, retryDelay: 60, expireInSeconds: 600 });
     await boss.schedule(name, cron, {}, { tz: "Asia/Tokyo" });

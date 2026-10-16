@@ -11,6 +11,7 @@ import { buildWorkerDeps, describeConfig, resolveWorkerConfig } from "./config.t
 import { consoleLogger } from "./deps.ts";
 import { startWorkerHeartbeat } from "./heartbeat.ts";
 import { type IntakeLoop, startIntakeLoop } from "./intake.ts";
+import { QUEUES } from "./queues.ts";
 import { createWorkerRuntime } from "./runtime.ts";
 
 export * from "./boss.ts";
@@ -50,6 +51,7 @@ export async function startWorker(env: Record<string, string | undefined> = proc
   const deps = buildWorkerDeps(config, { db, clock: systemClock, queue: createBossQueue(boss), logger });
   const runtime = createWorkerRuntime(deps);
   await registerQueues(boss, runtime, config, logger);
+  await runtime.run(QUEUES.recoverGeneration, {});
   const stopHeartbeat =
     config.intakeIntervalMs > 0
       ? await startWorkerHeartbeat(

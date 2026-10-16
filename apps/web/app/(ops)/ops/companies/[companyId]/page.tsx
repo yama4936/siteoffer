@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AuditView } from "@/components/ops/audit-view";
+import { GenerationHistory } from "@/components/ops/generation-history";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
 import {
   detailsClass,
@@ -28,7 +29,6 @@ import { isUuid, safeReturnTo } from "@/lib/ops/form";
 import {
   ASSIGNMENT_STATUS_LABEL,
   fmtDate,
-  JOB_STATUS_LABEL,
   label,
   OFFICIAL_SITE_LABEL,
   PIPELINE_LABEL,
@@ -562,39 +562,7 @@ export default async function CompanyPage({
           </TableBody>
         </Table>
 
-        <SubHeading>生成ジョブ</SubHeading>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>用途</TableHead>
-              <TableHead>状態</TableHead>
-              <TableHead>生成器</TableHead>
-              <TableHead>モデル（要求/応答）</TableHead>
-              <TableHead>プロンプト版</TableHead>
-              <TableHead>失敗理由</TableHead>
-              <TableHead>登録</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {d.generationJobs.map((j) => (
-              <TableRow key={j.id}>
-                <TableCell>{j.purpose}</TableCell>
-                <TableCell>
-                  <StatusBadge map={JOB_STATUS_LABEL} status={j.status} />
-                </TableCell>
-                <TableCell>{j.generator}</TableCell>
-                <TableCell className="text-xs">
-                  {j.requestedModel ?? "未記録"} / {j.responseModel ?? "未記録"}
-                </TableCell>
-                <TableCell className="text-xs">{j.promptVersion}</TableCell>
-                <TableCell className={j.errorCode ? "text-destructive text-xs" : undefined}>
-                  {j.errorCode ? `${j.errorCode}: ${j.error ?? ""}` : "—"}
-                </TableCell>
-                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(j.createdAt)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <GenerationHistory jobs={d.generationJobs} companyId={c.id} now={new Date()} />
       </Section>
 
       <Section

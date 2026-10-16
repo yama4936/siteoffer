@@ -4,6 +4,15 @@ import { type Db, type DbOrTx, generationJobs } from "@siteoffer/db";
 import { eq } from "drizzle-orm";
 import type { z } from "zod";
 import { type GenerationLimits, resolveLimits } from "./config.ts";
+import {
+  GENERATION_HEARTBEAT_MS,
+  GENERATION_INTERRUPTED_MESSAGE,
+  GENERATION_LEASE_MS,
+  GenerationLeaseLost,
+  ownedGeneration,
+  recoverExpiredGenerationJobs,
+  renewGenerationLease,
+} from "./lease.ts";
 import { ConcurrencyLimiter, GenerationWaitAborted } from "./limiter.ts";
 import {
   type GenerationInput,
@@ -96,11 +105,20 @@ function recordColumns(r: ExecutionRecord) {
 
 async function updateJob(
   db: DbOrTx,
+  clock: Clock,
   id: string,
   values: Partial<typeof generationJobs.$inferInsert>,
 ): Promise<GenerationJob> {
-  const [row] = await db.update(generationJobs).set(values).where(eq(generationJobs.id, id)).returning();
-  return row!;
+  // 行ロックの待ち時間中に期限を過ぎた場合も、取得後の時刻で再照合する。
+  await db.select({ id: generationJobs.id }).from(generationJobs).where(eq(generationJobs.id, id)).for("update");
+  const terminal = values.status === "succeeded" || values.status === "failed";
+  const [row] = await db
+    .update(generationJobs)
+    .set({ ...values, ...(terminal ? { leaseUntil: null } : {}) })
+    .where(ownedGeneration(id, clock.now()))
+    .returning();
+  if (!row) throw new GenerationLeaseLost();
+  return row;
 }
 
 /** 1回の試行。タイムアウトしたら generator の完了を待たずに打ち切る */
@@ -189,6 +207,7 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
         companyId: req.companyId,
         purpose: req.purpose,
         status: "queued",
+        leaseUntil: new Date(clock.now().getTime() + GENERATION_LEASE_MS),
         generator: generator.kind,
         requestedModel: generator.requestedModel,
         promptVersion: generator.promptVersion(req.purpose),
@@ -218,107 +237,134 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
     return ok({ job, output: job.status === "succeeded" ? (job.output as T) : null, reused: true });
   }
 
-  return limiter
-    .run(async () => {
-      let job = created;
-      let last: Extract<GeneratorResult<T>, { ok: false }> | null = null;
-
-      for (let attempt = 1; attempt <= limits.maxAttempts; attempt++) {
-        job = await db.transaction(async (tx) => {
-          const row = await updateJob(tx, job.id, {
-            status: "running",
-            attempts: attempt,
-            startedAt: job.startedAt ?? clock.now(),
-          });
-          await recordEvent(tx, clock, {
-            actor,
-            action: "generation.attempt_started",
-            targetType: "generation_job",
-            targetId: job.id,
-            after: { attempt },
-          });
-          return row;
+  // 待機中も更新する。ジョブを取得し直す方式ではないため、失効後の復活は認めない。
+  const lease = new AbortController();
+  const signal = req.signal ? AbortSignal.any([req.signal, lease.signal]) : lease.signal;
+  let ping: Promise<void> | null = null;
+  const timer = setInterval(() => {
+    if (!ping)
+      ping = renewGenerationLease(db, clock, created.id)
+        .then((owned) => {
+          if (!owned) lease.abort();
+        })
+        .catch(() => {
+          lease.abort();
+        })
+        .finally(() => {
+          ping = null;
         });
+  }, GENERATION_HEARTBEAT_MS);
+  timer.unref();
+  try {
+    return await limiter
+      .run(async () => {
+        let job = created;
+        let last: Extract<GeneratorResult<T>, { ok: false }> | null = null;
 
-        const r = await attemptOnce(
-          generator,
-          req.purpose,
-          input,
-          outputSchema,
-          job.id,
-          attempt,
-          limits.timeoutMs,
-          req.signal,
-        );
-
-        if (r.ok) {
-          const sha256 = createHash("sha256").update(JSON.stringify(r.output)).digest("hex");
+        for (let attempt = 1; attempt <= limits.maxAttempts; attempt++) {
           job = await db.transaction(async (tx) => {
-            const row = await updateJob(tx, job.id, {
-              ...recordColumns(r.record),
-              status: "succeeded",
-              output: r.output,
-              outputRef: { storage: "generation_jobs.output", sha256 },
-              errorCode: null,
-              error: null,
-              finishedAt: clock.now(),
+            const row = await updateJob(tx, clock, job.id, {
+              status: "running",
+              attempts: attempt,
+              startedAt: job.startedAt ?? clock.now(),
             });
             await recordEvent(tx, clock, {
               actor,
-              action: "generation.succeeded",
+              action: "generation.attempt_started",
               targetType: "generation_job",
               targetId: job.id,
-              after: { attempt, threadId: r.record.threadId, outputSha256: sha256 },
+              after: { attempt },
             });
             return row;
           });
-          return ok({ job, output: r.output, reused: false });
+
+          const r = await attemptOnce(
+            generator,
+            req.purpose,
+            input,
+            outputSchema,
+            job.id,
+            attempt,
+            limits.timeoutMs,
+            signal,
+          );
+
+          if (r.ok) {
+            const sha256 = createHash("sha256").update(JSON.stringify(r.output)).digest("hex");
+            job = await db.transaction(async (tx) => {
+              const row = await updateJob(tx, clock, job.id, {
+                ...recordColumns(r.record),
+                status: "succeeded",
+                output: r.output,
+                outputRef: { storage: "generation_jobs.output", sha256 },
+                errorCode: null,
+                error: null,
+                finishedAt: clock.now(),
+              });
+              await recordEvent(tx, clock, {
+                actor,
+                action: "generation.succeeded",
+                targetType: "generation_job",
+                targetId: job.id,
+                after: { attempt, threadId: r.record.threadId, outputSha256: sha256 },
+              });
+              return row;
+            });
+            return ok({ job, output: r.output, reused: false });
+          }
+
+          last = r;
+          const final = attempt >= limits.maxAttempts || NON_RETRYABLE.includes(r.error);
+          job = await db.transaction(async (tx) => {
+            const row = await updateJob(tx, clock, job.id, {
+              ...recordColumns(r.record),
+              status: final ? "failed" : "running",
+              errorCode: r.error,
+              error: r.message.slice(0, 2000),
+              ...(final ? { finishedAt: clock.now() } : {}),
+            });
+            await recordEvent(tx, clock, {
+              actor,
+              action: final ? "generation.failed" : "generation.attempt_failed",
+              targetType: "generation_job",
+              targetId: job.id,
+              after: { attempt, errorCode: r.error, threadId: r.record.threadId },
+            });
+            return row;
+          });
+          if (final) break;
         }
 
-        last = r;
-        const final = attempt >= limits.maxAttempts || NON_RETRYABLE.includes(r.error);
-        job = await db.transaction(async (tx) => {
-          const row = await updateJob(tx, job.id, {
-            ...recordColumns(r.record),
-            status: final ? "failed" : "running",
-            errorCode: r.error,
-            error: r.message.slice(0, 2000),
-            ...(final ? { finishedAt: clock.now() } : {}),
+        return err("generation_failed", `${job.id}: ${last?.error ?? "unknown"}: ${last?.message ?? ""}`);
+      }, signal)
+      .catch(async (error: unknown) => {
+        if (!(error instanceof GenerationWaitAborted)) throw error;
+        // 実行枠を待っている間の中断も永続化する。生成器を呼ばず、試行回数は増やさない。
+        await db.transaction(async (tx) => {
+          await updateJob(tx, clock, created.id, {
+            status: "failed",
+            errorCode: "aborted",
+            error: "親の処理が中断されたため生成を停止しました",
+            finishedAt: clock.now(),
           });
           await recordEvent(tx, clock, {
             actor,
-            action: final ? "generation.failed" : "generation.attempt_failed",
+            action: "generation.failed",
             targetType: "generation_job",
-            targetId: job.id,
-            after: { attempt, errorCode: r.error, threadId: r.record.threadId },
+            targetId: created.id,
+            after: { errorCode: "aborted" },
           });
-          return row;
         });
-        if (final) break;
-      }
-
-      return err("generation_failed", `${job.id}: ${last?.error ?? "unknown"}: ${last?.message ?? ""}`);
-    }, req.signal)
-    .catch(async (error: unknown) => {
-      if (!(error instanceof GenerationWaitAborted)) throw error;
-      // 実行枠を待っている間の中断も永続化する。生成器を呼ばず、試行回数は増やさない。
-      await db.transaction(async (tx) => {
-        await updateJob(tx, created.id, {
-          status: "failed",
-          errorCode: "aborted",
-          error: "親の処理が中断されたため生成を停止しました",
-          finishedAt: clock.now(),
-        });
-        await recordEvent(tx, clock, {
-          actor,
-          action: "generation.failed",
-          targetType: "generation_job",
-          targetId: created.id,
-          after: { errorCode: "aborted" },
-        });
+        return err("generation_failed", "親の処理が中断されたため生成を停止しました");
       });
-      return err("generation_failed", "親の処理が中断されたため生成を停止しました");
-    });
+  } catch (error) {
+    if (!(error instanceof GenerationLeaseLost)) throw error;
+    await recoverExpiredGenerationJobs(db, clock, created.id);
+    return err("generation_failed", GENERATION_INTERRUPTED_MESSAGE);
+  } finally {
+    clearInterval(timer);
+    if (ping) await ping;
+  }
 }
 
 /** 冪等キーでジョブを探す */

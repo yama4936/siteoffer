@@ -456,7 +456,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       expect(generate).toHaveBeenCalledTimes(1);
       expect(env.fake.calls).toHaveLength(builds);
       const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, jobId));
-      expect(job).toMatchObject({ status: "failed", errorCode: "aborted", attempts: 1, output: null });
+      expect(job).toMatchObject({ status: "failed", errorCode: "interrupted", attempts: 1, output: null });
       generate.mockRestore();
       expect(await intakeDeliveries(env.deps, createIntakeState())).toMatchObject([{ status: "version_added" }]);
     } finally {

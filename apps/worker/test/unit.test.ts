@@ -115,6 +115,7 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
     expect(f.schedules).toEqual({
       [QUEUES.expireAssignments]: DEFAULT_SCHEDULES.expireAssignments,
       [QUEUES.recoverDiscovery]: DEFAULT_SCHEDULES.recoverDiscovery,
+      [QUEUES.recoverGeneration]: DEFAULT_SCHEDULES.recoverGeneration,
     });
 
     const handler = f.handlers[QUEUES.proposal]!;
