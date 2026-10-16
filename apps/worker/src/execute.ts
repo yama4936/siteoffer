@@ -1,6 +1,7 @@
 import type { Actor } from "@siteoffer/core";
+import type { DbOrTx } from "@siteoffer/db";
 import type { WorkerDeps } from "./deps.ts";
-import { claimStep, finishStep } from "./ledger.ts";
+import { claimStep, finishStep, runOwnedStep, StepOwnershipLost } from "./ledger.ts";
 import type { StepKind } from "./queues.ts";
 
 /** 同じ入力で再試行しても結果が変わらない失敗（入力不正・判定が create でない等）。再試行せずに止める */
@@ -24,6 +25,10 @@ export interface StepContext {
   attempt: number;
   /** 制限時間を過ぎたら中断される。長い処理は区切りごとに確認する */
   signal: AbortSignal;
+  /** 外部処理に入る前の照合。業務のDB更新には withOwnership を使う。 */
+  assertCurrent(): Promise<void>;
+  /** 再試行開始と競合する更新を同じトランザクションで保護する。外部処理は渡さない。 */
+  withOwnership<T>(write: (tx: DbOrTx) => Promise<T>): Promise<T>;
 }
 
 export interface StepDefinition<P, R> {
@@ -88,7 +93,21 @@ export async function executeStep<P, R>(
   });
 
   try {
-    const result = await Promise.race([def.run(deps, payload, { attempt, signal: ac.signal }), timeout]);
+    const withOwnership: StepContext["withOwnership"] = async (write) => {
+      try {
+        return await runOwnedStep(deps.db, key, attempt, ac.signal, write);
+      } catch (error) {
+        if (error instanceof StepOwnershipLost) ac.abort();
+        throw error;
+      }
+    };
+    const ctx: StepContext = {
+      attempt,
+      signal: ac.signal,
+      withOwnership,
+      assertCurrent: () => withOwnership(async () => {}),
+    };
+    const result = await Promise.race([def.run(deps, payload, ctx), timeout]);
     const recorded = await finishStep(deps.db, deps.clock, {
       key,
       queue: def.queue,
@@ -99,6 +118,7 @@ export async function executeStep<P, R>(
     if (!recorded) return { status: "superseded", key, attempt };
     return { status: "succeeded", key, attempt, result };
   } catch (e) {
+    if (e instanceof StepOwnershipLost) ac.abort();
     const error = e as Error;
     const reason = `${error.name === "Error" ? "" : `${error.name}: `}${error.message}`.slice(0, 2000);
     const final = e instanceof PermanentError || attempt >= policy.maxAttempts;

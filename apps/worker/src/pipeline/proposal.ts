@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
 import { type Clock, createDesign, DEFAULT_DESIGN_BRIEF, recordEvent } from "@siteoffer/core";
-import { companies, type Db, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
+import { companies, type DbOrTx, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { findGenerationJob, type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { CallScript, Faq, GenerationInput, ProposalText, SiteGenerationOutput } from "@siteoffer/schemas";
 import { and, eq, max, sql } from "drizzle-orm";
@@ -62,14 +62,16 @@ export const proposalStep: StepDefinition<
 
     if (!payload.designVersionId) {
       const model = process.env.SITEOFFER_IMAGE_MODEL?.trim();
-      const design = await createDesign(db, clock, PIPELINE_ACTOR, {
-        companyId: company.id,
-        auditId: audit.id,
-        requestKey: `initial:${createHash("sha256").update(key).digest("hex")}`,
-        brief: DEFAULT_DESIGN_BRIEF,
-        source: model && process.env.OPENAI_API_KEY ? "openai" : "import",
-        ...(model ? { model } : {}),
-      });
+      const design = await ctx.withOwnership((tx) =>
+        createDesign(tx, clock, PIPELINE_ACTOR, {
+          companyId: company.id,
+          auditId: audit.id,
+          requestKey: `initial:${createHash("sha256").update(key).digest("hex")}`,
+          brief: DEFAULT_DESIGN_BRIEF,
+          source: model && process.env.OPENAI_API_KEY ? "openai" : "import",
+          ...(model ? { model } : {}),
+        }),
+      );
       return { status: "awaiting_design", designVersionId: design.id };
     }
     const [design] = await db.select().from(designVersions).where(eq(designVersions.id, payload.designVersionId));
@@ -77,26 +79,31 @@ export const proposalStep: StepDefinition<
       throw new PreconditionError("同じ企業・診断の承認済みデザインが必要です");
     }
 
-    const version = await ensureProposalVersion(db, clock, {
-      companyId: company.id,
-      auditId: audit.id,
-      idempotencyKey: key,
-      revision: payload.revision,
+    const version = await ctx.withOwnership(async (tx) => {
+      const version = await ensureProposalVersion(tx, clock, {
+        companyId: company.id,
+        auditId: audit.id,
+        idempotencyKey: key,
+        revision: payload.revision,
+      });
+      if (version.status !== "generating") {
+        throw new PreconditionError(`提案版 ${version.id} はすでに ${version.status}`);
+      }
+      await tx
+        .update(proposalVersions)
+        .set({
+          content: { ...(version.content as object), designVersionId: design.id, designSha256: design.imageSha256 },
+        })
+        .where(and(eq(proposalVersions.id, version.id), eq(proposalVersions.status, "generating")));
+      return version;
     });
-    if (version.status !== "generating") {
-      throw new PreconditionError(`提案版 ${version.id} はすでに ${version.status}`);
-    }
-
-    await db
-      .update(proposalVersions)
-      .set({
-        content: { ...(version.content as object), designVersionId: design.id, designSha256: design.imageSha256 },
-      })
-      .where(eq(proposalVersions.id, version.id));
+    // 古いビルドが遅れて書き込んでも、新しい試行の参照画像・成果物を上書きできない。
+    const workDir = path.join(deps.demoArtifactRoot, company.id, version.id, `attempt-${ctx.attempt}`);
+    await ctx.assertCurrent();
     const input = await withDesignReference(
       await deps.buildGenerationInput(db, { company, audit }),
       design,
-      path.join(deps.demoArtifactRoot, company.id, version.id, "reference"),
+      path.join(workDir, "reference"),
     );
     const genDeps: GenerationDeps = {
       db,
@@ -109,7 +116,7 @@ export const proposalStep: StepDefinition<
     const outputs: Partial<Outputs> = {};
     const jobIds: ProposalContent["generationJobIds"] = {};
     for (const purpose of PROPOSAL_PURPOSES) {
-      if (ctx.signal.aborted) throw new Error("制限時間を過ぎたため中断した");
+      await ctx.assertCurrent();
       const r = await generateOnce(genDeps, {
         key,
         purpose,
@@ -122,13 +129,15 @@ export const proposalStep: StepDefinition<
       jobIds[purpose] = r.jobId;
     }
     const out = outputs as Outputs;
-    await moveCompanyStatus(db, clock, {
-      companyId: company.id,
-      from: [...PRE_REVIEW_STATUSES],
-      to: "generated",
-      reason: "提案の生成が完了（デモのビルド・検査前）",
-      meta: { proposalVersionId: version.id },
-    });
+    await ctx.withOwnership((tx) =>
+      moveCompanyStatus(tx, clock, {
+        companyId: company.id,
+        from: [...PRE_REVIEW_STATUSES],
+        to: "generated",
+        reason: "提案の生成が完了（デモのビルド・検査前）",
+        meta: { proposalVersionId: version.id },
+      }),
+    );
 
     const content: ProposalContent = {
       ...emptyProposalContent({ idempotencyKey: key, auditId: audit.id, revision: payload.revision }),
@@ -142,8 +151,7 @@ export const proposalStep: StepDefinition<
       generator: deps.generation.generator.kind,
     };
 
-    if (ctx.signal.aborted) throw new Error("制限時間を過ぎたため中断した");
-    const workDir = path.join(deps.demoArtifactRoot, company.id, version.id);
+    await ctx.assertCurrent();
     const built = await deps.siteBuilder.buildDemo({
       siteInput: {
         ...siteGenerationToSiteInput(out.demo_site, { mode: "demo" }),
@@ -151,29 +159,33 @@ export const proposalStep: StepDefinition<
       },
       workDir,
     });
-    if (ctx.signal.aborted) throw new Error("制限時間を過ぎたため中断した");
+    await ctx.assertCurrent();
     if (!built.ok) {
       const reason = `デモのビルド・検査に失敗した（${built.reason}）：${built.message}`;
       if (built.retryable) throw new Error(reason);
-      await saveVersion(db, clock, version.id, {
-        status: "failed",
-        content: { ...content, demoCheck: built.check ?? null, failure: reason },
-      });
+      await ctx.withOwnership((tx) =>
+        saveVersion(tx, clock, version.id, {
+          status: "failed",
+          content: { ...content, demoCheck: built.check ?? null, failure: reason },
+        }),
+      );
       throw new PermanentError(reason);
     }
 
-    await saveVersion(db, clock, version.id, {
-      status: "in_review",
-      content: { ...content, demoCheck: built.check },
-      demoArtifactDir: built.distDir,
-      generationJobId: jobIds.demo_site ?? null,
-    });
-    await moveCompanyStatus(db, clock, {
-      companyId: company.id,
-      from: [...PRE_REVIEW_STATUSES],
-      to: "in_review",
-      reason: "提案版を運営確認待ちで保存",
-      meta: { proposalVersionId: version.id, version: version.version },
+    await ctx.withOwnership(async (tx) => {
+      await saveVersion(tx, clock, version.id, {
+        status: "in_review",
+        content: { ...content, demoCheck: built.check },
+        demoArtifactDir: built.distDir,
+        generationJobId: jobIds.demo_site ?? null,
+      });
+      await moveCompanyStatus(tx, clock, {
+        companyId: company.id,
+        from: [...PRE_REVIEW_STATUSES],
+        to: "in_review",
+        reason: "提案版を運営確認待ちで保存",
+        meta: { proposalVersionId: version.id, version: version.version },
+      });
     });
     return {
       companyId: company.id,
@@ -236,7 +248,7 @@ async function generateOnce(
   return { jobId: r.value.job.id, output: r.value.output };
 }
 
-async function findVersionByKey(db: Db, companyId: string, key: string): Promise<ProposalVersionRow | null> {
+async function findVersionByKey(db: DbOrTx, companyId: string, key: string): Promise<ProposalVersionRow | null> {
   const [row] = await db
     .select({ v: proposalVersions })
     .from(proposalVersions)
@@ -250,7 +262,7 @@ async function findVersionByKey(db: Db, companyId: string, key: string): Promise
  * 版番号の採番は提案ごとのアドバイザリロックで直列化する（一意制約 proposal_id + version でも守られる）。
  */
 export async function ensureProposalVersion(
-  db: Db,
+  db: DbOrTx,
   clock: Clock,
   input: { companyId: string; auditId: string; idempotencyKey: string; revision: string },
 ): Promise<ProposalVersionRow> {
@@ -299,7 +311,7 @@ export async function ensureProposalVersion(
 
 /** 生成中（generating）の版だけを更新する。運営の確認後の版・契約で選ばれた版は変えない */
 async function saveVersion(
-  db: Db,
+  db: DbOrTx,
   clock: Clock,
   id: string,
   patch: {

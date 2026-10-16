@@ -1,5 +1,5 @@
 import { type Actor, type Clock, recordEvent } from "@siteoffer/core";
-import { auditEvents, type Db } from "@siteoffer/db";
+import { auditEvents, type Db, type DbOrTx } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
 
 /**
@@ -52,12 +52,37 @@ interface StepEventAfter {
   timeoutMs?: number;
 }
 
-export async function readStepState(db: Db, key: string): Promise<StepState> {
+export async function readStepState(db: DbOrTx, key: string): Promise<StepState> {
   const rows = await db
     .select({ action: auditEvents.action, after: auditEvents.after, createdAt: auditEvents.createdAt })
     .from(auditEvents)
     .where(and(eq(auditEvents.targetType, STEP_TARGET), eq(auditEvents.targetId, key)));
   return foldStepEvents(rows);
+}
+
+export class StepOwnershipLost extends Error {
+  override name = "StepOwnershipLost";
+  constructor() {
+    super("処理の実行権限が失われたため、古い試行の結果を保存しませんでした");
+  }
+}
+
+/** 現在の試行であることの照合と業務更新を、再試行の開始と同じロックで確定する。 */
+export async function runOwnedStep<T>(
+  db: Db,
+  key: string,
+  attempt: number,
+  signal: AbortSignal,
+  write: (tx: DbOrTx) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${key}`}))`);
+    const current = await readStepState(tx, key);
+    if (signal.aborted || !current.running || current.attempts !== attempt) throw new StepOwnershipLost();
+    const result = await write(tx);
+    if (signal.aborted) throw new StepOwnershipLost();
+    return result;
+  });
 }
 
 export function foldStepEvents(rows: { action: string; after: unknown; createdAt: Date }[]): StepState {

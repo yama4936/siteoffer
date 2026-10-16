@@ -2,6 +2,8 @@
  * パイプライン（収集 → 診断 → 生成 → 運営確認待ち）。PGlite・フィクスチャの取得元・モック生成器で確認する。
  * Astroのビルドはモック（実ビルドは pipeline-astro.test.ts の1回だけ）。モックでの成功は実生成の成功ではない。
  */
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   auditEvents,
   companies,
@@ -21,7 +23,7 @@ import { claimStep, readStepState, STEP_TARGET } from "../src/ledger.ts";
 import { auditStep } from "../src/pipeline/audit.ts";
 import { discoveryStep } from "../src/pipeline/discovery.ts";
 import { proposalStep, requestRegeneration } from "../src/pipeline/proposal.ts";
-import { QUEUES, stepKeys } from "../src/queues.ts";
+import { type ProposalPayload, QUEUES, stepKeys } from "../src/queues.ts";
 import {
   drainWithDesignApproval,
   fakeSiteBuilder,
@@ -232,6 +234,113 @@ describe("二重投入", () => {
 });
 
 describe("失敗・再試行・上限", () => {
+  it("古いビルドが再試行の完了後に書き込んでも、採用済み成果物と状態を変えない", async () => {
+    const fake = fakeSiteBuilder();
+    let release!: () => void;
+    let ready!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let calls = 0;
+    const paths: string[] = [];
+    const builder = {
+      ...fake.builder,
+      async buildDemo(input: Parameters<typeof fake.builder.buildDemo>[0]) {
+        const n = ++calls;
+        const built = await fake.builder.buildDemo(input);
+        if (!built.ok) throw new Error("fixture build failed");
+        paths.push(built.distDir);
+        if (n === 1) {
+          ready();
+          await gate;
+        }
+        await writeFile(path.join(built.distDir, "index.html"), n === 1 ? "old-attempt" : "current-attempt");
+        return built;
+      },
+    };
+    env = await setupEnv({ threshold: 100, siteBuilder: builder, policies: { proposal: { timeoutMs: 60_000 } } });
+    const e = env;
+    await startDiscovery(e);
+    const original = drainWithDesignApproval(e);
+    try {
+      await started;
+      const payload = [...e.queue.sent]
+        .reverse()
+        .find((s) => s.name === QUEUES.proposal && (s.data as ProposalPayload).designVersionId)!
+        .data as ProposalPayload;
+      e.clock.advance(60_001);
+      expect(await executeStep(e.deps, proposalStep, payload)).toMatchObject({ status: "succeeded", attempt: 2 });
+      const [current] = await versions(e);
+      expect(current!.demoArtifactDir).toBe(paths[1]);
+      release();
+      expect((await original).at(-1)!.outcome).toMatchObject({ status: "superseded", attempt: 1 });
+      expect(paths[0]).not.toBe(paths[1]);
+      expect(await readFile(path.join(paths[1]!, "index.html"), "utf8")).toBe("current-attempt");
+      expect(await readFile(path.join(paths[0]!, "index.html"), "utf8")).toBe("old-attempt");
+      expect((await versions(e))[0]).toEqual(current);
+      expect((await company(e)).pipelineStatus).toBe("in_review");
+      expect(await readStepState(e.db, stepKeys.proposal(payload))).toMatchObject({
+        attempts: 2,
+        succeeded: true,
+        gaveUp: false,
+      });
+      expect(await e.db.select().from(generationJobs)).toHaveLength(5); // 成功済みの生成は再利用
+    } finally {
+      release();
+      await original;
+    }
+  });
+
+  it("再試行後に戻った古い診断は採点確定・企業更新・提案送信へ進めない", async () => {
+    env = await setupEnv({ threshold: 100, policies: { audit: { timeoutMs: 60_000 } } });
+    const e = env;
+    const job = await createDiscoveryJob(e.db, e.clock, { provider: "fixture", criteria: ONE_COMPANY_CRITERIA });
+    if (!job.ok) throw new Error(job.error);
+    await executeStep(e.deps, discoveryStep, { discoveryJobId: job.value.jobId });
+    const c = await company(e);
+    const payload = { companyId: c.id, requestKey: "stale-diagnosis" };
+    let release!: () => void;
+    let ready!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const generator = e.deps.audit.generator;
+    let calls = 0;
+    e.deps.audit.generator = {
+      async generate(input) {
+        if (++calls === 1) {
+          ready();
+          await gate;
+        }
+        // 古い生成器の返答も有効なJSONにして、形式エラーで止まっただけの検証にしない。
+        return generator.generate(input);
+      },
+    };
+    const old = executeStep(e.deps, auditStep, payload);
+    try {
+      await started;
+      e.clock.advance(60_001);
+      expect(await executeStep(e.deps, auditStep, payload)).toMatchObject({ status: "succeeded", attempt: 2 });
+      const sent = e.queue.sent.filter((s) => s.name === QUEUES.proposal).length;
+      release();
+      expect(await old).toMatchObject({ status: "superseded", attempt: 1 });
+      expect(e.queue.sent.filter((s) => s.name === QUEUES.proposal)).toHaveLength(sent);
+      const audits = await e.db.select().from(siteAudits);
+      expect(audits.filter((a) => a.status === "evaluated")).toHaveLength(1);
+      expect(audits.filter((a) => a.status === "failed")).toHaveLength(1);
+      expect((await company(e)).pipelineStatus).toBe("audited");
+    } finally {
+      release();
+      await old;
+    }
+  });
+
   it("診断の時間切れを採点へ伝え、診断を閉じて提案キューへ進めない", async () => {
     env = await setupEnv({ threshold: 100, policies: { audit: { timeoutMs: 2_000, maxAttempts: 1 } } });
     const e = env;

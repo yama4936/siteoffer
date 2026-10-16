@@ -51,22 +51,26 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
       websiteId: site.id,
       actor: PIPELINE_ACTOR,
       signal: ctx.signal,
+      withOwnership: ctx.withOwnership,
     });
-    if (ctx.signal.aborted) throw new Error("診断処理が中断されました");
+    await ctx.assertCurrent();
     if (!r.ok) throw new PermanentError(`${r.error}: ${r.message ?? ""}`);
     const out = r.value;
     if (out.status === "failed") throw new Error(`診断に失敗した：${out.failureReason ?? "理由不明"}`);
 
     const meta = { auditId: out.auditId, decision: out.decision };
     if (out.status === "evaluated" && out.decision === "create") {
-      await moveCompanyStatus(db, clock, {
-        companyId: company.id,
-        from: [...PRE_REVIEW_STATUSES],
-        to: "audited",
-        reason: "診断済み（判定：create）",
-        meta,
-      });
+      await ctx.withOwnership((tx) =>
+        moveCompanyStatus(tx, clock, {
+          companyId: company.id,
+          from: [...PRE_REVIEW_STATUSES],
+          to: "audited",
+          reason: "診断済み（判定：create）",
+          meta,
+        }),
+      );
       const next: ProposalPayload = { companyId: company.id, auditId: out.auditId, revision: "initial" };
+      await ctx.assertCurrent();
       await deps.queue.send(QUEUES.proposal, next, { singletonKey: stepKeys.proposal(next) });
       return {
         ...base,
@@ -79,15 +83,17 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     }
 
     const hold = out.decision !== "skip";
-    await moveCompanyStatus(db, clock, {
-      companyId: company.id,
-      from: [...PRE_REVIEW_STATUSES],
-      to: hold ? "on_hold" : "audited",
-      reason: hold
-        ? `判定保留（${out.status === "unevaluable" ? "評価不能" : "閾値未設定・カバー率不足など"}）。生成しない`
-        : "判定：skip（提案書を作らない）。生成しない",
-      meta,
-    });
+    await ctx.withOwnership((tx) =>
+      moveCompanyStatus(tx, clock, {
+        companyId: company.id,
+        from: [...PRE_REVIEW_STATUSES],
+        to: hold ? "on_hold" : "audited",
+        reason: hold
+          ? `判定保留（${out.status === "unevaluable" ? "評価不能" : "閾値未設定・カバー率不足など"}）。生成しない`
+          : "判定：skip（提案書を作らない）。生成しない",
+        meta,
+      }),
+    );
     return {
       ...base,
       skipped: null,

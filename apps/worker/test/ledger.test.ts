@@ -1,10 +1,18 @@
 import { type Actor, fixedClock } from "@siteoffer/core";
-import { auditEvents, type Db } from "@siteoffer/db";
+import { auditEvents, companies, type Db } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { silentLogger, type WorkerDeps } from "../src/deps.ts";
 import { executeStep, PermanentError, type StepDefinition } from "../src/execute.ts";
-import { claimStep, finishStep, foldStepEvents, readStepState, STEP_ACTIONS } from "../src/ledger.ts";
+import {
+  claimStep,
+  finishStep,
+  foldStepEvents,
+  readStepState,
+  runOwnedStep,
+  STEP_ACTIONS,
+  StepOwnershipLost,
+} from "../src/ledger.ts";
 import { DEFAULT_POLICIES } from "../src/queues.ts";
 
 const actor: Actor = { kind: "system", job: "ledger-test" };
@@ -19,6 +27,33 @@ afterEach(async () => close());
 const input = { key: "ledger:test", queue: "test", actor, maxAttempts: 3, staleAfterMs: 60_000 };
 
 describe("試行ごとの終了記録", () => {
+  it("新試行の開始後は古い業務更新を呼ばない", async () => {
+    await claimStep(db, clock, input);
+    clock.advance(60_001);
+    await claimStep(db, clock, input);
+    const write = vi.fn(async () => {});
+    await expect(runOwnedStep(db, input.key, 1, new AbortController().signal, write)).rejects.toBeInstanceOf(
+      StepOwnershipLost,
+    );
+    expect(write).not.toHaveBeenCalled();
+    await runOwnedStep(db, input.key, 2, new AbortController().signal, async (tx) => {
+      await tx.insert(companies).values({ name: "現在の試行" });
+    });
+    expect(await db.select().from(companies)).toHaveLength(1);
+  });
+
+  it("更新中に中断された場合は業務データもロールバックする", async () => {
+    await claimStep(db, clock, input);
+    const controller = new AbortController();
+    await expect(
+      runOwnedStep(db, input.key, 1, controller.signal, async (tx) => {
+        await tx.insert(companies).values({ name: "保存しない" });
+        controller.abort();
+      }),
+    ).rejects.toBeInstanceOf(StepOwnershipLost);
+    expect(await db.select().from(companies)).toHaveLength(0);
+  });
+
   it("重複と古い成功は新しい実行を終了させず、順序にも依存しない", () => {
     const event = (action: string, attempt: number, ms: number) => ({
       action,

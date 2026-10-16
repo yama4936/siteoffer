@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import {
   attachDesignImage,
   createDesign,
@@ -115,9 +116,9 @@ describe("画像を先に承認する制作フロー", () => {
       status: "in_review",
       content: { designVersionId: d!.id, designSha256: expect.any(String) },
     });
-    expect(
-      await readFile(`${env.deps.demoArtifactRoot}/${s.company.id}/${v!.id}/reference/design-${d!.id}.png`),
-    ).toEqual(s.image.png);
+    expect(await readFile(path.join(path.dirname(v!.demoArtifactDir!), "reference", `design-${d!.id}.png`))).toEqual(
+      s.image.png,
+    );
     await intakeDesignBuilds(env.deps);
     expect(env.queue.size).toBe(0);
     await expect(retryDesignBuild(env.db, env.clock, s.actor, d!.id)).rejects.toThrow("制作失敗");

@@ -23,6 +23,8 @@ export interface RunSiteAuditInput {
   websiteId: string;
   actor: Actor;
   signal?: AbortSignal;
+  /** ワーカーの現在の試行に属するDB更新を保護する。外部処理はこの中で実行しない。 */
+  withOwnership?: <T>(write: (tx: DbOrTx) => Promise<T>) => Promise<T>;
 }
 
 export type AuditOutcomeStatus = "evaluated" | "unevaluable" | "failed";
@@ -65,9 +67,11 @@ export async function runSiteAudit(
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return err("invalid_url", "HTTP/HTTPS以外のURL");
 
+  const owned: NonNullable<RunSiteAuditInput["withOwnership"]> =
+    input.withOwnership ?? ((write) => db.transaction(write));
   const auditId = crypto.randomUUID();
   const artifactDir = artifactDirFor(deps.options.paths.artifactRoot, url.href, auditId, clock.now());
-  await db.transaction(async (tx) => {
+  await owned(async (tx) => {
     await tx.insert(siteAudits).values({
       id: auditId,
       companyId: site.companyId,
@@ -89,7 +93,8 @@ export async function runSiteAudit(
   });
 
   const update = async (patch: AuditPatch, action: string) => {
-    await db.transaction(async (tx) => {
+    const transact: typeof owned = patch.status === "failed" ? (write) => db.transaction(write) : owned;
+    await transact(async (tx) => {
       await tx.select({ id: siteAudits.id }).from(siteAudits).where(eq(siteAudits.id, auditId)).for("update");
       if (patch.status !== "failed") checkAuditSignal(input.signal);
       await tx
@@ -115,7 +120,10 @@ export async function runSiteAudit(
     return ok({ auditId, status: "failed", decision: null, artifactDir, failureReason: reason });
   };
 
-  const run = <T>(fn: () => Promise<T>) => abortableAudit(fn, input.signal);
+  const run = async <T>(fn: () => Promise<T>) => {
+    if (input.withOwnership) await owned(async () => {});
+    return abortableAudit(fn, input.signal);
+  };
   try {
     checkAuditSignal(input.signal);
     await mkdir(artifactDir, { recursive: true });
@@ -194,7 +202,7 @@ export async function runSiteAudit(
     if (!items.ok) return fail(`根拠のない項目がある: ${items.message}`);
     const flags = (Array.isArray(final.critical_flags) ? final.critical_flags : []) as CriticalFlag[];
     const criticalItems = new Set(flags.map((f) => f.item).filter((i): i is string => typeof i === "string"));
-    await db.transaction(async (tx) => {
+    await owned(async (tx) => {
       await tx.select({ id: siteAudits.id }).from(siteAudits).where(eq(siteAudits.id, auditId)).for("update");
       checkAuditSignal(input.signal);
       await tx
