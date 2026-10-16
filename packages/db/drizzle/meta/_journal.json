@@ -169,6 +169,13 @@
       "when": 1792170405590,
       "tag": "0023_military_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792172486704,
+      "tag": "0024_broken_reptil",
+      "breakpoints": true
     }
   ]
 }

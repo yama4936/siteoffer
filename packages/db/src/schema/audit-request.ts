@@ -31,5 +31,6 @@ export const auditRequests = pgTable(
   (t) => [
     uniqueIndex("audit_requests_one_open_company").on(t.companyId).where(sql`${t.finishedAt} is null`),
     index("audit_requests_pending").on(t.finishedAt, t.nextAttemptAt, t.leaseUntil),
+    index("audit_requests_company_history").on(t.companyId, t.createdAt, t.id),
   ],
 );
