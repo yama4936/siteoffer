@@ -160,7 +160,7 @@ export function WorkQueue({
             .filter((g) => g.count > perGroup)
             .map((g) => (
               <Link key={g.key} href={g.href}>
-                {g.label}の全{g.count}件を確認 <ArrowRight size={14} />
+                {g.label}の一覧を開く（{g.count}件待ち） <ArrowRight size={14} />
               </Link>
             ))}
         </div>

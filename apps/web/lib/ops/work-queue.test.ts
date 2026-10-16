@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { confirmDomainPreference, fixedClock, saveDomainPreference } from "@siteoffer/core";
+import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
 import {
   assignments,
   companies,
@@ -7,14 +9,15 @@ import {
   deliveries,
   designVersions,
   discoveryJobs,
+  domainPreferences,
   proposalVersions,
   siteAudits,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { listDeliveryDetails } from "./delivery";
-import { listAssignmentsOverview, listContractsOverview } from "./queries";
+import { createDeliveryByOps, listContractsAwaitingDelivery, listDeliveryDetails } from "./delivery";
+import { listAssignmentsOverview, listContractsOverview, listDomainPreferencesForOps } from "./queries";
 import { seedCandidate, seedUser } from "./test-seed";
 import { getOpsWorkQueue } from "./work-queue";
 
@@ -154,4 +157,137 @@ it("focused handoff links return precisely the requested assignment, contract an
   expect(q.items.find((i) => i.id === id.d)?.href).toContain(`?focus=${id.d}#delivery-${id.d}`);
   const { actor: sales } = await seedUser(db, "sales");
   expect(await listDeliveryDetails(db, sales, { id: id.d })).toMatchObject({ ok: false, error: "forbidden" });
+});
+
+it("未着手の契約を表示し、着手後は同じ納品へ移る。契約取消は表示しない", async () => {
+  const b = await seedDeliveryBase(db);
+  const q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.items.find((i) => i.id === b.contract.id)).toMatchObject({
+    group: "delivery_start",
+    href: `/ops/delivery?contract=${b.contract.id}#contract-start-${b.contract.id}`,
+  });
+  const created = await createDeliveryByOps({ db, clock: fixedClock("2026-10-16T00:00:00Z") }, b.ops, b.contract.id);
+  if (!created.ok) throw new Error(created.error);
+  const next = await getOpsWorkQueue(db, b.ops);
+  expect(next.ok && next.value.items.some((i) => i.id === b.contract.id)).toBe(false);
+  expect(next.ok && next.value.items.some((i) => i.id === created.value.deliveryId && i.group === "delivery")).toBe(
+    true,
+  );
+  const existing = await listDeliveryDetails(db, b.ops, { contractId: b.contract.id });
+  expect(existing.ok && existing.value.map((d) => d.delivery.id)).toEqual([created.value.deliveryId]);
+  await db.update(contracts).set({ status: "cancelled" }).where(eq(contracts.id, b.contract.id));
+  const cancelled = await getOpsWorkQueue(db, b.ops);
+  expect(
+    cancelled.ok && cancelled.value.items.some((i) => i.group === "delivery" || i.group === "delivery_start"),
+  ).toBe(false);
+});
+
+it("公開記録後の納品確認を表示し、完了後は消える", async () => {
+  const b = await seedDeliveryBase(db);
+  const [d] = await db.insert(deliveries).values({ contractId: b.contract.id, status: "published" }).returning();
+  const q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.items.find((i) => i.id === d!.id)?.reason).toContain("実際の公開状況");
+  await db.update(deliveries).set({ status: "delivered" }).where(eq(deliveries.id, d!.id));
+  const done = await getOpsWorkQueue(db, b.ops);
+  expect(done.ok && done.value.items.some((i) => i.id === d!.id)).toBe(false);
+});
+
+it("未確認ドメインは担当終了・営業抑止後も残り、確認で消えて変更で再表示される", async () => {
+  const b = await seedDeliveryBase(db);
+  await db.update(companies).set({ suppression: "do_not_contact" }).where(eq(companies.id, b.company.id));
+  const clock = fixedClock("2026-10-16T00:00:00Z");
+  const input = { companyId: b.company.id, assignmentId: b.contract.assignmentId, intent: "keep" as const };
+  const saved = await saveDomainPreference(db, clock, b.ops, input);
+  if (!saved.ok) throw new Error(saved.error);
+  const p = saved.value.preference;
+  const q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.items.find((i) => i.id === p.id)).toMatchObject({
+    group: "domain",
+    href: `/ops/delivery?domain=${p.id}#domain-${p.id}`,
+  });
+  expect((await confirmDomainPreference(db, clock, b.ops, { id: p.id, revision: p.revision })).ok).toBe(true);
+  const done = await getOpsWorkQueue(db, b.ops);
+  expect(done.ok && done.value.items.some((i) => i.id === p.id)).toBe(false);
+  await saveDomainPreference(db, clock, b.ops, { ...input, usesEmail: "yes" });
+  const again = await getOpsWorkQueue(db, b.ops);
+  expect(again.ok && again.value.items.some((i) => i.id === p.id)).toBe(true);
+  expect(await listDomainPreferencesForOps(db, b.sales, { id: p.id })).toMatchObject({ ok: false, error: "forbidden" });
+  expect(await listContractsAwaitingDelivery(db, b.sales, { id: b.contract.id })).toMatchObject({
+    ok: false,
+    error: "forbidden",
+  });
+});
+
+it("200件以上でも古い未確認を隠さず、表示上限と総数を分け、対象を直接取得できる", async () => {
+  const b = await seedDeliveryBase(db);
+  const confirmed = await db
+    .insert(domainPreferences)
+    .values(
+      Array.from({ length: 205 }, (_, i) => ({
+        companyId: b.company.id,
+        recordedBy: b.sales.userId,
+        confirmedAt: new Date("2026-10-15T00:00:00Z"),
+        updatedAt: new Date(Date.UTC(2026, 9, 15, 0, i)),
+      })),
+    )
+    .returning();
+  const pending = await db
+    .insert(domainPreferences)
+    .values(
+      Array.from({ length: 25 }, (_, i) => ({
+        companyId: b.company.id,
+        recordedBy: b.sales.userId,
+        customerWish: "private fixture note",
+        updatedAt: new Date(Date.UTC(2026, 9, 1, 0, i)),
+      })),
+    )
+    .returning();
+  const list = await listDomainPreferencesForOps(db, b.ops);
+  expect(list.ok && list.value.slice(0, 25).map((r) => r.d.id)).toEqual(pending.map((p) => p.id));
+  const target = confirmed[204]!;
+  const focused = await listDomainPreferencesForOps(db, b.ops, { id: target.id });
+  expect(focused.ok && focused.value.map((r) => r.d.id)).toEqual([target.id]);
+  const q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.groups.find((g) => g.key === "domain")?.count).toBe(25);
+  expect(q.ok && q.value.items.filter((i) => i.group === "domain").map((i) => i.id)).toEqual(
+    pending.slice(0, 20).map((p) => p.id),
+  );
+  expect(JSON.stringify(q)).not.toContain("private fixture note");
+});
+
+it("100件を超える未着手契約でも直接リンクは件数制限に埋もれない", async () => {
+  const b = await seedDeliveryBase(db);
+  const extraAssignments = await db
+    .insert(assignments)
+    .values(
+      Array.from({ length: 105 }, () => ({
+        companyId: b.company.id,
+        userId: b.sales.userId,
+        status: "completed" as const,
+        claimedAt: new Date(),
+      })),
+    )
+    .returning();
+  const extras = await db
+    .insert(contracts)
+    .values(
+      extraAssignments.map((a, i) => ({
+        companyId: b.company.id,
+        assignmentId: a.id,
+        salesUserId: b.sales.userId,
+        status: "completed" as const,
+        reportedAt: new Date("2026-10-01T00:00:00Z"),
+        completedAt: new Date(Date.UTC(2026, 9, 5, 0, i)),
+      })),
+    )
+    .returning();
+  const target = extras[104]!;
+  const list = await listContractsAwaitingDelivery(db, b.ops);
+  expect(list.ok && list.value).toHaveLength(100);
+  expect(list.ok && list.value.some((r) => r.contractId === target.id)).toBe(false);
+  const focused = await listContractsAwaitingDelivery(db, b.ops, { id: target.id });
+  expect(focused.ok && focused.value.map((r) => r.contractId)).toEqual([target.id]);
+  const q = await getOpsWorkQueue(db, b.ops);
+  expect(q.ok && q.value.groups.find((g) => g.key === "delivery_start")?.count).toBe(106);
+  expect(q.ok && q.value.items.filter((i) => i.group === "delivery_start")).toHaveLength(20);
 });

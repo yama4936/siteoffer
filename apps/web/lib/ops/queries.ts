@@ -373,7 +373,7 @@ export async function listContractsOverview(db: DbOrTx, actor: Actor | null, fil
 
 // ───────────── 5. 制作・ドメイン希望 ─────────────
 
-export async function listDomainPreferencesForOps(db: DbOrTx, actor: Actor | null) {
+export async function listDomainPreferencesForOps(db: DbOrTx, actor: Actor | null, filter: { id?: string } = {}) {
   const g = guard(actor);
   if (!g.ok) return g;
   const auth = authorizeUser(actor, "read", { type: "domainPreference", ownerUserId: null });
@@ -383,10 +383,10 @@ export async function listDomainPreferencesForOps(db: DbOrTx, actor: Actor | nul
     .from(domainPreferences)
     .innerJoin(companies, eq(companies.id, domainPreferences.companyId))
     .innerJoin(users, eq(users.id, domainPreferences.recordedBy))
-    .orderBy(desc(domainPreferences.updatedAt))
+    .where(filter.id ? eq(domainPreferences.id, filter.id) : undefined)
+    // 件数制限の前に未確認・古い順へ並べる。新しい確認済み行で未対応を押し出さない。
+    .orderBy(desc(isNull(domainPreferences.confirmedAt)), asc(domainPreferences.updatedAt), asc(domainPreferences.id))
     .limit(LIST_LIMIT);
-  // 未確認を先に
-  rows.sort((a, b) => Number(a.d.confirmedAt !== null) - Number(b.d.confirmedAt !== null));
   return ok(rows);
 }
 

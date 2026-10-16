@@ -3,10 +3,12 @@ import {
   type DeliveryDetail,
   EXISTING_DOMAIN_REVIEW_NOTICE,
   NEW_DOMAIN_AVAILABILITY_NOTICE,
+  ok,
 } from "@siteoffer/core";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
+import { SubmitButton } from "@/components/ops/submit-button";
 import { Flash, Forbidden, ReturnTo } from "@/components/ops/ui";
 import {
   EmptyRow,
@@ -21,7 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/label";
-import { EmptyState, PageHeader, Section } from "@/components/ui/page";
+import { DescriptionList, EmptyState, PageHeader, Section } from "@/components/ui/page";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { listContractsAwaitingDelivery, listDeliveryDetails } from "@/lib/ops/delivery";
@@ -51,161 +53,215 @@ export default async function DeliveryPage({
 }) {
   const sp = await searchParams;
   const focus = typeof sp.focus === "string" ? sp.focus : undefined;
-  if (focus && !isUuid(focus)) notFound();
+  const contract = typeof sp.contract === "string" ? sp.contract : undefined;
+  const domain = typeof sp.domain === "string" ? sp.domain : undefined;
+  for (const key of ["focus", "contract", "domain"]) {
+    if (sp[key] !== undefined && (typeof sp[key] !== "string" || !isUuid(sp[key]))) notFound();
+  }
+  if ([focus, contract, domain].filter(Boolean).length > 1) notFound();
+  const focused = !!(focus || contract || domain);
   const db = getDb();
   const actor = await getCurrentActor();
   const [prefs, awaiting, details] = await Promise.all([
-    listDomainPreferencesForOps(db, actor),
-    listContractsAwaitingDelivery(db, actor),
-    listDeliveryDetails(db, actor, { id: focus }),
+    focus || contract ? Promise.resolve(ok([])) : listDomainPreferencesForOps(db, actor, { id: domain }),
+    focus || domain ? Promise.resolve(ok([])) : listContractsAwaitingDelivery(db, actor, { id: contract }),
+    domain ? Promise.resolve(ok([])) : listDeliveryDetails(db, actor, { id: focus, contractId: contract }),
   ]);
   if (!prefs.ok || !awaiting.ok || !details.ok) return <Forbidden />;
-  const here = "/ops/delivery";
+  // 古い「着手」リンクも、既に作成された納品へ案内する。
+  if (contract && details.value[0]) redirect(`/ops/delivery?focus=${details.value[0].delivery.id}`);
+  if ((focus && !details.value.length) || (contract && !awaiting.value.length) || (domain && !prefs.value.length))
+    notFound();
+  const here = focus
+    ? `/ops/delivery?focus=${focus}`
+    : contract
+      ? `/ops/delivery?contract=${contract}`
+      : domain
+        ? `/ops/delivery?domain=${domain}`
+        : "/ops/delivery";
 
   return (
     <>
       <PageHeader title="制作・公開" description="制作の進行と顧客確認、公開までを管理します。" />
-      {focus && (
+      {focused && (
         <p className="mb-4 text-sm">
-          今日の仕事から選んだ案件を表示中です。{" "}
+          選んだ案件の作業を表示中です。{" "}
           <Link href="/ops/delivery" className="text-primary underline">
-            全件を表示
+            一覧へ戻る
           </Link>
         </p>
       )}
-      <Flash searchParams={await searchParams} />
-
-      <Section
-        title="契約完了で納品がまだない契約"
-        description="契約確認が完了（契約完了）した契約ごとに納品を1件作ります。作成すると「情報確認」から始まります。"
-      >
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>企業</TableHead>
-              <TableHead>営業</TableHead>
-              <TableHead>契約完了</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {awaiting.value.map((c) => (
-              <TableRow key={c.contractId}>
-                <TableCell className="font-medium">
-                  <Link href={`/ops/companies/${c.companyId}`}>{c.companyName}</Link>
-                </TableCell>
-                <TableCell>{c.salesName}</TableCell>
-                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(c.completedAt)}</TableCell>
-                <TableCell>
-                  <form action={createDeliveryAction} className={inlineFormClass}>
-                    <ReturnTo path={here} />
-                    <input type="hidden" name="contractId" value={c.contractId} />
-                    <Button type="submit" size="xs">
-                      納品を作成する
-                    </Button>
-                  </form>
-                </TableCell>
-              </TableRow>
-            ))}
-            {awaiting.value.length === 0 ? (
-              <EmptyRow colSpan={4}>
-                納品を作成できる契約はありません（契約の確認は「4. 商品条件・契約・入金・報酬」で行います）
-              </EmptyRow>
-            ) : null}
-          </TableBody>
-        </Table>
-      </Section>
-
-      <Section
-        title="制作・顧客確認・公開の記録・納品"
-        description={
+      <Flash searchParams={sp} />
+      <nav className="mb-6 flex flex-wrap gap-3 text-sm" aria-label="制作・公開の作業">
+        <Link className="text-primary underline" href="/ops">
+          今日の仕事へ
+        </Link>
+        {!focused && (
           <>
-            流れ：{DELIVERY_STATUSES.map((st) => label(DELIVERY_STATUS_LABEL, st)).join(" → ")}。
-            制作版はワーカーが作ります。状態はこの画面を<a href={here}>再読み込み</a>すると最新になります。
+            <a className="text-primary underline" href="#delivery-start">
+              制作の着手
+            </a>
+            <a className="text-primary underline" href="#delivery-progress">
+              制作中の案件
+            </a>
+            <a className="text-primary underline" href="#domain-preferences">
+              ドメイン確認
+            </a>
           </>
-        }
-      >
-        {details.value.length === 0 ? <EmptyState>納品はまだありません</EmptyState> : null}
-        <div className="grid gap-4">
-          {details.value.map((d) => (
-            <DeliveryCard key={d.delivery.id} d={d} here={here} />
-          ))}
-        </div>
-      </Section>
+        )}
+      </nav>
 
-      <Section title="ドメイン希望（未確認を先に表示）">
-        <Alert variant="info">
-          <AlertDescription>
-            <p>{EXISTING_DOMAIN_REVIEW_NOTICE}</p>
-            <p>{NEW_DOMAIN_AVAILABILITY_NOTICE}</p>
-            <p>実設定・移管・DNS変更はこの画面では行いません（AWSの実環境構築は範囲外）。</p>
-          </AlertDescription>
-        </Alert>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>企業</TableHead>
-              <TableHead>希望</TableHead>
-              <TableHead>現在のURL・ドメイン</TableHead>
-              <TableHead>新規候補</TableHead>
-              <TableHead>管理者・メール</TableHead>
-              <TableHead>企業の希望</TableHead>
-              <TableHead>記録</TableHead>
-              <TableHead>運営確認</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+      {!focus && !domain && (
+        <Section
+          id="delivery-start"
+          title="制作の着手"
+          description="契約が完了した案件です。納品の管理を開始し、掲載情報・素材・ドメイン希望を確認してから制作へ進みます。"
+        >
+          <div className="grid gap-3">
+            {awaiting.value.map((c) => (
+              <article
+                id={`contract-start-${c.contractId}`}
+                key={c.contractId}
+                className="flex scroll-mt-24 flex-wrap items-center justify-between gap-4 rounded-xl border bg-card p-5 shadow-sm"
+              >
+                <div className="min-w-0 space-y-2">
+                  <Badge variant="warning">契約完了・制作未着手</Badge>
+                  <h3 className="font-semibold">
+                    <Link href={`/ops/companies/${c.companyId}`}>{c.companyName}</Link>
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    営業：{c.salesName} · 契約完了：{fmtDate(c.completedAt)}
+                  </p>
+                </div>
+                <form action={createDeliveryAction}>
+                  <ReturnTo path={here} />
+                  <input type="hidden" name="contractId" value={c.contractId} />
+                  <SubmitButton pendingLabel="準備しています…">納品の管理を開始する</SubmitButton>
+                </form>
+              </article>
+            ))}
+          </div>
+          {awaiting.value.length === 0 && (
+            <EmptyState>
+              制作未着手の契約はありません。
+              <Link href="/ops/contracts" className="text-primary underline">
+                契約の確認へ
+              </Link>
+            </EmptyState>
+          )}
+          {!contract && awaiting.value.length >= 100 && (
+            <p className="text-sm text-muted-foreground">
+              古い契約から100件を表示しています。着手すると、続きの案件が表示されます。
+            </p>
+          )}
+        </Section>
+      )}
+
+      {!contract && !domain && (
+        <Section
+          id="delivery-progress"
+          title="制作・顧客確認・公開の記録・納品"
+          description={
+            <>
+              流れ：{DELIVERY_STATUSES.map((st) => label(DELIVERY_STATUS_LABEL, st)).join(" → ")}。
+              制作版はワーカーが作ります。状態はこの画面を<a href={here}>再読み込み</a>すると最新になります。
+            </>
+          }
+        >
+          {details.value.length === 0 ? <EmptyState>納品はまだありません</EmptyState> : null}
+          <div className="grid gap-4">
+            {details.value.map((d) => (
+              <DeliveryCard key={d.delivery.id} d={d} here={here} />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {!focus && !contract && (
+        <Section
+          id="domain-preferences"
+          title="ドメイン希望の確認"
+          description="未確認の古い記録から表示します。確認後に営業が聞き取り内容を更新すると、再び未確認になります。"
+        >
+          <details className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+            <summary className="cursor-pointer font-medium">確認のポイント：管理権限・メール・取得の可否</summary>
+            <div className="mt-3 space-y-2 text-muted-foreground">
+              <p>{EXISTING_DOMAIN_REVIEW_NOTICE}</p>
+              <p>{NEW_DOMAIN_AVAILABILITY_NOTICE}</p>
+              <p>この画面では希望内容の確認を記録します。取得・移管・DNS変更は実行されません。</p>
+            </div>
+          </details>
+          <div className="grid gap-4">
             {prefs.value.map(({ d, companyName, recordedByName }) => (
-              <TableRow key={d.id}>
-                <TableCell className="font-medium">
-                  <Link href={`/ops/companies/${d.companyId}`}>{companyName}</Link>
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline">{label(DOMAIN_INTENT_LABEL, d.intent)}</Badge>
-                </TableCell>
-                <TableCell className="break-all">
-                  {d.currentUrl ?? "—"}
-                  <div className="text-muted-foreground text-xs">{d.currentDomain ?? ""}</div>
-                </TableCell>
-                <TableCell className="break-all">
-                  {d.newDomainCandidates.length ? d.newDomainCandidates.join(", ") : "—"}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  管理：{label(DOMAIN_MANAGER_LABEL, d.currentManager)}
-                  <br />
-                  メール：{label(TRI_LABEL, d.usesEmail)}
-                </TableCell>
-                <TableCell className="min-w-40">{d.customerWish ?? "—"}</TableCell>
-                <TableCell>
-                  {recordedByName}
-                  <div className="whitespace-nowrap text-muted-foreground text-xs tabular-nums">
-                    {fmtDate(d.updatedAt)}
+              <article
+                id={`domain-${d.id}`}
+                key={d.id}
+                className="scroll-mt-24 overflow-hidden rounded-xl border bg-card shadow-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold">
+                      <Link href={`/ops/companies/${d.companyId}`}>{companyName}</Link>
+                    </h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      聞き取り：{recordedByName} · 更新 {fmtDate(d.updatedAt)}
+                    </p>
                   </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col items-start gap-1.5">
-                    {d.needsOpsReview ? <Badge variant="warning">要確認</Badge> : null}
-                    {d.confirmedAt ? (
-                      <span className="whitespace-nowrap text-success text-xs tabular-nums">
-                        確認済み {fmtDate(d.confirmedAt)}
-                      </span>
-                    ) : (
-                      <form action={confirmDomainPreferenceAction} className={inlineFormClass}>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline">{label(DOMAIN_INTENT_LABEL, d.intent)}</Badge>
+                    <Badge variant={d.confirmedAt ? "success" : "warning"}>
+                      {d.confirmedAt ? "確認済み" : "確認待ち"}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="grid gap-5 p-5 lg:grid-cols-2">
+                  <DescriptionList>
+                    <dt>現在のURL</dt>
+                    <dd className="break-all">{d.currentUrl ?? "未記入"}</dd>
+                    <dt>現在のドメイン</dt>
+                    <dd className="break-all">{d.currentDomain ?? "未記入"}</dd>
+                    <dt>管理者</dt>
+                    <dd>{label(DOMAIN_MANAGER_LABEL, d.currentManager)}</dd>
+                    <dt>メールの利用</dt>
+                    <dd>{label(TRI_LABEL, d.usesEmail)}</dd>
+                  </DescriptionList>
+                  <DescriptionList>
+                    <dt>新規ドメイン候補</dt>
+                    <dd className="break-all">
+                      {d.newDomainCandidates.length ? d.newDomainCandidates.join(" / ") : "未記入"}
+                    </dd>
+                    <dt>企業の希望</dt>
+                    <dd className="whitespace-pre-wrap">{d.customerWish ?? "未記入"}</dd>
+                  </DescriptionList>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-5 py-4">
+                  {d.confirmedAt ? (
+                    <p className="text-sm text-success">確認済み：{fmtDate(d.confirmedAt)}</p>
+                  ) : (
+                    <>
+                      <p className="max-w-xl text-sm text-muted-foreground">
+                        希望内容・管理権限・メールへの影響を確認してから記録してください。ドメインの取得や設定は実行されません。
+                      </p>
+                      <form action={confirmDomainPreferenceAction}>
                         <ReturnTo path={here} />
                         <input type="hidden" name="id" value={d.id} />
-                        <Button type="submit" size="xs" variant="outline">
-                          確認済みにする
-                        </Button>
+                        <input type="hidden" name="revision" value={d.revision} />
+                        <SubmitButton pendingLabel="記録しています…">この内容を確認済みにする</SubmitButton>
                       </form>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
+                    </>
+                  )}
+                </div>
+              </article>
             ))}
-            {prefs.value.length === 0 ? <EmptyRow colSpan={8}>ドメイン希望の記録はありません</EmptyRow> : null}
-          </TableBody>
-        </Table>
-      </Section>
+          </div>
+          {prefs.value.length === 0 && <EmptyState>ドメイン希望の記録はありません</EmptyState>}
+          {!domain && prefs.value.length >= 200 && (
+            <p className="text-sm text-muted-foreground">
+              未確認を優先して200件を表示しています。今日の仕事からは対象案件を直接開けます。
+            </p>
+          )}
+        </Section>
+      )}
     </>
   );
 }

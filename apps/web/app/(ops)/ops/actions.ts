@@ -374,7 +374,11 @@ export async function cancelRewardAction(fd: FormData) {
 // 5. ドメイン希望
 
 export async function confirmDomainPreferenceAction(fd: FormData) {
-  await run(fd, (d, a) => confirmDomainPreferenceByOps(d, a, str(fd, "id")), "ドメイン希望を確認済みにしました");
+  await run(
+    fd,
+    (d, a) => confirmDomainPreferenceByOps(d, a, str(fd, "id"), optInt(fd, "revision") ?? Number.NaN),
+    "ドメイン希望を確認済みにしました",
+  );
 }
 
 // 5. 納品（制作・運営確認・顧客確認・公開の記録・納品）
@@ -382,7 +386,12 @@ export async function confirmDomainPreferenceAction(fd: FormData) {
 export async function createDeliveryAction(fd: FormData) {
   await run(
     fd,
-    (d, a) => createDeliveryByOps(d, a, str(fd, "contractId")),
+    async (d, a) => {
+      const result = await createDeliveryByOps(d, a, str(fd, "contractId"));
+      if (result.ok)
+        fd.set("returnTo", `/ops/delivery?focus=${result.value.deliveryId}#delivery-${result.value.deliveryId}`);
+      return result;
+    },
     "納品を作成しました（情報確認）。準備ができたら「制作に進める」を押してください",
   );
 }

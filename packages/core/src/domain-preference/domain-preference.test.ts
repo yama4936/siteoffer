@@ -91,7 +91,10 @@ describe("ドメイン希望の記録（AC-13）", () => {
       intent: "undecided",
     });
     if (!first.ok) throw new Error(first.error);
-    const conf = await confirmDomainPreference(db, clock, base.opsActor, { id: first.value.preference.id });
+    const conf = await confirmDomainPreference(db, clock, base.opsActor, {
+      id: first.value.preference.id,
+      revision: first.value.preference.revision,
+    });
     expect(conf.ok && conf.value.confirmedAt).toBeTruthy();
     const second = await saveDomainPreference(db, clock, base.salesActor, {
       companyId: base.company.id,
@@ -114,7 +117,12 @@ describe("ドメイン希望の記録（AC-13）", () => {
       intent: "undecided",
     });
     if (!r.ok) throw new Error(r.error);
-    expect(await confirmDomainPreference(db, clock, base.salesActor, { id: r.value.preference.id })).toMatchObject({
+    expect(
+      await confirmDomainPreference(db, clock, base.salesActor, {
+        id: r.value.preference.id,
+        revision: r.value.preference.revision,
+      }),
+    ).toMatchObject({
       ok: false,
       error: "forbidden",
     });
@@ -191,4 +199,69 @@ describe("ドメイン希望の記録（AC-13）", () => {
     });
     expect(r).toMatchObject({ ok: false, error: "invalid_input" });
   });
+});
+
+it("表示後の変更は同じ時刻でも検出し、最新の内容だけを確認する。再送で履歴を増やさない", async () => {
+  const base = await seedBase(db);
+  const input = { companyId: base.company.id, assignmentId: base.assignment.id, intent: "keep" as const };
+  const first = await saveDomainPreference(db, clock, base.salesActor, input);
+  if (!first.ok) throw new Error(first.error);
+  const second = await saveDomainPreference(db, clock, base.salesActor, { ...input, usesEmail: "yes" });
+  if (!second.ok) throw new Error(second.error);
+  expect(first.value.preference.updatedAt).toEqual(second.value.preference.updatedAt);
+  expect(second.value.preference.revision).toBe(first.value.preference.revision + 1);
+  const id = first.value.preference.id;
+  expect(
+    await confirmDomainPreference(db, clock, base.opsActor, { id, revision: first.value.preference.revision }),
+  ).toMatchObject({ ok: false, error: "conflict" });
+  expect((await db.select().from(domainPreferences).where(eq(domainPreferences.id, id)))[0]?.confirmedAt).toBeNull();
+  const revision = second.value.preference.revision;
+  const confirmed = await confirmDomainPreference(db, clock, base.opsActor, { id, revision });
+  expect(confirmed.ok).toBe(true);
+  expect(await confirmDomainPreference(db, clock, base.opsActor, { id, revision })).toEqual(confirmed);
+  expect((await db.select().from(auditEvents)).filter((e) => e.action === "domain_preference.confirm")).toHaveLength(1);
+  const third = await saveDomainPreference(db, clock, base.salesActor, {
+    ...input,
+    customerWish: "メールを継続したい",
+  });
+  expect(third.ok && third.value.preference.confirmedAt).toBeNull();
+  expect(await confirmDomainPreference(db, clock, base.opsActor, { id, revision })).toMatchObject({
+    ok: false,
+    error: "conflict",
+  });
+});
+
+it("確認の版の省略・不正値は拒否し、存在しないIDも安全に返す", async () => {
+  const base = await seedBase(db);
+  for (const revision of [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+    expect(await confirmDomainPreference(db, clock, base.opsActor, { id: base.company.id, revision })).toMatchObject({
+      ok: false,
+      error: "invalid_input",
+    });
+  }
+  expect(await confirmDomainPreference(db, clock, base.opsActor, { id: "invalid", revision: 1 })).toMatchObject({
+    ok: false,
+    error: "not_found",
+  });
+});
+
+it("同じ担当への初回同時保存でも希望は一件に保ち、両方の変更を履歴に残す", async () => {
+  const base = await seedBase(db);
+  const results = await Promise.all(
+    ["一つ目の聞き取り", "二つ目の聞き取り"].map((customerWish) =>
+      saveDomainPreference(db, clock, base.salesActor, {
+        companyId: base.company.id,
+        assignmentId: base.assignment.id,
+        intent: "new",
+        customerWish,
+      }),
+    ),
+  );
+  expect(results.every((r) => r.ok)).toBe(true);
+  const rows = await db.select().from(domainPreferences);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.revision).toBe(2);
+  expect(
+    (await db.select().from(auditEvents)).filter((e) => e.targetType === "domain_preference").map((e) => e.action),
+  ).toEqual(["domain_preference.create", "domain_preference.update"]);
 });

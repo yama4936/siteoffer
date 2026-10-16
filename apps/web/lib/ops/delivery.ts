@@ -18,7 +18,7 @@ import {
   transitionDelivery,
 } from "@siteoffer/core";
 import { companies, contracts, type DbOrTx, deliveries, users } from "@siteoffer/db";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import type { OpsDeps } from "./commands";
 import { requireOps } from "./guard";
 
@@ -37,7 +37,7 @@ export function customerReviewUrl(origin: string, token: string): string {
 const LIST_LIMIT = 100;
 
 /** 契約完了で納品がまだない契約（納品を作成できるもの） */
-export async function listContractsAwaitingDelivery(db: DbOrTx, actor: Actor | null) {
+export async function listContractsAwaitingDelivery(db: DbOrTx, actor: Actor | null, filter: { id?: string } = {}) {
   const g = requireOps(actor);
   if (!g.ok) return g;
   const rows = await db
@@ -52,8 +52,14 @@ export async function listContractsAwaitingDelivery(db: DbOrTx, actor: Actor | n
     .innerJoin(companies, eq(companies.id, contracts.companyId))
     .innerJoin(users, eq(users.id, contracts.salesUserId))
     .leftJoin(deliveries, eq(deliveries.contractId, contracts.id))
-    .where(and(eq(contracts.status, "completed"), isNull(deliveries.id)))
-    .orderBy(desc(contracts.completedAt))
+    .where(
+      and(
+        eq(contracts.status, "completed"),
+        isNull(deliveries.id),
+        filter.id ? eq(contracts.id, filter.id) : undefined,
+      ),
+    )
+    .orderBy(asc(contracts.completedAt), asc(contracts.id))
     .limit(LIST_LIMIT);
   return ok(rows);
 }
@@ -62,14 +68,19 @@ export async function listContractsAwaitingDelivery(db: DbOrTx, actor: Actor | n
 export async function listDeliveryDetails(
   db: DbOrTx,
   actor: Actor | null,
-  filter: { id?: string } = {},
+  filter: { id?: string; contractId?: string } = {},
 ): Promise<Result<DeliveryDetail[], "forbidden">> {
   const g = requireOps(actor);
   if (!g.ok) return g;
   const ids = await db
     .select({ id: deliveries.id })
     .from(deliveries)
-    .where(filter.id ? eq(deliveries.id, filter.id) : undefined)
+    .where(
+      and(
+        filter.id ? eq(deliveries.id, filter.id) : undefined,
+        filter.contractId ? eq(deliveries.contractId, filter.contractId) : undefined,
+      ),
+    )
     .orderBy(desc(deliveries.updatedAt))
     .limit(LIST_LIMIT);
   const out: DeliveryDetail[] = [];

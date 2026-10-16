@@ -852,8 +852,12 @@ export const cancelRewardByOps = (
 
 // ───────────── 5. ドメイン希望 ─────────────
 
-export const confirmDomainPreferenceByOps = ({ db, clock }: OpsDeps, actor: Actor | null, id: string) =>
-  asOps(actor, (ops) => confirmDomainPreference(db, clock, ops, { id }));
+export const confirmDomainPreferenceByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  id: string,
+  revision: number,
+) => asOps(actor, (ops) => confirmDomainPreference(db, clock, ops, { id, revision }));
 
 // ───────────── 6. 設定・操作履歴・利用停止 ─────────────
 
