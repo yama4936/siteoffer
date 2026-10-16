@@ -2,12 +2,14 @@ import {
   CONSULTATION_OPERATION_LABEL,
   CONSULTATION_STATUS_LABEL,
   type ConsultationOperation,
+  countUnreadConsultations,
   getConsultationCase,
   listConsultationCases,
 } from "@siteoffer/core";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ConsultationForm } from "@/components/consultation-form";
+import { ConsultationListRefresh, ConsultationReadMarker } from "@/components/consultation-read";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { EmptyState, PageHeader } from "@/components/ui/page";
@@ -35,10 +37,21 @@ export async function ConsultationsPage({
   if (focus) {
     const result = await getConsultationCase(db, user.actor, focus);
     if (!result.ok) notFound();
+    const backParams = new URLSearchParams();
+    for (const key of ["status", "mine", "q", "page", "unread", "assignment"])
+      if (text(key)) backParams.set(key, text(key).slice(0, 100));
+    const backHref = backParams.size ? `${base}?${backParams}` : base;
     const d = result.value;
+    const firstUnread = d.events.find((e) => e.revision > d.readRevision && e.authorId !== user.userId);
+    const unreadAnchor =
+      d.readRevision < 0 && role === "ops"
+        ? "consultation-initial"
+        : firstUnread
+          ? `consultation-event-${firstUnread.id}`
+          : "consultation-history-end";
     return (
       <>
-        <Link href={base} className="mb-4 inline-block text-primary underline">
+        <Link href={backHref} className="mb-4 inline-block text-primary underline">
           相談の一覧へ
         </Link>
         <PageHeader
@@ -61,8 +74,19 @@ export async function ConsultationsPage({
           <span>運営担当：{d.assignedName ?? "未定"}</span>
           <span className="text-muted-foreground">最終更新 {fmtDate(d.updatedAt)}</span>
         </div>
+        {d.unread && (
+          <p className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+            <strong>未確認の更新があります。</strong>{" "}
+            <a href={`#${unreadAnchor}`} className="text-primary underline">
+              最初の未読へ移動
+            </a>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              履歴の末尾を表示すると、表示済みの版まで確認済みになります。確認状態は自分だけに表示されます。
+            </span>
+          </p>
+        )}
         <section aria-label="相談の履歴" className="mb-5 space-y-3">
-          <article className="rounded-xl border bg-card p-5">
+          <article id="consultation-initial" tabIndex={-1} className="scroll-mt-20 rounded-xl border bg-card p-5">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
               <strong>{d.requesterName}からの相談</strong>
               <time className="text-xs text-muted-foreground">{fmtDate(d.requestedAt)}</time>
@@ -72,17 +96,35 @@ export async function ConsultationsPage({
             </p>
           </article>
           {d.events.map((e) => (
-            <article key={e.id} className={`rounded-xl border p-5 ${e.role === "ops" ? "bg-blue-50/60" : "bg-card"}`}>
+            <article
+              key={e.id}
+              id={`consultation-event-${e.id}`}
+              tabIndex={-1}
+              className={`scroll-mt-20 rounded-xl border p-5 ${e.role === "ops" ? "bg-blue-50/60" : "bg-card"}`}
+            >
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
                 <strong>
                   {e.authorName} · {CONSULTATION_OPERATION_LABEL[e.operation as ConsultationOperation] ?? "更新"}
                 </strong>
                 <time className="text-xs text-muted-foreground">{fmtDate(e.createdAt)}</time>
               </div>
+              {e.revision > d.readRevision && e.authorId !== user.userId && (
+                <Badge variant="info" className="mb-2">
+                  未読の更新
+                </Badge>
+              )}
               {e.note && <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{e.note}</p>}
             </article>
           ))}
         </section>
+        <div id="consultation-history-end" />
+        {d.unread && (
+          <ConsultationReadMarker
+            key={`${d.activityId}:${d.revision}`}
+            activityId={d.activityId}
+            revision={d.revision}
+          />
+        )}
         <ConsultationForm
           key={d.activityId}
           activityId={d.activityId}
@@ -101,11 +143,14 @@ export async function ConsultationsPage({
     : role === "ops"
       ? "pending"
       : "all";
+  const unread = text("unread") === "1";
+  const unreadCount = await countUnreadConsultations(db, user.actor);
   const q = text("q").trim().slice(0, 100);
   const mine = role === "ops" && text("mine") === "1";
   const result = await listConsultationCases(db, user.actor, {
     status,
     mine,
+    unread,
     q,
     page: Number(text("page")) || 1,
     assignmentId: assignmentId || undefined,
@@ -115,9 +160,15 @@ export async function ConsultationsPage({
   function pageHref(next: number) {
     const p = new URLSearchParams({ status, page: String(next) });
     if (q) p.set("q", q);
+    if (unread) p.set("unread", "1");
     if (mine) p.set("mine", "1");
     if (assignmentId) p.set("assignment", assignmentId);
     return `${base}?${p}`;
+  }
+  function caseHref(activityId: string) {
+    const params = new URLSearchParams(pageHref(page).split("?")[1]);
+    params.set("focus", activityId);
+    return `${base}?${params}`;
   }
   return (
     <>
@@ -129,6 +180,15 @@ export async function ConsultationsPage({
             : "担当案件の相談と回答を確認できます。「すべて」では新しい更新から表示し、終了した案件の相談も残します。"
         }
       />
+      <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+        <Link
+          href={`${base}?status=all&unread=1`}
+          className={buttonVariants({ variant: unread ? "default" : "outline", size: "sm" })}
+        >
+          未読の相談 {unreadCount.ok ? unreadCount.value : "—"}件
+        </Link>
+        <span className="text-muted-foreground">全担当案件・対応完了分も含めて、自分が未確認の更新を探せます。</span>
+      </div>
       {assignmentId && (
         <p className="mb-4 text-sm">
           選んだ担当案件の相談を表示中です。
@@ -138,8 +198,9 @@ export async function ConsultationsPage({
         </p>
       )}
       <form
+        key={`${status}:${q}:${mine}:${unread}:${assignmentId}`}
         action={base}
-        className="mb-5 grid items-end gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 xl:grid-cols-[12rem_minmax(12rem,1fr)_auto_auto]"
+        className={`mb-5 grid items-end gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 ${role === "ops" ? "xl:grid-cols-[10rem_minmax(12rem,1fr)_auto_auto_auto]" : "xl:grid-cols-[12rem_minmax(12rem,1fr)_auto_auto]"}`}
       >
         {assignmentId && <input type="hidden" name="assignment" value={assignmentId} />}
         <label className="grid gap-1 text-sm">
@@ -166,6 +227,10 @@ export async function ConsultationsPage({
             自分の担当
           </label>
         )}
+        <label className="flex items-center gap-2 py-2 text-sm">
+          <input type="checkbox" name="unread" value="1" defaultChecked={unread} />
+          未読のみ
+        </label>
         <div className="flex items-center gap-3">
           <Button type="submit">絞り込む</Button>
           <Link href={base} className="py-2 text-sm text-primary underline">
@@ -173,16 +238,24 @@ export async function ConsultationsPage({
           </Link>
         </div>
       </form>
-      <p className="mb-3 text-sm text-muted-foreground">
-        {total}件 · {page} / {pages}ページ
-      </p>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          {total}件 · {page} / {pages}ページ
+        </p>
+        <ConsultationListRefresh />
+      </div>
       <section aria-label="相談の一覧" className="space-y-3">
         {rows.map((d) => (
           <article key={d.activityId} className="rounded-xl border bg-card p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
+                {d.unread && (
+                  <Badge variant="info" className="mb-2">
+                    未読の更新
+                  </Badge>
+                )}
                 <h2 className="font-semibold">
-                  <Link className="text-primary" href={`${base}?focus=${d.activityId}`}>
+                  <Link className="text-primary" href={caseHref(d.activityId)}>
                     {d.companyName}
                   </Link>
                 </h2>
@@ -199,10 +272,7 @@ export async function ConsultationsPage({
               <span className="text-muted-foreground">
                 運営担当：{d.assignedName ?? "未定"} · 更新 {fmtDate(d.updatedAt)}
               </span>
-              <Link
-                href={`${base}?focus=${d.activityId}`}
-                className={buttonVariants({ variant: "outline", size: "sm" })}
-              >
+              <Link href={caseHref(d.activityId)} className={buttonVariants({ variant: "outline", size: "sm" })}>
                 {role === "ops" ? "内容を確認・回答" : "回答・状況を見る"}
               </Link>
             </div>

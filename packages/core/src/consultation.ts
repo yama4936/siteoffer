@@ -4,6 +4,7 @@ import {
   companies,
   consultationCases,
   consultationEvents,
+  consultationReads,
   type DbOrTx,
   salesActivities,
   users,
@@ -55,10 +56,25 @@ function visible(actor: UserActor) {
     actor.kind === "sales" ? eq(assignments.userId, actor.userId) : undefined,
   );
 }
-function selectCases(db: DbOrTx) {
+function readRevisionExpr(actor: UserActor) {
+  return sql<number>`coalesce((select ${consultationReads.revision} from ${consultationReads}
+    where ${consultationReads.activityId} = ${salesActivities.id} and ${consultationReads.userId} = ${actor.userId}), -1)`.mapWith(
+    Number,
+  );
+}
+function unreadExpr(actor: UserActor) {
+  // 自分の投稿は未読にしない。他者からの更新が残っていれば、自分の投稿後も消さない。
+  return sql<boolean>`greatest(case when ${salesActivities.userId} <> ${actor.userId} then 0 else -1 end,
+    coalesce((select max(${consultationEvents.revision}) from ${consultationEvents}
+      where ${consultationEvents.activityId} = ${salesActivities.id} and ${consultationEvents.actorId} <> ${actor.userId}), -1))
+    > ${readRevisionExpr(actor)}`;
+}
+function selectCases(db: DbOrTx, actor: UserActor) {
   return db
     .select({
       activityId: salesActivities.id,
+      unread: unreadExpr(actor),
+      readRevision: readRevisionExpr(actor),
       assignmentId: salesActivities.assignmentId,
       companyId: companies.id,
       companyName: companies.name,
@@ -83,6 +99,7 @@ function selectCases(db: DbOrTx) {
 export interface ConsultationFilter {
   status?: "pending" | "resolved" | "all";
   mine?: boolean;
+  unread?: boolean;
   q?: string;
   page?: number;
   assignmentId?: string;
@@ -99,6 +116,7 @@ export async function listConsultationCases(db: DbOrTx, actor: Actor | null, fil
     .replace(/[\\%_]/g, "\\$&");
   const where = and(
     visible(user),
+    filter.unread ? unreadExpr(user) : undefined,
     status === "pending"
       ? sql`${statusExpr} <> 'resolved'`
       : status === "resolved"
@@ -127,7 +145,7 @@ export async function listConsultationCases(db: DbOrTx, actor: Actor | null, fil
           status === "resolved" ? desc(updatedExpr) : asc(updatedExpr),
           asc(salesActivities.id),
         ];
-  const rows = await selectCases(db)
+  const rows = await selectCases(db, user)
     .where(where)
     .orderBy(...ordering)
     .limit(CONSULTATION_PAGE_SIZE)
@@ -138,7 +156,7 @@ export async function getConsultationCase(db: DbOrTx, actor: Actor | null, activ
   const auth = await authorize(db, actor);
   if (!auth.ok) return auth;
   if (!uuid.test(activityId)) return err("not_found");
-  const [row] = await selectCases(db).where(and(visible(auth.value), eq(salesActivities.id, activityId)));
+  const [row] = await selectCases(db, auth.value).where(and(visible(auth.value), eq(salesActivities.id, activityId)));
   if (!row) return err("not_found");
   const events = await db
     .select({
@@ -148,6 +166,7 @@ export async function getConsultationCase(db: DbOrTx, actor: Actor | null, activ
       note: consultationEvents.note,
       createdAt: consultationEvents.createdAt,
       authorName: users.displayName,
+      authorId: consultationEvents.actorId,
       role: users.role,
     })
     .from(consultationEvents)
@@ -265,5 +284,54 @@ export async function updateConsultationCase(
       after: { revision: after.revision, status: after.status, assignedTo },
     });
     return ok({ revision: after.revision, status: nextStatus });
+  });
+}
+
+/** 完了済みも含む、閲覧できる相談の未読件数。本文や相手の既読状態を返さない。 */
+export async function countUnreadConsultations(db: DbOrTx, actor: Actor | null) {
+  const auth = await authorize(db, actor);
+  if (!auth.ok) return auth;
+  const [row] = await db
+    .select({ total: count() })
+    .from(salesActivities)
+    .innerJoin(assignments, eq(assignments.id, salesActivities.assignmentId))
+    .where(and(visible(auth.value), unreadExpr(auth.value)));
+  return ok(row?.total ?? 0);
+}
+
+/** 表示済みの版までだけ確認済みにする。ページのGET・先読みからは呼ばない。 */
+export async function markConsultationRead(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor | null,
+  activityId: string,
+  revision: number,
+) {
+  if (!uuid.test(activityId) || !Number.isSafeInteger(revision) || revision < 0) return err("invalid_input");
+  return db.transaction(async (tx) => {
+    const auth = await authorize(tx, actor);
+    if (!auth.ok) return auth;
+    const user = auth.value;
+    const [activity] = await tx
+      .select({ id: salesActivities.id })
+      .from(salesActivities)
+      .innerJoin(assignments, eq(assignments.id, salesActivities.assignmentId))
+      .where(and(visible(user), eq(salesActivities.id, activityId)))
+      .for("update", { of: salesActivities });
+    if (!activity) return err("not_found");
+    const [current] = await tx
+      .select({ revision: consultationCases.revision })
+      .from(consultationCases)
+      .where(eq(consultationCases.activityId, activityId));
+    if (revision > (current?.revision ?? 0)) return err("invalid_input");
+    const [saved] = await tx
+      .insert(consultationReads)
+      .values({ activityId, userId: user.userId, revision, updatedAt: clock.now() })
+      .onConflictDoUpdate({
+        target: [consultationReads.userId, consultationReads.activityId],
+        set: { revision: sql`greatest(${consultationReads.revision}, ${revision})`, updatedAt: clock.now() },
+      })
+      .returning({ revision: consultationReads.revision });
+    return ok({ revision: saved!.revision });
   });
 }

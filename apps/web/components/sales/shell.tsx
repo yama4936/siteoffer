@@ -1,6 +1,7 @@
 import { BriefcaseBusiness, Building2, CircleHelp, LogOut, MessageCircle, Wallet } from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
+import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { OpsFrame } from "@/components/ops/frame";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
@@ -13,7 +14,15 @@ const NAV = [
   { href: "/sales/earnings", label: "実績・報酬", icon: Wallet },
 ];
 
-export function SalesShell({ userName, children }: { userName: string; children: ReactNode }) {
+export function SalesShell({
+  userName,
+  children,
+  unreadCount,
+}: {
+  userName: string;
+  children: ReactNode;
+  unreadCount: number | null;
+}) {
   return (
     <OpsFrame
       workspaceRole="sales"
@@ -29,6 +38,7 @@ export function SalesShell({ userName, children }: { userName: string; children:
               <NavLink key={item.href} href={item.href} className="ops-nav-link" activeClassName="is-active">
                 <item.icon aria-hidden="true" />
                 <span>{item.label}</span>
+                {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
               </NavLink>
             ))}
           </nav>

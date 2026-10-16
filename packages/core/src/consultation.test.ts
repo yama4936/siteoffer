@@ -5,6 +5,7 @@ import {
   companies,
   consultationCases,
   consultationEvents,
+  consultationReads,
   type Db,
   salesActivities,
   users,
@@ -15,8 +16,10 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
 import {
   type ConsultationCommand,
+  countUnreadConsultations,
   getConsultationCase,
   listConsultationCases,
+  markConsultationRead,
   updateConsultationCase,
 } from "./consultation.ts";
 import { seedBase, seedUser } from "./contract/test-seed.ts";
@@ -269,19 +272,138 @@ it("営業の全件一覧は新しい回答を先に表示し、過去の相談�
     .update(salesActivities)
     .set({ createdAt: new Date("2026-01-01T00:00:00Z") })
     .where(eq(salesActivities.id, b.activity.id));
-  await db
-    .insert(salesActivities)
-    .values({
-      assignmentId: b.assignment.id,
-      companyId: b.company.id,
-      userId: b.sales.id,
-      kind: "negotiating",
-      occurredAt: clock.now(),
-      consultOps: true,
-      createdAt: new Date("2026-10-01T00:00:00Z"),
-    });
+  await db.insert(salesActivities).values({
+    assignmentId: b.assignment.id,
+    companyId: b.company.id,
+    userId: b.sales.id,
+    kind: "negotiating",
+    occurredAt: clock.now(),
+    consultOps: true,
+    createdAt: new Date("2026-10-01T00:00:00Z"),
+  });
   must(await updateConsultationCase(db, clock, b.opsActor, cmd(b.activity.id, "resolve")));
   const list = must(await listConsultationCases(db, b.salesActor, { status: "all" }));
   expect(list.rows[0]?.activityId).toBe(b.activity.id);
   expect(list.rows[0]?.status).toBe("resolved");
+});
+
+it("未読は利用者別。自分の相談・投稿は増やさず、GET・先読みでは確認済みにしない", async () => {
+  const b = await seed();
+  const second = await seedUser(db, "ops");
+  const secondActor = { kind: "ops" as const, userId: second.id };
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(1);
+  expect(must(await countUnreadConsultations(db, b.salesActor))).toBe(0);
+  expect(must(await getConsultationCase(db, b.opsActor, b.activity.id))).toMatchObject({
+    unread: true,
+    readRevision: -1,
+  });
+  await listConsultationCases(db, b.opsActor);
+  expect(await db.select().from(consultationReads)).toHaveLength(0);
+  must(await markConsultationRead(db, clock, b.opsActor, b.activity.id, 0));
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(0);
+  expect(must(await countUnreadConsultations(db, secondActor))).toBe(1);
+  must(await updateConsultationCase(db, clock, b.opsActor, cmd(b.activity.id, "resolve")));
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(0);
+  expect(must(await countUnreadConsultations(db, b.salesActor))).toBe(1);
+  expect(must(await listConsultationCases(db, b.salesActor, { status: "all", unread: true })).rows[0]).toMatchObject({
+    unread: true,
+    status: "resolved",
+  });
+  expect(must(await getConsultationCase(db, secondActor, b.activity.id)).readRevision).toBe(-1);
+});
+
+it("古い表示を確認しても新しい回答を既読にしない。古いタブの再送で確認位置を戻さない", async () => {
+  const b = await seed();
+  must(await updateConsultationCase(db, clock, b.opsActor, cmd(b.activity.id, "reply")));
+  must(await updateConsultationCase(db, clock, b.opsActor, cmd(b.activity.id, "reply", 1)));
+  must(await markConsultationRead(db, clock, b.salesActor, b.activity.id, 1));
+  expect(must(await countUnreadConsultations(db, b.salesActor))).toBe(1);
+  await Promise.all([
+    markConsultationRead(db, clock, b.salesActor, b.activity.id, 2),
+    markConsultationRead(db, clock, b.salesActor, b.activity.id, 0),
+  ]);
+  expect(must(await getConsultationCase(db, b.salesActor, b.activity.id))).toMatchObject({
+    unread: false,
+    readRevision: 2,
+  });
+  must(await markConsultationRead(db, clock, b.salesActor, b.activity.id, 1));
+  expect(must(await countUnreadConsultations(db, b.salesActor))).toBe(0);
+  expect(await db.select().from(consultationReads)).toHaveLength(1);
+  expect(await markConsultationRead(db, clock, b.salesActor, b.activity.id, 3)).toMatchObject({
+    ok: false,
+    error: "invalid_input",
+  });
+});
+
+it("他者の未読を自分の追加投稿で消さず、確認後の追加相談は運営へ再通知する", async () => {
+  const b = await seed();
+  must(await markConsultationRead(db, clock, b.opsActor, b.activity.id, 0));
+  must(await updateConsultationCase(db, clock, b.opsActor, cmd(b.activity.id, "resolve")));
+  must(await updateConsultationCase(db, clock, b.salesActor, cmd(b.activity.id, "follow_up", 1)));
+  expect(must(await countUnreadConsultations(db, b.salesActor))).toBe(1);
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(1);
+  must(await markConsultationRead(db, clock, b.opsActor, b.activity.id, 2));
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(0);
+  expect(must(await countUnreadConsultations(db, b.salesActor))).toBe(1);
+});
+
+it("既読更新・件数も営業の他担当、利用停止、偽の役割、通常の活動を拒否する", async () => {
+  const b = await seed();
+  const ordinary = await seed(false);
+  expect(must(await countUnreadConsultations(db, b.otherSalesActor))).toBe(0);
+  expect(await markConsultationRead(db, clock, b.otherSalesActor, b.activity.id, 0)).toMatchObject({
+    ok: false,
+    error: "not_found",
+  });
+  expect(await markConsultationRead(db, clock, ordinary.opsActor, ordinary.activity.id, 0)).toMatchObject({
+    ok: false,
+    error: "not_found",
+  });
+  for (const actor of [null, { kind: "system" as const, job: "test" }, { kind: "sales" as const, userId: b.ops.id }]) {
+    expect(await countUnreadConsultations(db, actor)).toMatchObject({ ok: false, error: "forbidden" });
+    expect(await markConsultationRead(db, clock, actor, b.activity.id, 0)).toMatchObject({
+      ok: false,
+      error: "forbidden",
+    });
+  }
+  await db.update(users).set({ status: "suspended" }).where(eq(users.id, b.ops.id));
+  expect(await countUnreadConsultations(db, b.opsActor)).toMatchObject({ ok: false, error: "forbidden" });
+  expect(await markConsultationRead(db, clock, b.opsActor, b.activity.id, 0)).toMatchObject({
+    ok: false,
+    error: "forbidden",
+  });
+  for (const revision of [-1, 1.5, NaN, Infinity])
+    expect(await markConsultationRead(db, clock, b.salesActor, b.activity.id, revision)).toMatchObject({
+      ok: false,
+      error: "invalid_input",
+    });
+  expect(await db.select().from(consultationReads)).toHaveLength(0);
+});
+
+it("未読だけの検索・担当絞り込み・30件ページングと全体件数を一致させる", async () => {
+  const b = await seed();
+  await db.insert(salesActivities).values(
+    Array.from({ length: 32 }, () => ({
+      assignmentId: b.assignment.id,
+      companyId: b.company.id,
+      userId: b.sales.id,
+      kind: "negotiating" as const,
+      occurredAt: clock.now(),
+      consultOps: true,
+    })),
+  );
+  const filter = { unread: true, status: "all" as const, assignmentId: b.assignment.id };
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(33);
+  expect(must(await listConsultationCases(db, b.opsActor, filter))).toMatchObject({
+    total: 33,
+    pages: 2,
+    rows: expect.any(Array),
+  });
+  expect(must(await listConsultationCases(db, b.opsActor, { ...filter, page: 2 })).rows).toHaveLength(3);
+  must(await markConsultationRead(db, clock, b.opsActor, b.activity.id, 0));
+  expect(must(await listConsultationCases(db, b.opsActor, { ...filter, page: 2 })).rows).toHaveLength(2);
+  expect(must(await countUnreadConsultations(db, b.opsActor))).toBe(32);
+  must(await updateConsultationCase(db, clock, b.opsActor, cmd(b.activity.id, "take")));
+  expect(must(await listConsultationCases(db, b.opsActor, { ...filter, mine: true })).total).toBe(0);
+  expect(must(await listConsultationCases(db, b.opsActor, { ...filter, q: "存在しない企業" })).total).toBe(0);
 });

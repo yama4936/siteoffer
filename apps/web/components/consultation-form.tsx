@@ -180,14 +180,14 @@ export function ConsultationForm({
         }}
       >
         <fieldset disabled={!hydrated || pending || syncing} className="space-y-3">
-          <label className="block space-y-2 text-sm font-medium" htmlFor={`consultation-note-${activityId}`}>
-            <span>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium" htmlFor={`consultation-note-${activityId}`}>
               {role === "sales"
                 ? "追加の相談内容"
                 : status === "resolved"
                   ? "再開する理由"
                   : "回答・次に行ってほしいこと"}
-            </span>
+            </label>
             <textarea
               id={`consultation-note-${activityId}`}
               value={note}
@@ -204,7 +204,7 @@ export function ConsultationForm({
                     : "確認した結果と、営業担当が次に行うことを入力"
               }
             />
-          </label>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="text-xs text-muted-foreground">
               {note.length} / 2,000文字 · {role === "ops" ? "営業担当にも表示されます" : "運営担当に共有されます"}

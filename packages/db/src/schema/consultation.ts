@@ -1,4 +1,4 @@
-import { index, integer, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, pgEnum, pgTable, primaryKey, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { salesActivities } from "./assignment.ts";
 import { createdAt, id, updatedAt } from "./common.ts";
 import { users } from "./users.ts";
@@ -38,4 +38,20 @@ export const consultationEvents = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("consultation_events_activity_revision").on(t.activityId, t.revision)],
+);
+
+/** 個人ごとの確認位置。相手へ既読情報を公開せず、見た版までだけ記録する。 */
+export const consultationReads = pgTable(
+  "consultation_reads",
+  {
+    activityId: uuid("activity_id")
+      .notNull()
+      .references(() => salesActivities.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.activityId] })],
 );

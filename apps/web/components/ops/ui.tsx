@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
+import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { OpsFrame } from "@/components/ops/frame";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
@@ -34,7 +35,15 @@ export const NAV_ITEMS = [
   { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
 ] as const;
 
-export function OpsShell({ userName, children }: { userName: string; children: ReactNode }) {
+export function OpsShell({
+  userName,
+  children,
+  unreadCount,
+}: {
+  userName: string;
+  children: ReactNode;
+  unreadCount: number | null;
+}) {
   return (
     <OpsFrame
       userName={userName}
@@ -55,6 +64,7 @@ export function OpsShell({ userName, children }: { userName: string; children: R
               >
                 <item.icon aria-hidden="true" />
                 <span>{item.label}</span>
+                {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
               </NavLink>
             ))}
           </nav>
