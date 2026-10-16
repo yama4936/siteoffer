@@ -288,3 +288,23 @@ it("招待受付の記録が失敗したら顧客アカウントと利用開始�
   expect((await db.select().from(contentAccess))[0]?.status).toBe("invited");
   expect((await db.select().from(auditEvents)).filter((e) => e.action === "user.customer_registered")).toHaveLength(0);
 });
+
+it("顧客招待を別経路として使っても、通常ログインと同じ試行上限を越えて認証できない", async () => {
+  const s = await setup(),
+    a = await activate(s),
+    provider = createLocalAuthProvider({ db, clock });
+  const input = { token: a.token!, displayName: "顧客", password: "incorrect-password", confirmed: true };
+  for (let i = 0; i < 3; i++) await expect(acceptContentInvitation(db, clock, input)).rejects.toThrow("パスワード");
+  for (let i = 0; i < 2; i++)
+    expect(await provider.login({ email: s.input.email, password: "incorrect-password" })).toMatchObject({
+      error: "invalid_credentials",
+    });
+  await expect(acceptContentInvitation(db, clock, { ...input, password })).rejects.toThrow("上限");
+  expect(await provider.login({ email: s.input.email, password })).toMatchObject({ error: "rate_limited" });
+  const later = fixedClock(new Date(clock.now().getTime() + 15 * 60 * 1000));
+  expect(await acceptContentInvitation(db, later, { ...input, password })).toMatchObject({
+    userId: a.userId,
+    replayed: true,
+  });
+  expect((await createLocalAuthProvider({ db, clock: later }).login({ email: s.input.email, password })).ok).toBe(true);
+});

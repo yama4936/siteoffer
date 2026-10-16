@@ -9,6 +9,7 @@ import {
   Palette,
   Search,
   Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -33,6 +34,7 @@ export const NAV_ITEMS = [
   { href: "/ops/assignments", label: "担当・引き継ぎ", icon: Users },
   { href: "/ops/contracts", label: "契約・報酬", icon: FileSignature },
   { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
+  { href: "/account/security", label: "安全設定", icon: ShieldCheck },
 ] as const;
 
 export function OpsShell({

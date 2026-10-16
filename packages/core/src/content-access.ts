@@ -8,6 +8,7 @@ import {
   users,
 } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
+import { authAttemptKey, claimAuthAttempt, clearAuthAttempts } from "./auth/attempts.ts";
 import { generateToken, hashPassword, hashToken, verifyPassword } from "./auth/crypto.ts";
 import {
   isUniqueViolation,
@@ -243,12 +244,15 @@ export async function acceptContentInvitation(
     throw new ContentError("招待内容と入力を確認してください");
   const tokenHash = hashToken(input.token);
   const [hint] = await db
-    .select({ companyId: contentAccess.companyId })
+    .select({ companyId: contentAccess.companyId, email: contentAccess.email })
     .from(contentAccess)
     .where(eq(contentAccess.tokenHash, tokenHash));
   if (!hint) throw new ContentError("この招待は利用できません。運営に再発行を依頼してください");
+  const attemptKey = authAttemptKey("credential", hint.email);
+  if (!(await claimAuthAttempt(db, clock, attemptKey)))
+    throw new ContentError("試行回数の上限に達しました。15分ほど待ってからお試しください");
   try {
-    return await db.transaction(async (tx) => {
+    const accepted = await db.transaction(async (tx) => {
       await lockContentCompany(tx, hint.companyId);
       const [access] = await tx
         .select()
@@ -314,6 +318,8 @@ export async function acceptContentInvitation(
       });
       return { userId: user!.id, email: access.email, companyId: access.companyId, replayed: false };
     });
+    await clearAuthAttempts(db, attemptKey);
+    return accepted;
   } catch (e) {
     if (isUniqueViolation(e))
       throw new ContentError("同じメールアドレスの登録が完了しました。設定したパスワードでもう一度お試しください");

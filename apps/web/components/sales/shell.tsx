@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, Building2, CircleHelp, LogOut, MessageCircle, Wallet } from "lucide-react";
+import { BriefcaseBusiness, Building2, CircleHelp, LogOut, MessageCircle, ShieldCheck, Wallet } from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/sales/assignments", label: "担当案件", icon: BriefcaseBusiness },
   { href: "/sales/consultations", label: "運営への相談", icon: MessageCircle },
   { href: "/sales/earnings", label: "実績・報酬", icon: Wallet },
+  { href: "/account/security", label: "安全設定", icon: ShieldCheck },
 ];
 
 export function SalesShell({

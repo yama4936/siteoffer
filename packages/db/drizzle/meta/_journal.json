@@ -239,6 +239,13 @@
       "when": 1792188997436,
       "tag": "0033_customer_content_access",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792190520275,
+      "tag": "0034_open_tarot",
+      "breakpoints": true
     }
   ]
 }

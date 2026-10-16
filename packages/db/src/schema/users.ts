@@ -1,4 +1,4 @@
-import { pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { integer, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { createdAt, id, ts, updatedAt } from "./common.ts";
 
 export const userRole = pgEnum("user_role", ["sales", "ops", "customer"]);
@@ -8,6 +8,7 @@ export const users = pgTable("users", {
   id: id(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  credentialRevision: integer("credential_revision").notNull().default(0),
   displayName: text("display_name").notNull(),
   role: userRole("role").notNull(),
   status: userStatus("status").notNull().default("active"),

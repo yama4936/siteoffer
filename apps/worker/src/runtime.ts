@@ -1,4 +1,4 @@
-import { releaseExpiredAssignments } from "@siteoffer/core";
+import { cleanupAuthAttempts, releaseExpiredAssignments } from "@siteoffer/core";
 import { recoverExpiredGenerationJobs } from "@siteoffer/generation";
 import { dispatchAuditRequests, reconcileAuditRequest } from "./audit-request-dispatch.ts";
 import type { JobQueue, WorkerDeps } from "./deps.ts";
@@ -41,6 +41,7 @@ export function createWorkerRuntime(deps: WorkerDeps) {
       }
       case QUEUES.expireAssignments: {
         const result = await releaseExpiredAssignments(deps.db, deps.clock);
+        await cleanupAuthAttempts(deps.db, deps.clock);
         if (result.released.length || result.escalated.length) deps.logger.info("担当の期限を処理した", { ...result });
         return { status: "maintenance", result };
       }

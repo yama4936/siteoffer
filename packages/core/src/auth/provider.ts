@@ -28,7 +28,7 @@ export type RegisterError =
   | "email_taken";
 
 /** 存在しないメールとパスワード違いは区別しない（どちらも invalid_credentials） */
-export type LoginError = "invalid_credentials" | "suspended";
+export type LoginError = "invalid_credentials" | "suspended" | "rate_limited";
 
 export type AuthenticateError = "invalid_session" | "session_expired" | "suspended";
 

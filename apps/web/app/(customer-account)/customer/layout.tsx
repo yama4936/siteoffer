@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
 import { Brand } from "@/components/shell/brand";
@@ -10,8 +11,11 @@ export default async function Layout({ children }: { children: ReactNode }) {
       <header className="border-b bg-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-5 py-4">
           <Brand />
-          <div className="flex items-center gap-4 text-sm">
+          <div className="flex flex-wrap items-center gap-4 text-sm">
             <span>{user.displayName} さん</span>
+            <Link href="/account/security" className="underline">
+              安全設定
+            </Link>
             <form action={logoutAction}>
               <button type="submit" className="underline">
                 ログアウト
