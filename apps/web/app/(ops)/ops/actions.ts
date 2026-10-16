@@ -6,6 +6,7 @@
  */
 import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
 import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
+import { requestAuditByOps } from "@siteoffer/worker/audit-request";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -530,5 +531,24 @@ export async function resumeAuditAction(auditId: string) {
     };
   } catch {
     return { ok: false, message: "受付結果を確認できませんでした。もう一度操作しても、同じ依頼は重複しません。" };
+  }
+}
+
+export async function requestCompanyAuditAction(input: { companyId: string; requestId: string }) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await requestAuditByOps(getDb(), systemClock, actor, input);
+    if (!result.ok) return { ok: false, message: result.message ?? "診断の対象と操作権限を確認してください" };
+    revalidatePath(`/ops/companies/${input.companyId}`);
+    revalidatePath("/ops/processing");
+    revalidatePath("/ops");
+    return {
+      ok: true,
+      message: result.value.alreadyAccepted
+        ? "診断依頼は受付済みです。同じ依頼を追加していません。"
+        : "診断を受け付けました。ワーカーが順次処理し、結果を反映します。",
+    };
+  } catch {
+    return { ok: false, message: "受付結果を確認できませんでした。同じ操作でもう一度確認してください。" };
   }
 }

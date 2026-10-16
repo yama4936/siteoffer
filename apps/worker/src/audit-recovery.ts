@@ -1,5 +1,5 @@
 import { type Actor, type Clock, err, ok, recordEvent } from "@siteoffer/core";
-import { auditEvents, companies, type DbOrTx, users } from "@siteoffer/db";
+import { auditEvents, auditRequests, companies, type DbOrTx, users } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
 import { resumeSavedAudit } from "./audit-result.ts";
 import { readStepExecution, readStepState } from "./ledger.ts";
@@ -170,6 +170,20 @@ export async function resumeAuditByOps(db: DbOrTx, clock: Clock, actor: Actor | 
         sourceStepKey: candidate.sourceKey,
       },
     });
+    const requestId = payload.data.requestKey.startsWith("ops:") ? payload.data.requestKey.slice(4) : null;
+    if (requestId && UUID.test(requestId)) {
+      await tx
+        .update(auditRequests)
+        .set({
+          status: "completed",
+          message: "保存済みの診断結果から再開し、判定を反映しました。",
+          finishedAt: clock.now(),
+          leaseToken: null,
+          leaseUntil: null,
+          updatedAt: clock.now(),
+        })
+        .where(and(eq(auditRequests.id, requestId), eq(auditRequests.companyId, applied.companyId)));
+    }
     return ok({ companyId: applied.companyId, proposalQueued: applied.proposalQueued, alreadyApplied: false });
   });
 }

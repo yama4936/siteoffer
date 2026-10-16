@@ -1,5 +1,5 @@
 import { fixedClock, recordEvent } from "@siteoffer/core";
-import { auditEvents, companies, type Db, proposalHandoffs, siteAudits, websites } from "@siteoffer/db";
+import { auditEvents, auditRequests, companies, type Db, proposalHandoffs, siteAudits, websites } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
 import { eq } from "drizzle-orm";
@@ -132,5 +132,13 @@ it.each(["hold", "skip", "scoring"] as const)("最新診断が%sなら過去のc
     decision: state === "scoring" ? null : state,
     createdAt: new Date(c.audit.createdAt.getTime() + 1000),
   });
+  expect((await queue()).items).toEqual([]);
+});
+
+it("再診断の受付中には古い診断から手動制作の準備を求めない", async () => {
+  const c = await candidate(false);
+  await db
+    .insert(auditRequests)
+    .values({ id: crypto.randomUUID(), companyId: c.company.id, websiteId: c.website.id, targetUrl: c.website.url });
   expect((await queue()).items).toEqual([]);
 });

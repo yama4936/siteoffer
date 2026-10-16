@@ -1,7 +1,9 @@
 import { isTermsReadyForSales } from "@siteoffer/core";
+import { getCompanyAuditRequest } from "@siteoffer/worker/audit-request";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AuditRequest } from "@/components/ops/audit-request";
 import { AuditView } from "@/components/ops/audit-view";
 import { GenerationHistory } from "@/components/ops/generation-history";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
@@ -84,6 +86,8 @@ export default async function CompanyPage({
   const events = await listAuditEventsForOps(db, actor, { targetType: "company", targetId: companyId, limit: 50 });
   if (!terms.ok || !events.ok) return <Forbidden />;
 
+  const auditRequest = await getCompanyAuditRequest(db, actor, companyId);
+  if (!auditRequest.ok) return <Forbidden />;
   const d = r.value;
   const c = d.company;
   const here = `/ops/companies/${c.id}`;
@@ -484,6 +488,7 @@ export default async function CompanyPage({
           </Link>
         }
       >
+        <AuditRequest companyId={companyId} data={auditRequest.value} />
         {d.latestAudit ? (
           <AuditView audit={d.latestAudit} findings={d.findings} />
         ) : (

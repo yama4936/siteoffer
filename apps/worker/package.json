@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./audit-recovery": "./src/audit-recovery.ts"
+    "./audit-recovery": "./src/audit-recovery.ts",
+    "./audit-request": "./src/audit-request.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

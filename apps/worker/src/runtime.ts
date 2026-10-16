@@ -1,5 +1,6 @@
 import { releaseExpiredAssignments } from "@siteoffer/core";
 import { recoverExpiredGenerationJobs } from "@siteoffer/generation";
+import { dispatchAuditRequests, reconcileAuditRequest } from "./audit-request-dispatch.ts";
 import type { JobQueue, WorkerDeps } from "./deps.ts";
 import { executeStep, type StepExecutionOptions, type StepOutcome } from "./execute.ts";
 import { dispatchProposalHandoffs } from "./handoff.ts";
@@ -28,7 +29,10 @@ export function createWorkerRuntime(deps: WorkerDeps) {
       case QUEUES.audit: {
         const p = auditPayloadSchema.safeParse(data);
         if (!p.success) return { status: "invalid_payload", reason: p.error.message };
-        return executeStep(deps, auditStep, p.data, options);
+        const outcome = await executeStep(deps, auditStep, p.data, options);
+        if (p.data.requestKey.startsWith("ops:"))
+          await reconcileAuditRequest(deps.db, deps.clock, p.data.requestKey.slice(4));
+        return outcome;
       }
       case QUEUES.proposal: {
         const p = proposalPayloadSchema.safeParse(data);
@@ -46,7 +50,8 @@ export function createWorkerRuntime(deps: WorkerDeps) {
       }
       case QUEUES.dispatchHandoffs: {
         const result = await dispatchProposalHandoffs(deps);
-        return { status: "maintenance", result };
+        const audits = await dispatchAuditRequests(deps);
+        return { status: "maintenance", result: { ...result, audits } };
       }
       case QUEUES.recoverGeneration: {
         const recovered = await recoverExpiredGenerationJobs(deps.db, deps.clock);

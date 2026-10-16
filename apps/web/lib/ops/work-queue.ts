@@ -1,6 +1,7 @@
 import { type Actor, type Clock, err, ok, systemClock } from "@siteoffer/core";
 import {
   assignments,
+  auditRequests,
   companies,
   consultationCases,
   contracts,
@@ -231,6 +232,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
         and(
           activeCompany,
           eq(companies.pipelineStatus, "audited"),
+          sql`not exists(select 1 from ${auditRequests} where ${auditRequests.companyId}=${companies.id} and ${auditRequests.finishedAt} is null)`,
           sql`exists (select 1 from ${siteAudits} where ${siteAudits.companyId} = ${companies.id}
             and ${siteAudits.status} = 'evaluated' and ${siteAudits.decision} = 'create'
             and ${siteAudits.id} = (select latest.id from site_audits latest where latest.company_id = ${companies.id}

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type Actor, type Clock, err, ok, type Result, recordEvent } from "@siteoffer/core";
 import { companies, type DbOrTx, findings, siteAudits, websites } from "@siteoffer/db";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { AuditAbortedError, abortableAudit, checkAuditSignal } from "./cancellation.ts";
 import type { SiteCollector } from "./collect.ts";
 import { type AuditOptions, artifactDirFor, scriptPaths } from "./config.ts";
@@ -24,6 +24,7 @@ export interface RunSiteAuditInput {
   actor: Actor;
   signal?: AbortSignal;
   workerStep?: { key: string; attempt: number };
+  beforeStart?: (tx: DbOrTx) => Promise<void>;
   /** ワーカーの現在の試行に属するDB更新を保護する。外部処理はこの中で実行しない。 */
   withOwnership?: <T>(write: (tx: DbOrTx) => Promise<T>) => Promise<T>;
 }
@@ -39,7 +40,7 @@ export interface RunSiteAuditOutput {
   failureReason?: string;
 }
 
-export type RunSiteAuditError = "website_not_found" | "invalid_url" | "aborted";
+export type RunSiteAuditError = "website_not_found" | "invalid_url" | "aborted" | "audit_busy";
 
 type AuditPatch = Partial<typeof siteAudits.$inferInsert>;
 
@@ -72,8 +73,17 @@ export async function runSiteAudit(
     input.withOwnership ?? ((write) => db.transaction(write));
   const auditId = crypto.randomUUID();
   const artifactDir = artifactDirFor(deps.options.paths.artifactRoot, url.href, auditId, clock.now());
-  await owned(async (tx) => {
+  const started = await owned(async (tx) => {
     await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, site.companyId)).for("update");
+    await input.beforeStart?.(tx);
+    if (input.workerStep) {
+      const [active] = await tx
+        .select({ id: siteAudits.id })
+        .from(siteAudits)
+        .where(and(eq(siteAudits.companyId, site.companyId), inArray(siteAudits.status, ["collecting", "scoring"])))
+        .limit(1);
+      if (active) return false;
+    }
     await tx.insert(siteAudits).values({
       id: auditId,
       companyId: site.companyId,
@@ -97,7 +107,9 @@ export async function runSiteAudit(
         ...(input.workerStep ? { workerStepKey: input.workerStep.key, workerAttempt: input.workerStep.attempt } : {}),
       },
     });
+    return true;
   });
+  if (!started) return err("audit_busy", "別の診断が実行中です。処理状況を確認してください。");
 
   const update = async (patch: AuditPatch, action: string) => {
     const transact: typeof owned = patch.status === "failed" ? (write) => db.transaction(write) : owned;

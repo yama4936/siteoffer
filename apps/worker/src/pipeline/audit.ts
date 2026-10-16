@@ -2,6 +2,7 @@ import { runSiteAudit } from "@siteoffer/audit";
 import { companies, websites } from "@siteoffer/db";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { closeStepAudits } from "../audit-cleanup.ts";
+import { validateAuditRequest } from "../audit-request.ts";
 import { resumeSavedAudit } from "../audit-result.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
 import { dispatchProposalHandoffs, findProposalHandoff } from "../handoff.ts";
@@ -26,6 +27,8 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
   async run(deps, payload, ctx) {
     const { db, clock } = deps;
     if (ctx.attempt > 1) await ctx.withOwnership((tx) => closeStepAudits(tx, clock, stepKeys.audit(payload)));
+    const requestIssue = await validateAuditRequest(db, payload);
+    if (requestIssue) throw new PreconditionError(requestIssue);
     const [company] = await db.select().from(companies).where(eq(companies.id, payload.companyId));
     if (!company) throw new PreconditionError(`企業がない：${payload.companyId}`);
     const base = { companyId: company.id, auditId: null, auditStatus: null, decision: null, proposalQueued: false };
@@ -70,12 +73,17 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
 
     const r = await runSiteAudit(db, clock, deps.audit, {
       websiteId: site.id,
+      beforeStart: async (tx) => {
+        const issue = await validateAuditRequest(tx, payload);
+        if (issue) throw new PreconditionError(issue);
+      },
       actor: PIPELINE_ACTOR,
       signal: ctx.signal,
       workerStep: { key, attempt: ctx.attempt },
       withOwnership: ctx.withOwnership,
     });
     await ctx.assertCurrent();
+    if (!r.ok && r.error === "audit_busy") throw new PreconditionError(r.message);
     if (!r.ok) throw new PermanentError(`${r.error}: ${r.message ?? ""}`);
     const out = r.value;
     if (out.status === "failed") throw new Error(`診断に失敗した：${out.failureReason ?? "理由不明"}`);

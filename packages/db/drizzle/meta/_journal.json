@@ -162,6 +162,13 @@
       "when": 1792165890154,
       "tag": "0022_friendly_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792170405590,
+      "tag": "0023_military_tiger_shark",
+      "breakpoints": true
     }
   ]
 }
