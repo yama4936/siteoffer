@@ -2,11 +2,12 @@ import { runSiteAudit } from "@siteoffer/audit";
 import { companies, websites } from "@siteoffer/db";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { closeStepAudits } from "../audit-cleanup.ts";
+import { resumeSavedAudit } from "../audit-result.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
-import { dispatchProposalHandoffs, findProposalHandoff, recordProposalHandoff } from "../handoff.ts";
+import { dispatchProposalHandoffs, findProposalHandoff } from "../handoff.ts";
 import { type AuditPayload, QUEUES, stepKeys } from "../queues.ts";
 import { checkPublicHttpUrl } from "../url.ts";
-import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
+import { moveCompanyStatus, PIPELINE_ACTOR, PROTECTED } from "./status.ts";
 
 export interface AuditStepResult {
   companyId: string;
@@ -58,6 +59,12 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
       };
     }
 
+    const saved = await ctx.withOwnership((tx) => resumeSavedAudit(tx, clock, payload));
+    if (saved) {
+      if (saved.proposalQueued) await dispatch();
+      return saved;
+    }
+
     const [site] = await db
       .select()
       .from(websites)
@@ -80,49 +87,15 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     const out = r.value;
     if (out.status === "failed") throw new Error(`診断に失敗した：${out.failureReason ?? "理由不明"}`);
 
-    const meta = { auditId: out.auditId, decision: out.decision };
-    if (out.status === "evaluated" && out.decision === "create") {
-      await ctx.withOwnership(async (tx) => {
-        await moveCompanyStatus(tx, clock, {
-          companyId: company.id,
-          from: [...PRE_REVIEW_STATUSES],
-          to: "audited",
-          reason: "診断済み（判定：create）",
-          meta,
-        });
-        await recordProposalHandoff(tx, clock, { sourceStepKey: key, companyId: company.id, auditId: out.auditId });
-      });
-      await dispatch();
-      return {
-        ...base,
-        skipped: null,
-        auditId: out.auditId,
-        auditStatus: out.status,
-        decision: out.decision,
-        proposalQueued: true,
-      };
-    }
-
-    const hold = out.decision !== "skip";
-    await ctx.withOwnership((tx) =>
-      moveCompanyStatus(tx, clock, {
-        companyId: company.id,
-        from: [...PRE_REVIEW_STATUSES],
-        to: hold ? "on_hold" : "audited",
-        reason: hold
-          ? `判定保留（${out.status === "unevaluable" ? "評価不能" : "閾値未設定・カバー率不足など"}）。生成しない`
-          : "判定：skip（提案書を作らない）。生成しない",
-        meta,
-      }),
+    const result = await ctx.withOwnership((tx) =>
+      resumeSavedAudit(tx, clock, payload, { auditId: out.auditId, reused: false }),
     );
-    return {
-      ...base,
-      skipped: null,
-      auditId: out.auditId,
-      auditStatus: out.status,
-      decision: out.decision,
-      proposalQueued: false,
-    };
+    if (!result)
+      throw new PreconditionError(
+        "診断中に公式サイトが変更されたため、結果の引き継ぎを止めました。対象を確認して再診断してください",
+      );
+    if (result.proposalQueued) await dispatch();
+    return result;
   },
   async onGiveUp(deps, payload, reason) {
     await deps.db.transaction((tx) => closeStepAudits(tx, deps.clock, stepKeys.audit(payload)));

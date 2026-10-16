@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { recordEvent } from "@siteoffer/core";
 import { designVersions, proposals, proposalVersions } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
+import { closeStepAudits } from "./audit-cleanup.ts";
+import { resumeSavedAudit } from "./audit-result.ts";
 import type { WorkerDeps } from "./deps.ts";
 import { findProposalHandoff } from "./handoff.ts";
 import { readStepExecution, readStepState, STEP_ACTIONS, STEP_TARGET } from "./ledger.ts";
@@ -45,11 +47,17 @@ export async function recoverPipelineSteps(deps: WorkerDeps) {
           ? "interrupted: 処理が取り消されたため停止しました"
           : "interrupted: 処理の接続が途切れ、自動再試行が終了しました。内容を確認して再実行してください";
       let alreadySaved = false;
+      let restoredResult: Awaited<ReturnType<typeof resumeSavedAudit>> = null;
       if (execution.queue === QUEUES.audit) {
         const payload = auditPayloadSchema.safeParse(execution.payload);
         if (!payload.success || auditStep.key(payload.data) !== candidate.key) return false;
         alreadySaved = !!(await findProposalHandoff(tx, candidate.key));
-        await auditStep.onGiveUp?.({ ...deps, db: tx }, payload.data, reason);
+        if (!alreadySaved) {
+          restoredResult = await resumeSavedAudit(tx, clock, payload.data);
+          alreadySaved = !!restoredResult;
+        }
+        if (alreadySaved) await closeStepAudits(tx, clock, candidate.key);
+        else await auditStep.onGiveUp?.({ ...deps, db: tx }, payload.data, reason);
       } else {
         const payload = proposalPayloadSchema.safeParse(execution.payload);
         if (!payload.success || proposalStep.key(payload.data) !== candidate.key) return false;
@@ -88,7 +96,10 @@ export async function recoverPipelineSteps(deps: WorkerDeps) {
           queue: execution.queue,
           attempt: state.attempts,
           final: !alreadySaved,
-          reason: alreadySaved ? "実行結果は保存済みのため、終了記録を回復しました" : reason,
+          reason: alreadySaved
+            ? (restoredResult?.skipped ?? "実行結果は保存済みのため、終了記録を回復しました")
+            : reason,
+          ...(restoredResult ? { summary: restoredResult } : {}),
           recovered: true,
         },
       });

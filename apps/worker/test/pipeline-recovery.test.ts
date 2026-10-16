@@ -209,6 +209,28 @@ describe("再試行終了後の後始末", () => {
     expect(await recoverPipelineSteps(e.deps)).toEqual([s.key]);
   });
 
+  it.each([
+    ["evaluated", "create", "audited", true],
+    ["evaluated", "hold", "on_hold", false],
+    ["evaluated", "skip", "audited", false],
+    ["unevaluable", "hold", "on_hold", false],
+  ] as const)(
+    "最後の試行が結果保存直後に停止した%s/%sを再採点せず回復する",
+    async (status, decision, companyStatus, queued) => {
+      const s = await seedAudit();
+      const claim = await queueClaim();
+      await claimStep(e.db, e.clock, claimInput(s.key, QUEUES.audit, claim, s.payload));
+      await e.db.update(siteAudits).set({ status, decision });
+      await e.db.execute(sql`update pgboss.job set state = 'failed'`);
+      expect(await recoverPipelineSteps(e.deps)).toEqual([s.key]);
+      expect(await readStepState(e.db, s.key)).toMatchObject({ succeeded: true, gaveUp: false });
+      expect((await e.db.select().from(companies))[0]!.pipelineStatus).toBe(companyStatus);
+      expect(await e.db.select().from(proposalHandoffs)).toHaveLength(queued ? 1 : 0);
+      expect(e.generator.calls).toHaveLength(0);
+      expect(await recoverPipelineSteps(e.deps)).toEqual([]);
+    },
+  );
+
   it("引き継ぎ保存済みの診断は成功を回復し、企業を失敗へ戻さない", async () => {
     const s = await seedAudit();
     const claim = await queueClaim();
