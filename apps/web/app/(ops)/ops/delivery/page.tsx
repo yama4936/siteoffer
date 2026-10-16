@@ -8,6 +8,7 @@ import {
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
+import { CustomerReviewLinks } from "@/components/ops/customer-review-links";
 import { DeliveryBuildRetry } from "@/components/ops/delivery-build-retry";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { SubmitButton } from "@/components/ops/submit-button";
@@ -430,8 +431,8 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
             <>
               <p className="text-muted-foreground text-sm">
                 {status === "ops_review"
-                  ? "運営が確認した版を顧客確認に回すと、顧客に渡すURL（期限付きの共有リンク）をこの場で一度だけ表示します。"
-                  : "顧客の判断（承認・修正依頼）を待っています。リンクを控え忘れた・期限が切れた場合は再発行できます。"}
+                  ? "運営が確認した版を顧客確認に回すと、顧客に渡す期限付きの共有リンクを発行します。発行履歴から再表示できます。"
+                  : "顧客の判断（承認・修正依頼）を待っています。控え忘れたリンクは履歴から再表示できます。期限切れの場合は新しく発行してください。"}
               </p>
               {reviewOptions.length ? (
                 <CustomerReviewForm
@@ -563,6 +564,8 @@ function DeliveryCard({ d, here }: { d: DeliveryDetail; here: string }) {
             </Table>
           </div>
         </div>
+
+        <CustomerReviewLinks deliveryId={delivery.id} revision={delivery.updatedAt.toISOString()} />
 
         <div>
           <SubHeading>公開の記録</SubHeading>

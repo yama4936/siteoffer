@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { approvals, companies, contracts, type DbOrTx, deliveries, deliveryVersions } from "@siteoffer/db";
+import { approvals, companies, contracts, type DbOrTx, deliveries, deliveryVersions, shareLinks } from "@siteoffer/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -145,6 +145,10 @@ export async function decideAsCustomer(
     const [version] = await tx.select().from(deliveryVersions).where(eq(deliveryVersions.id, link.value.targetId));
     if (!version) return err("link_invalid", "target_missing");
     const [delivery] = await tx.select().from(deliveries).where(eq(deliveries.id, version.deliveryId)).for("update");
+    // 納品ロックを待つ間の取り消し・期限切れを見逃さない。判断確定まではリンクもロックする。
+    await tx.select({ id: shareLinks.id }).from(shareLinks).where(eq(shareLinks.id, link.value.linkId)).for("update");
+    const currentLink = await verifyShareLink(tx, clock, token, { purpose: "delivery", targetId: input.versionId });
+    if (!currentLink.ok) return err("link_invalid", currentLink.message);
     const hash = (s: string) => createHash("sha256").update(s).digest("hex");
     const receiptKey = input.requestKey ? hash(JSON.stringify([link.value.linkId, input.requestKey])) : null;
     const payloadHash = hash(JSON.stringify([input.versionId, input.decision, comment]));

@@ -145,8 +145,8 @@ export async function issueShareLink(
   actor: Actor | null,
   input: IssueShareLinkInput,
   recovery?: ShareTokenRecovery,
-): Promise<Result<IssuedShareLink, IssueShareLinkError>> {
-  return db.transaction(async (tx): Promise<Result<IssuedShareLink, IssueShareLinkError>> => {
+): Promise<Result<IssuedShareLink & { created: boolean }, IssueShareLinkError>> {
+  return db.transaction(async (tx): Promise<Result<IssuedShareLink & { created: boolean }, IssueShareLinkError>> => {
     if (!input || !["proposal", "delivery"].includes(input.purpose)) return err("invalid_request");
     if (input.ttlHours !== undefined && (!Number.isFinite(input.ttlHours) || input.ttlHours <= 0))
       return err("invalid_ttl");
@@ -187,7 +187,10 @@ export async function issueShareLink(
       }
     }
 
-    if (previous) return restoreToken(previous, clock, recovery);
+    if (previous) {
+      const restored = restoreToken(previous, clock, recovery);
+      return restored.ok ? ok({ ...restored.value, created: false }) : restored;
+    }
     const defaultTtl = await getSetting(tx, "shareLink.defaultTtlHours");
     const ttlHours = input.ttlHours ?? defaultTtl;
     if (!Number.isFinite(ttlHours) || ttlHours <= 0) return err("invalid_ttl", "有効期間は正の時間で指定してください");
@@ -223,7 +226,7 @@ export async function issueShareLink(
       targetId: row!.id,
       after: eventSnapshot(row!),
     });
-    return ok({ link: toInfo(row!), token });
+    return ok({ link: toInfo(row!), token, created: true });
   });
 }
 

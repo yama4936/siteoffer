@@ -2,6 +2,7 @@ import { getDeliveryDetail } from "@siteoffer/core";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CustomerReviewForm } from "@/components/ops/customer-review-form";
+import { CustomerReviewLinks } from "@/components/ops/customer-review-links";
 import { DeliveryPreviewPair } from "@/components/ops/delivery-preview";
 import { DeliveryVersionPicker } from "@/components/ops/delivery-version-picker";
 import { Badge } from "@/components/ui/badge";
@@ -120,6 +121,7 @@ export default async function DeliveryReviewPage({
                     : "この版は表示の確認だけができます。現在の顧客確認対象と制作の進行状態をご確認ください。"}
             </p>
           )}
+          <CustomerReviewLinks deliveryId={deliveryId} revision={d.delivery.updatedAt.toISOString()} />
         </aside>
       </div>
     </div>

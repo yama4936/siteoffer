@@ -14,6 +14,7 @@ import {
   ok,
   type Result,
   recordPublication,
+  type ShareTokenRecovery,
   sendToCustomerReview,
   transitionDelivery,
 } from "@siteoffer/core";
@@ -21,6 +22,7 @@ import { companies, contracts, type DbOrTx, deliveries, users } from "@siteoffer
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import type { OpsDeps } from "./commands";
 import { requireOps } from "./guard";
+import { reviewLinkRecovery } from "./review-links";
 
 /** Web（顧客確認の画面）のオリジン。WEB_BASE_URL が無ければローカルの既定値 */
 export const DEFAULT_WEB_ORIGIN = "http://localhost:3100";
@@ -121,17 +123,28 @@ export async function transitionDeliveryByOps(
 export async function sendToCustomerReviewByOps(
   { db, clock }: OpsDeps,
   actor: Actor | null,
-  input: { deliveryId: string; versionId: string; ttlHours?: number },
+  input: { deliveryId: string; versionId: string; ttlHours?: number; requestKey?: string },
   origin: string = webOrigin(),
-): Promise<Result<{ reviewUrl: string; expiresAt: Date }, string>> {
+  recovery: ShareTokenRecovery | undefined = reviewLinkRecovery(),
+): Promise<Result<{ reviewUrl: string; expiresAt: Date; linkId: string; versionId: string }, string>> {
   const g = requireOps(actor);
   if (!g.ok) return g;
-  const r = await sendToCustomerReview(db, clock, g.value, input.deliveryId, {
-    versionId: input.versionId,
-    ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
-  });
+  const r = await sendToCustomerReview(
+    db,
+    clock,
+    g.value,
+    input.deliveryId,
+    {
+      versionId: input.versionId,
+      ...(input.requestKey !== undefined ? { requestKey: input.requestKey } : {}),
+      ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
+    },
+    recovery,
+  );
   if (!r.ok) return r;
   return ok({
+    linkId: r.value.issued.link.id,
+    versionId: r.value.issued.link.targetId,
     reviewUrl: customerReviewUrl(origin, r.value.issued.token),
     expiresAt: r.value.issued.link.expiresAt,
   });

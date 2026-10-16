@@ -52,7 +52,8 @@ it("同時再送でも1件だけ発行し、同じURL・期限を返す。本文
     Array.from({ length: 3 }, () => issueShareLink(db, clock, actor, request, recovery)),
   );
   const first = must(results[0]!);
-  for (const r of results) expect(must(r)).toEqual(first);
+  for (const r of results) expect(must(r)).toMatchObject({ link: first.link, token: first.token });
+  expect(results.filter((r) => r.ok && r.value.created)).toHaveLength(1);
   expect(await db.select().from(shareLinks)).toHaveLength(1);
   expect(await db.select().from(auditEvents)).toHaveLength(1);
   const stored = JSON.stringify([
@@ -68,10 +69,14 @@ it("再起動相当の新しい鍵オブジェクトでも本人が同じリン�
     first = must(await issueShareLink(db, clock, actor, request, recovery));
   clock.set("2026-10-17T00:00:00Z");
   await db.insert(appSettings).values({ key: "shareLink.defaultTtlHours", value: 48 });
-  expect(must(await issueShareLink(db, clock, actor, request, createShareTokenRecovery(secret)))).toEqual(first);
-  expect(must(await recoverShareLink(db, clock, actor, first.link.id, createShareTokenRecovery(secret)))).toEqual(
-    first,
-  );
+  expect(must(await issueShareLink(db, clock, actor, request, createShareTokenRecovery(secret)))).toEqual({
+    ...first,
+    created: false,
+  });
+  expect(must(await recoverShareLink(db, clock, actor, first.link.id, createShareTokenRecovery(secret)))).toEqual({
+    link: first.link,
+    token: first.token,
+  });
   expect(await db.select().from(auditEvents)).toHaveLength(1);
 });
 it("同じ受付キーの別内容を拒否し、別の意図的発行は別リンクになる", async () => {

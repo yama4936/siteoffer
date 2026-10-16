@@ -48,6 +48,7 @@ import {
 } from "@/lib/ops/delivery";
 import type { CustomerReviewLinkState } from "@/lib/ops/delivery-state";
 import { jstDate, optInt, optStr, safeReturnTo, str, withFlash } from "@/lib/ops/form";
+import { reviewLinkError } from "@/lib/ops/review-links";
 import { getCurrentActor } from "@/lib/session";
 
 async function run(
@@ -434,27 +435,34 @@ export async function sendToCustomerReviewAction(
 ): Promise<CustomerReviewLinkState> {
   const actor = await getCurrentActor();
   const ttl = optInt(fd, "ttlHours");
-  if (ttl !== null && !Number.isFinite(ttl)) return { status: "error", message: "有効期間を確認してください" };
-  let r: Result<{ reviewUrl: string; expiresAt: Date }, string>;
+  if (ttl !== null && (!Number.isFinite(ttl) || ttl <= 0))
+    return { status: "error", message: reviewLinkError("invalid_ttl") };
+  const requestKey = str(fd, "requestKey");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestKey))
+    return { status: "error", message: reviewLinkError("invalid_request") };
   try {
-    r = await sendToCustomerReviewByOps({ db: getDb(), clock: systemClock }, actor, {
+    const r = await sendToCustomerReviewByOps({ db: getDb(), clock: systemClock }, actor, {
       deliveryId: str(fd, "deliveryId"),
       versionId: str(fd, "versionId"),
+      requestKey,
       ...(ttl !== null ? { ttlHours: ttl } : {}),
     });
-  } catch (e) {
-    console.error("ops action failed", e);
-    return { status: "error", message: "処理に失敗しました。入力内容を確認してください" };
+    if (!r.ok) return { status: "error", message: reviewLinkError(r.error) };
+    refresh();
+    return {
+      status: "ok",
+      message: "顧客確認のリンクを用意しました。発行履歴からも再表示できます。",
+      reviewUrl: r.value.reviewUrl,
+      expiresAt: r.value.expiresAt.toISOString(),
+      linkId: r.value.linkId,
+      versionId: r.value.versionId,
+    };
+  } catch {
+    return {
+      status: "unknown",
+      message: "発行結果を確認できませんでした。同じ発行を再確認すると、リンクを増やさず結果を取得できます。",
+    };
   }
-  if (!r.ok) return { status: "error", message: r.message ? `${r.message}（${r.error}）` : r.error };
-  refresh();
-  return {
-    status: "ok",
-    message:
-      "顧客確認に回しました。このURLを顧客に渡してください。URLはこの画面でだけ表示し、再表示はできません（必要なら同じ版で再発行できます）",
-    reviewUrl: r.value.reviewUrl,
-    expiresAt: r.value.expiresAt.toISOString(),
-  };
 }
 
 // 6. 設定・利用停止

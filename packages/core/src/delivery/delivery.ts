@@ -15,7 +15,8 @@ import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { authorize } from "../permissions/policy.ts";
-import { type IssuedShareLink, issueShareLink } from "../share-link/share-link.ts";
+import { type IssuedShareLink, type IssueShareLinkError, issueShareLink } from "../share-link/share-link.ts";
+import type { ShareTokenRecovery } from "../share-link/token.ts";
 import type { DeliveryBuildClaim } from "./build.ts";
 import { beginDeliveryBuild } from "./build-state.ts";
 
@@ -346,6 +347,8 @@ export async function transitionDelivery(
 // 顧客確認に回す（運営）
 
 export interface SendToCustomerReviewInput {
+  /** 同じ発行の再送を識別する受付キー */
+  requestKey?: string;
   /** 運営が確認した版（この納品の版） */
   versionId: string;
   /** 共有リンクの有効期間（時間）。省略時は運営設定の既定値 */
@@ -358,7 +361,7 @@ export type SendToCustomerReviewError =
   | "version_not_found"
   | "invalid_transition"
   | "no_artifact"
-  | "link_failed"
+  | IssueShareLinkError
   | "version_requires_revision";
 
 /**
@@ -372,6 +375,7 @@ export async function sendToCustomerReview(
   actor: Actor | null,
   deliveryId: string,
   input: SendToCustomerReviewInput,
+  recovery?: ShareTokenRecovery,
 ): Promise<Result<{ delivery: DeliveryRow; issued: IssuedShareLink }, SendToCustomerReviewError>> {
   const ops = requireOps(actor);
   if (!ops.ok) return ops;
@@ -404,12 +408,20 @@ export async function sendToCustomerReview(
     }
     if (!version.artifactDir) return err("no_artifact", "この版には成果物がありません");
 
-    const issued = await issueShareLink(tx, clock, ops.value, {
-      purpose: "delivery",
-      targetId: version.id,
-      ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
-    });
-    if (!issued.ok) return err("link_failed", issued.message ?? issued.error);
+    const issued = await issueShareLink(
+      tx,
+      clock,
+      ops.value,
+      {
+        purpose: "delivery",
+        targetId: version.id,
+        ...(input.requestKey !== undefined ? { requestKey: input.requestKey } : {}),
+        ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
+      },
+      recovery,
+    );
+    if (!issued.ok) return issued;
+    if (reissue && !issued.value.created) return ok({ delivery, issued: issued.value });
 
     const [row] = await tx
       .update(deliveries)
