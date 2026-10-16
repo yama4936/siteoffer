@@ -101,13 +101,39 @@ export async function publishArticle(
   db: DbOrTx,
   clock: Clock,
   actor: Actor | null,
-  input: { entryId: string; revision: number | null; expectedRevision: number },
+  input: {
+    companyId: string;
+    entryId: string;
+    revision: number | null;
+    expectedRevision: number;
+    expectedPublicationRevision: number;
+  },
 ) {
   operator(actor);
+  if (
+    !Number.isSafeInteger(input.expectedRevision) ||
+    input.expectedRevision < 1 ||
+    !Number.isSafeInteger(input.expectedPublicationRevision) ||
+    input.expectedPublicationRevision < 0 ||
+    (input.revision !== null && (!Number.isSafeInteger(input.revision) || input.revision < 1))
+  )
+    throw new ContentError("記事・掲載設定の版を確認してください");
   return db.transaction(async (tx) => {
-    const [entry] = await tx.select().from(contentEntries).where(eq(contentEntries.id, input.entryId)).for("update");
-    if (!entry) throw new ContentError("記事がありません");
+    const [company] = await tx
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.id, input.companyId))
+      .for("update");
+    if (!company) throw new ContentError("企業がありません");
     await activeOperator(tx, actor);
+    const [entry] = await tx
+      .select()
+      .from(contentEntries)
+      .where(and(eq(contentEntries.id, input.entryId), eq(contentEntries.companyId, input.companyId)))
+      .for("update");
+    if (!entry) throw new ContentError("記事がありません");
+    if (entry.publicationRevision !== input.expectedPublicationRevision)
+      throw new ContentError("掲載設定が変更されています。最新の掲載版を確認してください");
     if (entry.currentRevision !== input.expectedRevision)
       throw new ContentError("記事が更新されています。画面を更新して確認してください");
     if (input.revision !== null) {
@@ -117,14 +143,17 @@ export async function publishArticle(
         .where(and(eq(contentRevisions.entryId, entry.id), eq(contentRevisions.revision, input.revision)));
       if (!r) throw new ContentError("掲載する版がありません");
     }
-    await tx
+    if (entry.publishedRevision === input.revision) return entry;
+    const [updated] = await tx
       .update(contentEntries)
       .set({
         publishedRevision: input.revision,
+        publicationRevision: entry.publicationRevision + 1,
         publishedAt: input.revision === null ? null : clock.now(),
         updatedAt: clock.now(),
       })
-      .where(eq(contentEntries.id, entry.id));
+      .where(eq(contentEntries.id, entry.id))
+      .returning();
     await recordEvent(tx, clock, {
       actor,
       action: input.revision === null ? "content.unpublish" : "content.publish",
@@ -133,7 +162,7 @@ export async function publishArticle(
       before: { revision: entry.publishedRevision },
       after: { revision: input.revision },
     });
-    return entry;
+    return updated!;
   });
 }
 export async function publishedArticles(db: DbOrTx, companyId: string) {

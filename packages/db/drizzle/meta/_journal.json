@@ -225,6 +225,13 @@
       "when": 1792186676704,
       "tag": "0031_content_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792188054078,
+      "tag": "0032_content_working_copies",
+      "breakpoints": true
     }
   ]
 }

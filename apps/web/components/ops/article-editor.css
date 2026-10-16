@@ -1,0 +1,15 @@
+.design-studio .article-editor label {
+  font-size: 13px;
+}
+.design-studio .article-editor input:not([type="checkbox"]),
+.design-studio .article-editor textarea,
+.design-studio .article-editor select {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.design-studio .article-editor article {
+  overflow-wrap: anywhere;
+}
+.design-studio .article-editor fieldset {
+  min-width: 0;
+}

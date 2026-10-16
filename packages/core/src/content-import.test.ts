@@ -65,7 +65,13 @@ it("取り込みは下書きだけを作り、元日付・出典と履歴を保�
     sourceUrl: article.sourceUrl,
   });
   expect((await db.select().from(contentImports))[0]!.entryIds).toEqual([e!.id]);
-  await publishArticle(db, clock, s.ops, { entryId: e!.id, expectedRevision: 1, revision: 1 });
+  await publishArticle(db, clock, s.ops, {
+    companyId: s.companyId,
+    entryId: e!.id,
+    expectedRevision: 1,
+    expectedPublicationRevision: 0,
+    revision: 1,
+  });
   expect((await publishedArticles(db, s.companyId))[0]!.publishedAt).toEqual(new Date("2020-01-02"));
   expect(must(await commitArticleImport(db, clock, s.ops, input))).toMatchObject({
     id: saved.id,
@@ -78,7 +84,13 @@ it("既存の同一・異なる内容を区別し、掲載版も下書きも上�
   const s = await setup();
   must(await commitArticleImport(db, clock, s.ops, await confirmed(s)));
   const original = (await db.select().from(contentEntries))[0]!;
-  await publishArticle(db, clock, s.ops, { entryId: original.id, expectedRevision: 1, revision: 1 });
+  await publishArticle(db, clock, s.ops, {
+    companyId: s.companyId,
+    entryId: original.id,
+    expectedRevision: 1,
+    expectedPublicationRevision: 0,
+    revision: 1,
+  });
   expect(must(await previewArticleImport(db, s.ops, s.source)).rows[0]!.status).toBe("identical");
   s.source.text = JSON.stringify([
     { ...article, title: "上書きしない" },
@@ -140,9 +152,15 @@ it("営業・利用停止運営はプレビュー・取込・既存記事の編�
   await expect(
     saveArticle(db, clock, s.ops, { companyId: s.companyId, ...article, entryId: e.id, expectedRevision: 1 }),
   ).rejects.toThrow("有効な運営");
-  await expect(publishArticle(db, clock, s.ops, { entryId: e.id, expectedRevision: 1, revision: 1 })).rejects.toThrow(
-    "有効な運営",
-  );
+  await expect(
+    publishArticle(db, clock, s.ops, {
+      companyId: s.companyId,
+      entryId: e.id,
+      expectedRevision: 1,
+      expectedPublicationRevision: 0,
+      revision: 1,
+    }),
+  ).rejects.toThrow("有効な運営");
 });
 it("監査保存の失敗で取り込み履歴と全記事を巻き戻す", async () => {
   const s = await setup();

@@ -39,6 +39,7 @@ export const contentEntries = pgTable(
     importId: uuid("import_id").references(() => contentImports.id),
     currentRevision: integer("current_revision").notNull().default(1),
     publishedRevision: integer("published_revision"),
+    publicationRevision: integer("publication_revision").notNull().default(0),
     publishedAt: ts("published_at"),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull(),
@@ -63,3 +64,41 @@ export const contentRevisions = pgTable(
   },
   (t) => [uniqueIndex("content_entry_revision").on(t.entryId, t.revision)],
 );
+
+/** Private working copies are isolated by operator, company and article (or the new-article slot). */
+export const contentWorkingCopies = pgTable(
+  "content_working_copies",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    revision: integer("revision").notNull(),
+    values: jsonb("values").$type<{
+      slug: string;
+      title: string;
+      body: string;
+      category: string;
+      baseRevision: string;
+    }>(),
+    updatedAt: ts("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("content_working_copy_owner_scope").on(t.userId, t.companyId, t.scope)],
+);
+
+export const contentOperations = pgTable("content_operations", {
+  key: text("key").primaryKey(),
+  payloadHash: text("payload_hash").notNull(),
+  companyId: uuid("company_id")
+    .notNull()
+    .references(() => companies.id),
+  entryId: uuid("entry_id")
+    .notNull()
+    .references(() => contentEntries.id),
+  revision: integer("revision").notNull(),
+  createdAt: createdAt(),
+});

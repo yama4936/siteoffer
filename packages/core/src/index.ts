@@ -5,6 +5,7 @@ export * from "./consultation.ts";
 export * from "./consultation-drafts.ts";
 export * from "./content.ts";
 export * from "./content-import.ts";
+export * from "./content-workspace.ts";
 export * from "./contract/index.ts";
 export * from "./delivery/index.ts";
 export * from "./design.ts";
