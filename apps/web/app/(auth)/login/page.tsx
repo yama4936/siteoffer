@@ -25,6 +25,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           </div>
         )}
         <LoginForm />
+        <Link href="/account/recovery" className="block text-center text-sm underline">
+          パスワードを忘れた方へ
+        </Link>
         <p className="text-center text-muted-foreground text-sm">
           営業パートナーとして参加する方は <Link href="/register">新規登録</Link>
         </p>

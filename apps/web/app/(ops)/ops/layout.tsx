@@ -1,8 +1,9 @@
-import { countUnreadConsultations } from "@siteoffer/core";
+import { countUnreadConsultations, listPasswordRecoveries, systemClock } from "@siteoffer/core";
+import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import { OpsShell } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
-import { requireUser } from "@/lib/session";
+import { requireUser, SESSION_COOKIE } from "@/lib/session";
 import "@/components/ops/workspace.css";
 
 export const metadata = { title: "SiteOffer 運営" };
@@ -13,9 +14,17 @@ export const metadata = { title: "SiteOffer 運営" };
  */
 export default async function OpsLayout({ children }: { children: ReactNode }) {
   const user = await requireUser("ops");
-  const unread = await countUnreadConsultations(getDb(), user.actor).catch(() => null);
+  const token = (await cookies()).get(SESSION_COOKIE)?.value ?? "";
+  const [unread, recoveries] = await Promise.all([
+    countUnreadConsultations(getDb(), user.actor).catch(() => null),
+    listPasswordRecoveries(getDb(), systemClock, token).catch(() => null),
+  ]);
   return (
-    <OpsShell userName={user.displayName} unreadCount={unread?.ok ? unread.value : null}>
+    <OpsShell
+      userName={user.displayName}
+      unreadCount={unread?.ok ? unread.value : null}
+      recoveryCount={recoveries?.total ?? null}
+    >
       {children}
     </OpsShell>
   );

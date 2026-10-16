@@ -9,7 +9,7 @@ import { validatePassword } from "./validation.ts";
 export class AccountSecurityError extends Error {}
 const sessionError = () =>
   new AccountSecurityError("ログインの有効期限が切れたか、解除されています。もう一度ログインしてください");
-async function sessionUserId(db: DbOrTx, clock: Clock, token: string) {
+export async function sessionUserId(db: DbOrTx, clock: Clock, token: string) {
   if (typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw sessionError();
   const [session] = await db
     .select({ userId: sessions.userId })
@@ -18,7 +18,7 @@ async function sessionUserId(db: DbOrTx, clock: Clock, token: string) {
   if (!session) throw sessionError();
   return session.userId;
 }
-async function requireLiveSession(db: DbOrTx, clock: Clock, token: string, userId: string) {
+export async function requireLiveSession(db: DbOrTx, clock: Clock, token: string, userId: string) {
   const [session] = await db
     .select({ id: sessions.id })
     .from(sessions)

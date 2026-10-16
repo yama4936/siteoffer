@@ -4,7 +4,7 @@ import type { Clock } from "../common/clock.ts";
 import { hashToken } from "./crypto.ts";
 export const AUTH_ATTEMPT_LIMIT = 5;
 export const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
-export function authAttemptKey(purpose: "credential" | "recovery_request", identity: string) {
+export function authAttemptKey(purpose: "credential" | "recovery_request" | "recovery_token", identity: string) {
   return hashToken(`${purpose}:${identity.trim().toLowerCase()}`);
 }
 /** Reserve outside the credential transaction so a failure cannot undo the attempt. */

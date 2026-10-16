@@ -16,6 +16,7 @@ const titles: Record<string, string> = {
   delivery: "制作・公開",
   processing: "処理の状況",
   settings: "設定・操作履歴",
+  "account-recovery": "ログインの復旧",
 };
 
 export function OpsFrame({

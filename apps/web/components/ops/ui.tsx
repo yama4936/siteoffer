@@ -1,6 +1,7 @@
 import {
   ClipboardCheck,
   FileSignature,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   MessageCircle,
@@ -34,6 +35,7 @@ export const NAV_ITEMS = [
   { href: "/ops/assignments", label: "担当・引き継ぎ", icon: Users },
   { href: "/ops/contracts", label: "契約・報酬", icon: FileSignature },
   { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
+  { href: "/ops/account-recovery", label: "ログイン復旧", icon: KeyRound },
   { href: "/account/security", label: "安全設定", icon: ShieldCheck },
 ] as const;
 
@@ -41,10 +43,12 @@ export function OpsShell({
   userName,
   children,
   unreadCount,
+  recoveryCount = null,
 }: {
   userName: string;
   children: ReactNode;
   unreadCount: number | null;
+  recoveryCount?: number | null;
 }) {
   return (
     <OpsFrame
@@ -67,6 +71,14 @@ export function OpsShell({
                 <item.icon aria-hidden="true" />
                 <span>{item.label}</span>
                 {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
+                {item.href === "/ops/account-recovery" && recoveryCount !== null && recoveryCount > 0 && (
+                  <span
+                    className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"
+                    title={`未完了 ${recoveryCount}件`}
+                  >
+                    {recoveryCount}
+                  </span>
+                )}
               </NavLink>
             ))}
           </nav>

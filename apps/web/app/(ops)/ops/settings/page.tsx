@@ -37,6 +37,11 @@ export default async function SettingsPage({
     <>
       <PageHeader title="設定・操作履歴" description="運用ルールと変更の履歴を確認します。" />
       <Flash searchParams={sp} />
+      <p className="mb-4 text-sm">
+        <Link href="/ops/account-recovery" className="text-primary underline">
+          ログインの復旧依頼を確認
+        </Link>
+      </p>
       <p className="mb-5 text-sm">
         <Link className="text-primary underline" href="/ops/processing">
           処理の状況・ワーカーの通知を確認
