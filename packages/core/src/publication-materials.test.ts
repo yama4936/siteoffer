@@ -776,3 +776,92 @@ it("work detection counts every candidate across 500-row windows and timestamp t
   // Previously clean, nonempty snapshots are reconsidered using current policy.
   expect((await getPublicationMaterialWork(db, s.ops)).total).toBe(1704);
 });
+
+it("detail pagination retains complete counts and full notes only for the requested records", async () => {
+  const s = await setup();
+  await db.execute(sql`insert into deployments(id,delivery_id,delivery_version_id,environment,url,status,created_at)
+    select md5('detail'||g::text)::uuid,${s.delivery.id}::uuid,${s.first.version.id}::uuid,'production','https://store.example.test/','recorded',timestamptz '2026-10-01' from generate_series(1,5501) g`);
+  await db.execute(sql`insert into publication_material_checks(deployment_id,revision,fingerprint,outcome,observed_url,note,checked_by,checked_at)
+    select id,1,repeat('a',64),'site_offline',url,repeat('確認メモ',400),${s.ops.userId}::uuid,timestamptz '2026-10-16' from deployments where id<>${s.first.dep.id}::uuid`);
+  const list = await listPublicationMaterials(db, s.ops, { deliveryId: s.delivery.id, mode: "all", page: 1 });
+  expect(list).toMatchObject({ total: 5502, scanned: 5502, pending: 0, resolved: 5501 });
+  expect(list.items).toHaveLength(20);
+  expect(list.items.every((r) => r.check?.note === "確認メモ".repeat(400))).toBe(true);
+  const one = await getPublicationMaterial(db, s.ops, list.items[0]!.deploymentId);
+  expect(one).toEqual(list.items[0]);
+  expect(
+    await listPublicationMaterials(db, s.ops, { deliveryId: s.delivery.id, mode: "all", page: 100000 }),
+  ).toMatchObject({ total: 5502, items: [] });
+});
+
+it("detail counts and historical batch links include members beyond the current page", async () => {
+  const s = await setup();
+  await s.withdraw();
+  await db.execute(sql`insert into deployments(id,delivery_id,delivery_version_id,environment,url,status,created_at)
+    select md5('batch-detail'||g::text)::uuid,${s.delivery.id}::uuid,${s.first.version.id}::uuid,'production','https://store.example.test/','recorded',timestamptz '2026-10-01' from generate_series(1,25) g`);
+  const preview = await getPublicationMaterialBatch(db, s.ops, s.first.dep.id);
+  expect(preview.total).toBe(26);
+  const note = "公開先全体を停止したことを確認しました。";
+  await confirmPublicationMaterialBatch(db, clock, s.ops, {
+    deploymentId: s.first.dep.id,
+    scope: preview.scope,
+    items: preview.items.map((r) => ({
+      deploymentId: r.deploymentId,
+      revision: r.revision,
+      fingerprint: r.fingerprint,
+    })),
+    requestId: randomUUID(),
+    outcome: "site_offline",
+    replacementId: null,
+    observedUrl: preview.url,
+    note,
+    confirmed: true,
+  });
+  const focused = await listPublicationMaterials(db, s.ops, { deploymentId: s.first.dep.id, mode: "all" });
+  expect(focused).toMatchObject({ scanned: 1, resolved: 1, items: [{ relatedConfirmedBatch: 26, check: { note } }] });
+  const other = (await listPublicationMaterials(db, s.ops, { deliveryId: s.delivery.id, mode: "all", page: 1 }))
+    .items[0]!;
+  await reopenPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: other.deploymentId,
+    revision: other.check!.revision,
+    requestId: randomUUID(),
+    note: "この記録は個別の確認で進めるため取り消します。",
+    confirmed: true,
+  });
+  const current = await getPublicationMaterial(db, s.ops, other.deploymentId);
+  await confirmPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: current.deploymentId,
+    revision: current.check!.revision,
+    fingerprint: current.fingerprint,
+    requestId: randomUUID(),
+    outcome: "site_offline",
+    replacementId: null,
+    observedUrl: preview.url,
+    note: "個別に公開先の停止を確認し直しました。",
+    confirmed: true,
+  });
+  expect((await getPublicationMaterial(db, s.ops, s.first.dep.id)).relatedConfirmedBatch).toBe(25);
+  const history = await getPublicationReopenBatch(db, s.ops, s.first.dep.id);
+  expect(history.items).toHaveLength(26);
+  expect(history.items.filter((r) => r.eligible)).toHaveLength(25);
+  expect(history.items.find((r) => r.deploymentId === other.deploymentId)?.eligible).toBe(false);
+});
+
+it("detail ordering preserves PostgreSQL microseconds before version order", async () => {
+  const s = await setup(),
+    older = await s.publish(3, { snapshot: [] }),
+    newer = await s.publish(2, { snapshot: [] });
+  await db.execute(
+    sql`update deployments set created_at=timestamptz '2026-10-18T00:00:00.000001Z' where id=${older.dep.id}::uuid`,
+  );
+  await db.execute(
+    sql`update deployments set created_at=timestamptz '2026-10-18T00:00:00.000002Z' where id=${newer.dep.id}::uuid`,
+  );
+  const list = await s.listing();
+  expect(list.items.slice(0, 2).map((r) => r.deploymentId)).toEqual([newer.dep.id, older.dep.id]);
+  expect(list.items[0]!.createdAt).toBe(list.items[1]!.createdAt);
+  await s.withdraw();
+  expect((await getPublicationMaterial(db, s.ops, s.first.dep.id)).replacements.map((r) => r.deploymentId)).toEqual([
+    newer.dep.id,
+  ]);
+});

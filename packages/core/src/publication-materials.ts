@@ -15,7 +15,7 @@ import {
   publicationMaterialChecks,
   users,
 } from "@siteoffer/db";
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, type SQLWrapper, sql } from "drizzle-orm";
 import type { Actor } from "./common/actor.ts";
 import type { Clock } from "./common/clock.ts";
 import { recordEvent } from "./common/events.ts";
@@ -109,7 +109,32 @@ function publicationIssues(row: ImageSource, assets: Awaited<ReturnType<typeof p
     }
   return { issues, states };
 }
-async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: string } = {}) {
+function batchRequestIdFor(deploymentId: SQLWrapper) {
+  return sql<string | null>`(select ae."after"->>'batchRequestId' from ${auditEvents} ae
+        where ae.target_type='deployment' and ae.target_id=${deploymentId}::text
+          and ae.action='publication_material.confirm' and ae.actor_id=${publicationMaterialChecks.checkedBy}
+          and ae."after"->>'revision'=${publicationMaterialChecks.revision}::text
+        order by ae.created_at desc,ae.id desc limit 1)`;
+}
+const currentBatchRequestId = batchRequestIdFor(deployments.id);
+async function publicationApprovals(db: DbOrTx, versionIds: string[]) {
+  const approved = new Set<string>();
+  for (let offset = 0; offset < versionIds.length; offset += 500) {
+    for (const row of await db
+      .select({ id: approvals.deliveryVersionId })
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.decision, "approved"),
+          inArray(approvals.deliveryVersionId, versionIds.slice(offset, offset + 500)),
+        ),
+      ))
+      approved.add(row.id);
+  }
+  return approved;
+}
+type ScanScope = { companyId?: string; deliveryId?: string; deploymentIds?: string[] };
+async function scan(db: DbOrTx, filter: ScanScope = {}) {
   const rows = await db
     .select({
       deployment: {
@@ -131,11 +156,7 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
       build: { id: deliveryBuilds.id, snapshot: deliveryBuilds.imageAssetSnapshot },
       check: publicationMaterialChecks,
       checkedByName: users.displayName,
-      batchRequestId: sql<string | null>`(select ae."after"->>'batchRequestId' from ${auditEvents} ae
-        where ae.target_type='deployment' and ae.target_id=${deployments.id}::text
-          and ae.action='publication_material.confirm' and ae.actor_id=${publicationMaterialChecks.checkedBy}
-          and ae."after"->>'revision'=${publicationMaterialChecks.revision}::text
-        order by ae.created_at desc,ae.id desc limit 1)`,
+      batchRequestId: currentBatchRequestId,
     })
     .from(deployments)
     .innerJoin(deliveries, eq(deliveries.id, deployments.deliveryId))
@@ -153,6 +174,7 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
         eq(deployments.status, "recorded"),
         filter.companyId ? eq(companies.id, filter.companyId) : undefined,
         filter.deliveryId ? eq(deliveries.id, filter.deliveryId) : undefined,
+        filter.deploymentIds ? inArray(deployments.id, filter.deploymentIds) : undefined,
       ),
     )
     .orderBy(desc(deployments.createdAt), desc(deliveryVersions.version), desc(deployments.id));
@@ -160,20 +182,7 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
     db,
     rows.map((r) => r.build?.snapshot),
   );
-  const approved = new Set<string>(),
-    versionIds = [...new Set(rows.map((r) => r.deployment.deliveryVersionId))];
-  for (let offset = 0; offset < versionIds.length; offset += 500) {
-    for (const row of await db
-      .select({ id: approvals.deliveryVersionId })
-      .from(approvals)
-      .where(
-        and(
-          eq(approvals.decision, "approved"),
-          inArray(approvals.deliveryVersionId, versionIds.slice(offset, offset + 500)),
-        ),
-      ))
-      approved.add(row.id);
-  }
+  const approved = await publicationApprovals(db, [...new Set(rows.map((r) => r.deployment.deliveryVersionId))]);
   return rows.map((row) => {
     const { issues, states } = publicationIssues(
       {
@@ -219,7 +228,105 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
   });
 }
 type ScanItem = Awaited<ReturnType<typeof scan>>[number];
-function candidates(item: ScanItem, rows: ScanItem[]) {
+type PublicationFact = Pick<
+  ScanItem,
+  | "deploymentId"
+  | "deliveryId"
+  | "companyId"
+  | "companyName"
+  | "environment"
+  | "url"
+  | "version"
+  | "createdAt"
+  | "issues"
+  | "state"
+  | "approved"
+> & {
+  check: Pick<NonNullable<ScanItem["check"]>, "revision" | "checkedBy" | "revokedAt" | "batchRequestId"> | null;
+};
+/** Retain lightweight facts for counts/candidates; notes and fingerprints belong only to requested details. */
+async function scanFacts(db: DbOrTx, filter: ScanScope = {}) {
+  const rows = await db
+    .select({
+      deploymentId: deployments.id,
+      deliveryId: deliveries.id,
+      companyId: companies.id,
+      companyName: companies.name,
+      deliveryVersionId: deployments.deliveryVersionId,
+      environment: deployments.environment,
+      url: deployments.url,
+      createdAt: deployments.createdAt,
+      version: { number: deliveryVersions.version, deliveryId: deliveryVersions.deliveryId },
+      build: { id: deliveryBuilds.id, snapshot: deliveryBuilds.imageAssetSnapshot },
+      check: {
+        revision: publicationMaterialChecks.revision,
+        checkedBy: publicationMaterialChecks.checkedBy,
+        revokedAt: publicationMaterialChecks.revokedAt,
+      },
+      batchRequestId: sql<string | null>`case when ${publicationMaterialChecks.deploymentId} is not null and
+      ${publicationMaterialChecks.revokedAt} is null then ${currentBatchRequestId} else null end`,
+    })
+    .from(deployments)
+    .innerJoin(deliveries, eq(deliveries.id, deployments.deliveryId))
+    .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+    .innerJoin(companies, eq(companies.id, contracts.companyId))
+    .leftJoin(deliveryVersions, eq(deliveryVersions.id, deployments.deliveryVersionId))
+    .leftJoin(
+      deliveryBuilds,
+      and(eq(deliveryBuilds.id, deliveryVersions.buildId), eq(deliveryBuilds.deliveryId, deliveries.id)),
+    )
+    .leftJoin(publicationMaterialChecks, eq(publicationMaterialChecks.deploymentId, deployments.id))
+    .where(
+      and(
+        eq(deployments.status, "recorded"),
+        filter.companyId ? eq(companies.id, filter.companyId) : undefined,
+        filter.deliveryId ? eq(deliveries.id, filter.deliveryId) : undefined,
+      ),
+    )
+    // Keep database precision and its NULL ordering for pagination and latest-target selection.
+    .orderBy(desc(deployments.createdAt), desc(deliveryVersions.version), desc(deployments.id));
+  const assets = await publicationAssets(
+      db,
+      rows.map((r) => r.build?.snapshot),
+    ),
+    approved = await publicationApprovals(db, [...new Set(rows.map((r) => r.deliveryVersionId))]);
+  const facts: PublicationFact[] = rows.map((row) => {
+    const { issues } = publicationIssues(
+      {
+        companyId: row.companyId,
+        deliveryId: row.deliveryId,
+        versionDeliveryId: row.version?.deliveryId,
+        build: row.build,
+      },
+      assets,
+    );
+    return {
+      deploymentId: row.deploymentId,
+      deliveryId: row.deliveryId,
+      companyId: row.companyId,
+      companyName: row.companyName,
+      environment: row.environment,
+      url: publicationUrl(row.url),
+      version: row.version?.number ?? 0,
+      createdAt: row.createdAt.toISOString(),
+      issues,
+      approved: approved.has(row.deliveryVersionId),
+      state: row.check && !row.check.revokedAt ? "resolved" : issues.length ? "pending" : "clear",
+      check: row.check
+        ? {
+            ...row.check,
+            revokedAt: row.check.revokedAt?.toISOString() ?? null,
+            batchRequestId: uuid(row.batchRequestId) ? row.batchRequestId : null,
+          }
+        : null,
+    };
+  });
+  return facts;
+}
+async function requestedDetails(db: DbOrTx, filter: ScanScope, ids: string[]) {
+  return ids.length ? scan(db, { ...filter, deploymentIds: ids }) : [];
+}
+function candidates(item: PublicationFact, rows: PublicationFact[]) {
   // A different target or environment must not silently retire the old public site.
   const matching = rows.filter(
     (r) =>
@@ -228,7 +335,7 @@ function candidates(item: ScanItem, rows: ScanItem[]) {
       r.url &&
       (!item.url || r.url === item.url),
   );
-  const latestByUrl = new Map<string, ScanItem>();
+  const latestByUrl = new Map<string, PublicationFact>();
   for (const row of matching) if (!latestByUrl.has(row.url!)) latestByUrl.set(row.url!, row);
   return [...latestByUrl.values()].filter(
     (r) =>
@@ -240,7 +347,7 @@ function candidates(item: ScanItem, rows: ScanItem[]) {
       (!r.check || r.check.revokedAt),
   );
 }
-function view(item: ScanItem, rows: ScanItem[]) {
+function view(item: ScanItem, rows: PublicationFact[]) {
   return {
     ...item,
     relatedConfirmedBatch: item.check?.batchRequestId
@@ -278,22 +385,33 @@ export async function listPublicationMaterials(
     (input.deploymentId && !uuid(input.deploymentId))
   )
     throw new PublicationMaterialError("対象の企業・納品を確認してください");
-  return db.transaction(async (tx) => {
-    await activeContentOperator(tx, actor);
-    const source = await scan(tx, input),
-      all = source.filter((r) => !input.deploymentId || r.deploymentId === input.deploymentId),
-      mode = input.mode ?? "pending",
-      rows = all.filter((r) => mode === "all" || r.state === mode);
-    const page = Number.isSafeInteger(input.page) && input.page! >= 0 ? Math.min(input.page!, 100000) : 0;
-    return {
-      total: rows.length,
-      pending: all.filter((r) => r.state === "pending").length,
-      resolved: all.filter((r) => r.state === "resolved").length,
-      scanned: all.length,
-      items: rows.slice(page * 20, (page + 1) * 20).map((r) => view(r, source)),
-    };
-  });
+  return db.transaction(
+    async (tx) => {
+      await activeContentOperator(tx, actor);
+      const source = await scanFacts(tx, input),
+        all = source.filter((r) => !input.deploymentId || r.deploymentId === input.deploymentId),
+        mode = input.mode ?? "pending",
+        rows = all.filter((r) => mode === "all" || r.state === mode);
+      const page = Number.isSafeInteger(input.page) && input.page! >= 0 ? Math.min(input.page!, 100000) : 0;
+      const shown = rows.slice(page * 20, (page + 1) * 20),
+        details = await requestedDetails(
+          tx,
+          input,
+          shown.map((r) => r.deploymentId),
+        ),
+        byId = new Map(details.map((r) => [r.deploymentId, r]));
+      return {
+        total: rows.length,
+        pending: all.filter((r) => r.state === "pending").length,
+        resolved: all.filter((r) => r.state === "resolved").length,
+        scanned: all.length,
+        items: shown.map((r) => view(byId.get(r.deploymentId)!, source)),
+      };
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
+
 /** Oldest actionable publications for the operations queue. No file bodies or confirmation notes. */
 export async function getPublicationMaterialWork(db: DbOrTx, actor: Actor | null) {
   return db.transaction(
@@ -395,19 +513,25 @@ export async function getPublicationMaterialWork(db: DbOrTx, actor: Actor | null
 }
 export async function getPublicationMaterial(db: DbOrTx, actor: Actor | null, deploymentId: string) {
   if (!uuid(deploymentId)) throw new PublicationMaterialError("公開記録を確認してください");
-  return db.transaction(async (tx) => {
-    await activeContentOperator(tx, actor);
-    const [record] = await tx
-      .select({ deliveryId: deployments.deliveryId })
-      .from(deployments)
-      .where(eq(deployments.id, deploymentId));
-    if (!record) throw new PublicationMaterialError("公開記録が見つかりません");
-    const rows = await scan(tx, { deliveryId: record.deliveryId });
-    const item = rows.find((r) => r.deploymentId === deploymentId);
-    if (!item) throw new PublicationMaterialError("公開記録が見つかりません");
-    return view(item, rows);
-  });
+  return db.transaction(
+    async (tx) => {
+      await activeContentOperator(tx, actor);
+      const [record] = await tx
+        .select({ deliveryId: deployments.deliveryId })
+        .from(deployments)
+        .where(eq(deployments.id, deploymentId));
+      if (!record) throw new PublicationMaterialError("公開記録が見つかりません");
+      const scope = { deliveryId: record.deliveryId },
+        rows = await scanFacts(tx, scope),
+        details = await requestedDetails(tx, scope, [deploymentId]),
+        item = details.find((r) => r.deploymentId === deploymentId);
+      if (!item) throw new PublicationMaterialError("公開記録が見つかりません");
+      return view(item, rows);
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
+
 function validateNote(note: unknown) {
   if (
     typeof note !== "string" ||
@@ -627,50 +751,67 @@ export async function reopenPublicationMaterialCheck(
 }
 
 export const PUBLICATION_BATCH_LIMIT = 50;
-function samePublicationTarget(a: ScanItem, b: ScanItem) {
+function samePublicationTarget(
+  a: Pick<ScanItem, "deliveryId" | "environment" | "url">,
+  b: Pick<ScanItem, "deliveryId" | "environment" | "url">,
+) {
   return a.url !== null && a.deliveryId === b.deliveryId && a.environment === b.environment && a.url === b.url;
 }
-function publicationScope(item: ScanItem) {
+function publicationScope(item: Pick<ScanItem, "deliveryId" | "environment" | "url">) {
   return hash([item.deliveryId, item.environment, item.url]);
 }
 export async function getPublicationMaterialBatch(db: DbOrTx, actor: Actor | null, deploymentId: string) {
   if (!uuid(deploymentId)) throw new PublicationMaterialError("公開記録を確認してください");
-  return db.transaction(async (tx) => {
-    await activeContentOperator(tx, actor);
-    const [hint] = await tx
-      .select({ deliveryId: deployments.deliveryId })
-      .from(deployments)
-      .where(eq(deployments.id, deploymentId));
-    if (!hint) throw new PublicationMaterialError("公開記録が見つかりません");
-    const rows = await scan(tx, { deliveryId: hint.deliveryId }),
-      anchor = rows.find((r) => r.deploymentId === deploymentId);
-    if (!anchor?.url) throw new PublicationMaterialError("公開URLが記録されていない版は、個別に確認してください");
-    const members = rows
-      .filter((r) => samePublicationTarget(anchor, r) && r.state === "pending")
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.deploymentId.localeCompare(b.deploymentId));
-    let shown = members.slice(0, PUBLICATION_BATCH_LIMIT);
-    if (anchor.state === "pending" && !shown.some((r) => r.deploymentId === anchor.deploymentId))
-      shown = [...shown.slice(0, PUBLICATION_BATCH_LIMIT - 1), anchor];
-    return {
-      deploymentId: anchor.deploymentId,
-      deliveryId: anchor.deliveryId,
-      companyName: anchor.companyName,
-      environment: anchor.environment,
-      url: anchor.url,
-      scope: publicationScope(anchor),
-      total: members.length,
-      limit: PUBLICATION_BATCH_LIMIT,
-      items: shown.map((r) => ({
-        deploymentId: r.deploymentId,
-        version: r.version,
-        createdAt: r.createdAt,
-        revision: r.check?.revision ?? 0,
-        fingerprint: r.fingerprint,
-        issues: r.issues,
-        replacements: view(r, rows).replacements,
-      })),
-    };
-  });
+  return db.transaction(
+    async (tx) => {
+      await activeContentOperator(tx, actor);
+      const [hint] = await tx
+        .select({ deliveryId: deployments.deliveryId })
+        .from(deployments)
+        .where(eq(deployments.id, deploymentId));
+      if (!hint) throw new PublicationMaterialError("公開記録が見つかりません");
+      const rows = await scanFacts(tx, { deliveryId: hint.deliveryId }),
+        anchor = rows.find((r) => r.deploymentId === deploymentId);
+      if (!anchor?.url) throw new PublicationMaterialError("公開URLが記録されていない版は、個別に確認してください");
+      const members = rows
+        .filter((r) => samePublicationTarget(anchor, r) && r.state === "pending")
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.deploymentId.localeCompare(b.deploymentId));
+      let shown = members.slice(0, PUBLICATION_BATCH_LIMIT);
+      if (anchor.state === "pending" && !shown.some((r) => r.deploymentId === anchor.deploymentId))
+        shown = [...shown.slice(0, PUBLICATION_BATCH_LIMIT - 1), anchor];
+      const details = await requestedDetails(
+          tx,
+          { deliveryId: hint.deliveryId },
+          shown.map((r) => r.deploymentId),
+        ),
+        byId = new Map(details.map((r) => [r.deploymentId, r]));
+      return {
+        deploymentId: anchor.deploymentId,
+        deliveryId: anchor.deliveryId,
+        companyName: anchor.companyName,
+        environment: anchor.environment,
+        url: anchor.url,
+        scope: publicationScope(anchor),
+        total: members.length,
+        limit: PUBLICATION_BATCH_LIMIT,
+        items: shown.map((r) => ({
+          deploymentId: r.deploymentId,
+          version: r.version,
+          createdAt: r.createdAt,
+          revision: r.check?.revision ?? 0,
+          fingerprint: byId.get(r.deploymentId)!.fingerprint,
+          issues: r.issues,
+          replacements: candidates(r, rows).map((c) => ({
+            deploymentId: c.deploymentId,
+            version: c.version,
+            url: c.url!,
+            createdAt: c.createdAt,
+          })),
+        })),
+      };
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
 export async function confirmPublicationMaterialBatch(
   db: DbOrTx,
@@ -868,16 +1009,39 @@ async function reopenBatchContext(db: DbOrTx, rows: ScanItem[], deploymentId: st
 }
 export async function getPublicationReopenBatch(db: DbOrTx, actor: Actor | null, deploymentId: string) {
   if (!uuid(deploymentId)) throw new PublicationMaterialError("公開記録を確認してください");
-  return db.transaction(async (tx) => {
-    await activeContentOperator(tx, actor);
-    const [hint] = await tx
-      .select({ deliveryId: deployments.deliveryId })
-      .from(deployments)
-      .where(eq(deployments.id, deploymentId));
-    if (!hint) throw new PublicationMaterialError("公開記録が見つかりません");
-    return reopenBatchContext(tx, await scan(tx, { deliveryId: hint.deliveryId }), deploymentId);
-  });
+  return db.transaction(
+    async (tx) => {
+      await activeContentOperator(tx, actor);
+      const [hint] = await tx
+        .select({ deliveryId: deployments.deliveryId })
+        .from(deployments)
+        .where(eq(deployments.id, deploymentId));
+      if (!hint) throw new PublicationMaterialError("公開記録が見つかりません");
+      const scope = { deliveryId: hint.deliveryId },
+        anchor = (await requestedDetails(tx, scope, [deploymentId]))[0];
+      if (!anchor?.check?.batchRequestId || anchor.state !== "resolved")
+        return reopenBatchContext(tx, anchor ? [anchor] : [], deploymentId);
+      const history = await tx
+        .select({ targetId: auditEvents.targetId })
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.actorId, anchor.check.checkedBy),
+            eq(auditEvents.action, "publication_material.confirm"),
+            eq(auditEvents.targetType, "deployment"),
+            sql`${auditEvents.after}->>'batchRequestId'=${anchor.check.batchRequestId}`,
+          ),
+        )
+        .limit(PUBLICATION_BATCH_LIMIT + 1);
+      if (history.length < 2 || history.length > PUBLICATION_BATCH_LIMIT)
+        return reopenBatchContext(tx, [anchor], deploymentId);
+      const ids = [...new Set(history.map((r) => r.targetId).filter(uuid))].filter((id) => id !== anchor.deploymentId);
+      return reopenBatchContext(tx, [anchor, ...(await requestedDetails(tx, scope, ids))], deploymentId);
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
+
 export async function reopenPublicationMaterialBatch(
   db: DbOrTx,
   clock: Clock,
