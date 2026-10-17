@@ -1,17 +1,32 @@
-import { publishedArticles } from "@siteoffer/core";
 import { companies } from "@siteoffer/db";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { Articles } from "@/components/shell/articles";
+import { loadArticleView } from "@/lib/article-view";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
 import { requireUser } from "@/lib/session";
-export default async function Page({ params }: { params: Promise<{ companyId: string }> }) {
+export const metadata = { robots: { index: false, follow: false } };
+export default async function Page({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ companyId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireUser("ops");
-  const { companyId } = await params;
+  const { companyId } = await params,
+    sp = await searchParams;
   if (!isUuid(companyId)) notFound();
-  const db = getDb();
-  const [c] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId));
-  if (!c) notFound();
-  return <Articles name={c.name} articles={await publishedArticles(db, companyId)} preview />;
+  const result = await getDb().transaction(
+    async (tx) => {
+      const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId));
+      if (!company) return null;
+      const view = await loadArticleView(tx, companyId, sp);
+      return view ? { name: company.name, view } : null;
+    },
+    { isolationLevel: "repeatable read" },
+  );
+  if (!result) notFound();
+  return <Articles {...result} basePath={`/ops/content/${companyId}/preview`} preview />;
 }

@@ -7,6 +7,7 @@ export * from "./content.ts";
 export * from "./content-access.ts";
 export { authorizeContentEditor } from "./content-auth.ts";
 export * from "./content-import.ts";
+export * from "./content-published.ts";
 export * from "./content-workspace.ts";
 export * from "./contract/index.ts";
 export * from "./delivery/index.ts";

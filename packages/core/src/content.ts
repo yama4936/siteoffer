@@ -133,6 +133,7 @@ export async function publishArticle(
     return updated!;
   });
 }
+/** Complete internal collection. Rendered pages use listPublishedArticles instead. */
 export async function publishedArticles(db: DbOrTx, companyId: string) {
   return db
     .select({
@@ -158,8 +159,7 @@ export async function publishedArticles(db: DbOrTx, companyId: string) {
     .orderBy(
       desc(sql`coalesce(${contentEntries.originalPublishedAt}, ${contentEntries.publishedAt})`),
       desc(contentEntries.id),
-    )
-    .limit(500);
+    );
 }
 export async function hasPublishedSite(db: DbOrTx, companyId: string) {
   const [row] = await db
