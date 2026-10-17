@@ -14,12 +14,18 @@ export default async function Page({
   const user = await requireUser("ops"),
     sp = await searchParams;
   const companyId = typeof sp.company === "string" ? sp.company : undefined,
-    deliveryId = typeof sp.delivery === "string" ? sp.delivery : undefined;
-  if ((companyId && !isUuid(companyId)) || (deliveryId && !isUuid(deliveryId))) notFound();
+    deliveryId = typeof sp.delivery === "string" ? sp.delivery : undefined,
+    deploymentId = typeof sp.focus === "string" ? sp.focus : undefined;
+  if (
+    (companyId && !isUuid(companyId)) ||
+    (deliveryId && !isUuid(deliveryId)) ||
+    (deploymentId && !isUuid(deploymentId))
+  )
+    notFound();
   const raw = Number(sp.page ?? 0),
     page = Number.isSafeInteger(raw) && raw >= 0 ? Math.min(raw, 100000) : 0;
   const mode = sp.mode === "all" ? "all" : sp.mode === "resolved" ? "resolved" : "pending";
-  const filter = { companyId, deliveryId, page, mode } as const;
+  const filter = { companyId, deliveryId, deploymentId, page, mode } as const;
   try {
     const initial = await listPublicationMaterials(getDb(), user.actor, filter);
     return (

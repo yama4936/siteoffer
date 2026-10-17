@@ -17,6 +17,7 @@ import {
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/(auth)/actions";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
+import { PendingMaterialBadge } from "@/components/materials/pending-badge";
 import { OpsFrame } from "@/components/ops/frame";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
@@ -42,6 +43,13 @@ export const NAV_ITEMS = [
   { href: "/account/security", label: "安全設定", icon: ShieldCheck },
 ] as const;
 
+const NAV_GROUPS = [
+  { label: "案件・提案", hrefs: ["/ops/discovery", "/ops/designs", "/ops/review"] },
+  { label: "営業・契約", hrefs: ["/ops/consultations", "/ops/assignments", "/ops/contracts"] },
+  { label: "制作・運用", hrefs: ["/ops/materials", "/ops/delivery", "/ops/publication-checks", "/ops/content"] },
+  { label: "管理", hrefs: ["/ops/settings", "/ops/account-recovery", "/account/security"] },
+];
+
 export function OpsShell({
   userName,
   children,
@@ -55,6 +63,30 @@ export function OpsShell({
   recoveryCount?: number | null;
   materialCount?: number | null;
 }) {
+  function renderLink(item: (typeof NAV_ITEMS)[number]) {
+    return (
+      <NavLink
+        key={item.href}
+        href={item.href}
+        exact={"exact" in item && item.exact}
+        className="ops-nav-link"
+        activeClassName="is-active"
+      >
+        <item.icon aria-hidden="true" />
+        <span>{item.label}</span>
+        {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
+        {item.href === "/ops/materials" && <PendingMaterialBadge initialCount={materialCount} />}
+        {item.href === "/ops/account-recovery" && recoveryCount !== null && recoveryCount > 0 && (
+          <span
+            className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"
+            title={`未完了 ${recoveryCount}件`}
+          >
+            {recoveryCount}
+          </span>
+        )}
+      </NavLink>
+    );
+  }
   return (
     <OpsFrame
       userName={userName}
@@ -65,34 +97,12 @@ export function OpsShell({
             <span>運営ワークスペース</span>
           </div>
           <nav aria-label="運営メニュー" className="ops-nav">
-            {NAV_ITEMS.map((item) => (
-              <NavLink
-                key={item.href}
-                href={item.href}
-                exact={"exact" in item && item.exact}
-                className="ops-nav-link"
-                activeClassName="is-active"
-              >
-                <item.icon aria-hidden="true" />
-                <span>{item.label}</span>
-                {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
-                {item.href === "/ops/materials" && materialCount !== null && materialCount > 0 && (
-                  <span
-                    className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"
-                    title={`確認待ち ${materialCount}件`}
-                  >
-                    {materialCount}
-                  </span>
-                )}
-                {item.href === "/ops/account-recovery" && recoveryCount !== null && recoveryCount > 0 && (
-                  <span
-                    className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"
-                    title={`未完了 ${recoveryCount}件`}
-                  >
-                    {recoveryCount}
-                  </span>
-                )}
-              </NavLink>
+            {renderLink(NAV_ITEMS[0])}
+            {NAV_GROUPS.map((group) => (
+              <section key={group.label} className="ops-nav-group" aria-label={group.label}>
+                <h2 className="ops-nav-heading">{group.label}</h2>
+                {NAV_ITEMS.filter((item) => group.hrefs.includes(item.href)).map(renderLink)}
+              </section>
             ))}
           </nav>
           <div className="ops-account">

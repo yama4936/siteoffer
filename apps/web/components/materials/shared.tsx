@@ -3,6 +3,7 @@ import { useEffect, useId } from "react";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import type { MaterialDraft } from "./merge";
+export const MATERIALS_CHANGED_EVENT = "siteoffer-materials-changed";
 export const materialStatus = {
   pending: "運営の確認待ち",
   needs_changes: "説明の追加が必要",

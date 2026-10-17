@@ -1,4 +1,4 @@
-import { type Actor, type Clock, err, ok, systemClock } from "@siteoffer/core";
+import { type Actor, type Clock, err, getPublicationMaterialWork, ok, systemClock } from "@siteoffer/core";
 import {
   assignments,
   auditRequests,
@@ -11,6 +11,8 @@ import {
   designVersions,
   discoveryJobs,
   domainPreferences,
+  imageAssets,
+  imageSubmissions,
   proposalHandoffs,
   proposals,
   proposalVersions,
@@ -29,6 +31,8 @@ import { requireOps } from "./guard";
 import { getReviewInbox } from "./review-inbox";
 
 export const WORK_GROUPS = {
+  materials: { label: "写真・ロゴの確認", href: "/ops/materials" },
+  publication_materials: { label: "公開後の素材確認", href: "/ops/publication-checks" },
   discovery: { label: "収集の復旧", href: "/ops/discovery" },
   audit_attention: { label: "診断の対応", href: "/ops/processing#audit-attention" },
   design: { label: "デザイン", href: "/ops/designs" },
@@ -55,6 +59,7 @@ export interface WorkItem {
   href: string;
   since: string;
   priority: number;
+  attentionLabel?: string;
 }
 const PER_GROUP = 20;
 const total = sql<number>`count(*) over ()`.mapWith(Number);
@@ -90,6 +95,8 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     auditAttention,
     auditPreparation,
     salesReady,
+    materialReview,
+    publicationReview,
   ] = await Promise.all([
     db
       .select({
@@ -329,11 +336,48 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     getAuditAttentionWork(db, actor),
     listAuditPreparation(db, actor),
     getReviewInbox(db, actor, { view: "ready" }),
+    db
+      .select({
+        id: imageAssets.id,
+        companyId: companies.id,
+        name: companies.name,
+        label: imageAssets.label,
+        since: imageSubmissions.updatedAt,
+        total,
+      })
+      .from(imageSubmissions)
+      .innerJoin(imageAssets, eq(imageAssets.id, imageSubmissions.assetId))
+      .innerJoin(companies, eq(companies.id, imageAssets.companyId))
+      .where(eq(imageSubmissions.status, "pending"))
+      .orderBy(asc(imageSubmissions.updatedAt), asc(imageAssets.id))
+      .limit(PER_GROUP),
+    getPublicationMaterialWork(db, actor),
   ]);
   if (!auditAttention.ok) return auditAttention;
   if (!auditPreparation.ok) return auditPreparation;
   if (!salesReady.ok) return salesReady;
   const items: WorkItem[] = [
+    ...materialReview.map((r) => ({
+      id: r.id,
+      group: "materials" as const,
+      title: r.name,
+      reason: `${r.label} · 顧客から届いた画像と、申告された利用許可の確認待ちです。`,
+      action: "画像と利用許可を確認",
+      href: `/ops/materials?company=${r.companyId}&focus=${r.id}&all=1#material-${r.id}`,
+      since: r.since.toISOString(),
+      priority: 2,
+    })),
+    ...publicationReview.items.map((r) => ({
+      id: r.id,
+      group: "publication_materials" as const,
+      title: r.companyName,
+      reason: `第${r.version}版 · ${r.environment} · ${r.reason}。元の公開先への影響を確認してください。`,
+      action: "公開先の対応を確認",
+      href: `/ops/publication-checks?delivery=${r.deliveryId}&focus=${r.id}&mode=all#publication-${r.id}`,
+      since: r.since,
+      priority: 0,
+      attentionLabel: "公開後の確認",
+    })),
     ...salesReady.value.items.map((r) => ({
       id: r.id,
       group: "sales_ready" as const,
@@ -520,6 +564,8 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
   ];
   items.sort((a, b) => a.priority - b.priority || a.since.localeCompare(b.since) || a.id.localeCompare(b.id));
   const groups = Object.entries({
+    materials: materialReview,
+    publication_materials: [{ total: publicationReview.total }],
     discovery: failed,
     audit_attention: [{ total: auditAttention.value.total }],
     audit_preparation: [{ total: auditPreparation.value.total }],

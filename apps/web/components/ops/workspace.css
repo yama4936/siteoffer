@@ -1581,3 +1581,58 @@
     overflow-y: auto;
   }
 }
+
+/* Group the growing operations menu while keeping the account controls reachable. */
+.ops-sidebar:has(.ops-nav-group) > .ops-brand,
+.ops-sidebar:has(.ops-nav-group) > .ops-account {
+  flex-shrink: 0;
+}
+.ops-nav:has(.ops-nav-group) {
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 10px;
+  gap: 3px;
+}
+.ops-nav-group {
+  flex-shrink: 0;
+}
+.ops-nav-heading {
+  padding: 16px 24px 6px;
+  color: #9eafca;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+.ops-nav-group .ops-nav-link {
+  padding: 11px 8px 11px 18px;
+  gap: 9px;
+  font-size: 12px;
+}
+.ops-nav-group .ops-nav-link > svg {
+  flex-shrink: 0;
+}
+.ops-nav-group .ops-nav-link > span:first-of-type {
+  white-space: nowrap;
+}
+.ops-nav-group .ops-nav-link:last-child {
+  margin-top: 0;
+}
+@media (max-width: 850px) {
+  .ops-nav:has(.ops-nav-group) {
+    padding: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .ops-nav-group {
+    display: contents;
+  }
+  .ops-nav-heading {
+    display: none;
+  }
+  .ops-nav-group .ops-nav-link {
+    padding: 12px 16px;
+  }
+  .ops-nav:has(.ops-nav-group) .ops-nav-link {
+    flex-shrink: 0;
+  }
+}

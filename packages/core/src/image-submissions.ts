@@ -417,13 +417,15 @@ export async function listCustomerImages(db: DbOrTx, actor: Actor | null, compan
 export async function listImageSubmissionsForOps(
   db: DbOrTx,
   actor: Actor | null,
-  input: { companyId?: string; page?: number; pendingOnly?: boolean } = {},
+  input: { companyId?: string; assetId?: string; page?: number; pendingOnly?: boolean } = {},
 ) {
   if (input.companyId && !uuid(input.companyId)) throw new ImageSubmissionError("企業を確認してください");
+  if (input.assetId && !uuid(input.assetId)) throw new ImageSubmissionError("画像を確認してください");
   return db.transaction(async (tx) => {
     await activeContentOperator(tx, actor);
     const filter = and(
       input.companyId ? eq(imageAssets.companyId, input.companyId) : undefined,
+      input.assetId ? eq(imageAssets.id, input.assetId) : undefined,
       input.pendingOnly ? eq(imageSubmissions.status, "pending") : undefined,
     );
     const [total] = await tx

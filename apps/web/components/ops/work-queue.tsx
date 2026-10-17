@@ -1,15 +1,16 @@
 "use client";
 import { ArrowRight, CheckCheck, CircleAlert, Clock3, RefreshCw, Search } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useRef, useState } from "react";
+import { refreshOpsWorkQueueAction } from "@/app/work-queue-actions";
+import { useMaterialUpdates } from "@/components/materials/updates";
 import type { WorkGroup, WorkItem } from "@/lib/ops/work-queue";
 
 export function WorkQueue({
-  items,
-  groups,
-  total,
-  perGroup,
+  items: initialItems,
+  groups: initialGroups,
+  total: initialTotal,
+  perGroup: initialPerGroup,
   updatedAt,
 }: {
   items: WorkItem[];
@@ -20,18 +21,41 @@ export function WorkQueue({
 }) {
   const [group, setGroup] = useState<WorkGroup | "all">("all");
   const [query, setQuery] = useState("");
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (
-        document.visibilityState === "visible" &&
-        !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName ?? "")
-      )
-        startTransition(() => router.refresh());
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [router]);
+  const [data, setData] = useState({
+    items: initialItems,
+    groups: initialGroups,
+    total: initialTotal,
+    perGroup: initialPerGroup,
+  });
+  const [pending, setPending] = useState(false),
+    gate = useRef(false);
+  const [manualError, setManualError] = useState<{ message: string; checkedAt: number | null } | null>(null);
+  const load = useCallback(() => refreshOpsWorkQueueAction(), []);
+  const updates = useMaterialUpdates({ snapshot: data, load, apply: setData, editing: null, paused: pending });
+  async function refresh() {
+    if (gate.current) return;
+    gate.current = true;
+    updates.invalidate();
+    setPending(true);
+    setManualError(null);
+    try {
+      const r = await load();
+      if (r.ok) {
+        setData(r.result);
+        updates.acknowledge();
+      } else setManualError({ message: r.message, checkedAt: updates.checkedAt });
+    } catch {
+      setManualError({
+        message: "仕事の一覧を取得できませんでした。表示が古い可能性があります。再度更新してください。",
+        checkedAt: updates.checkedAt,
+      });
+    } finally {
+      gate.current = false;
+      setPending(false);
+    }
+  }
+  const { items, groups, total, perGroup } = data;
+  const error = updates.error || (manualError?.checkedAt === updates.checkedAt ? manualError?.message : "");
   const filtered = items.filter(
     (item) =>
       (group === "all" || item.group === group) &&
@@ -40,9 +64,9 @@ export function WorkQueue({
   const first = filtered[0];
   const names = new Map(groups.map((g) => [g.key, g.label]));
   const count = group === "all" ? total : (groups.find((g) => g.key === group)?.count ?? 0);
-  const now = new Date(updatedAt).getTime();
+  const now = updates.checkedAt ?? new Date(updatedAt).getTime();
   const time = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" }).format(
-    new Date(updatedAt),
+    new Date(now),
   );
   return (
     <div className="work-queue">
@@ -85,18 +109,21 @@ export function WorkQueue({
           <h2>
             あなたの確認で進む仕事 <span className="work-total">{total}</span>
           </h2>
-          <p>停止対応 → 相談・担当・契約 → 確認 → 準備の順。同じ優先度は登録の古い順です。</p>
+          <p>公開後の問題・停止対応 → 相談・担当・契約 → 素材などの確認 → 準備の順。同じ優先度は登録の古い順です。</p>
         </div>
-        <button
-          type="button"
-          onClick={() => startTransition(() => router.refresh())}
-          disabled={pending}
-          className="work-refresh"
-        >
+        <button type="button" onClick={() => void refresh()} disabled={pending} className="work-refresh">
           <RefreshCw size={15} className={pending ? "animate-spin" : ""} />
           {pending ? "更新中" : "最新に更新"}
         </button>
       </div>
+      {error && (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-900"
+        >
+          {error} 前回取得した仕事を表示しています。
+        </p>
+      )}
       <fieldset className="work-tabs">
         <legend className="sr-only">仕事の種類</legend>
         <button type="button" aria-pressed={group === "all"} onClick={() => setGroup("all")}>
@@ -148,14 +175,20 @@ export function WorkQueue({
                 Math.floor((new Date(item.since).getTime() + 9 * 3600000) / 86400000),
             );
             return (
-              <article key={`${item.group}:${item.id}`} className="work-row" data-priority={item.priority}>
+              <article
+                key={`${item.group}:${item.id}`}
+                className="work-row"
+                data-priority={item.priority}
+                data-work-group={item.group}
+                data-work-id={item.id}
+              >
                 <div className="work-row-icon">
                   {item.priority === 0 ? <CircleAlert size={19} /> : <Clock3 size={19} />}
                 </div>
                 <div className="work-row-content">
                   <div className="work-row-meta">
                     <span>{names.get(item.group)}</span>
-                    {item.priority === 0 && <b>停止中</b>}
+                    {item.priority === 0 && <b>{item.attentionLabel ?? "停止中"}</b>}
                     <span>{age === 0 ? "本日登録・更新" : `${age}日前に登録・更新`}</span>
                   </div>
                   <h3>

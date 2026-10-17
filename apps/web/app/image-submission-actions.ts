@@ -3,6 +3,7 @@ import {
   authorizeCustomerImageSubmission,
   ContentError,
   type CustomerImageDetails,
+  countPendingImageSubmissions,
   getImageSubmission,
   ImageAssetError,
   ImageSubmissionError,
@@ -98,7 +99,12 @@ export async function refreshCustomerImagesAction(companyId: string, page: numbe
     return failure(e);
   }
 }
-export async function refreshImageSubmissionsAction(input: { companyId?: string; page: number; pendingOnly: boolean }) {
+export async function refreshImageSubmissionsAction(input: {
+  companyId?: string;
+  assetId?: string;
+  page: number;
+  pendingOnly: boolean;
+}) {
   try {
     return { ok: true as const, result: await listImageSubmissionsForOps(getDb(), await getCurrentActor(), input) };
   } catch (e) {
@@ -109,6 +115,14 @@ export async function refreshImageSubmissionsAction(input: { companyId?: string;
 export async function compareImageSubmissionAction(companyId: string, assetId: string) {
   try {
     return { ok: true as const, item: await getImageSubmission(getDb(), await getCurrentActor(), companyId, assetId) };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+export async function pendingMaterialCountAction() {
+  try {
+    return { ok: true as const, count: await countPendingImageSubmissions(getDb(), await getCurrentActor()) };
   } catch (e) {
     return failure(e);
   }

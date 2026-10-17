@@ -15,12 +15,13 @@ export default async function Page({
   const user = await requireUser("ops"),
     sp = await searchParams,
     companyId = typeof sp.company === "string" ? sp.company : undefined,
+    assetId = typeof sp.focus === "string" ? sp.focus : undefined,
     pendingOnly = sp.all !== "1",
     raw = Number(sp.page ?? 0),
     page = Number.isSafeInteger(raw) && raw >= 0 ? Math.min(raw, 100000) : 0;
-  if (companyId && !isUuid(companyId)) notFound();
+  if ((companyId && !isUuid(companyId)) || (assetId && !isUuid(assetId))) notFound();
   try {
-    const initial = await listImageSubmissionsForOps(getDb(), user.actor, { companyId, page, pendingOnly });
+    const initial = await listImageSubmissionsForOps(getDb(), user.actor, { companyId, assetId, page, pendingOnly });
     const prefix = `/ops/materials?${companyId ? `company=${companyId}&` : ""}`;
     return (
       <>
@@ -59,10 +60,19 @@ export default async function Page({
             利用許可の変更が公開済みサイトに影響していないか確認
           </Link>
         </p>
+        {assetId && (
+          <p className="mb-4 text-sm">
+            選択した素材を表示しています。
+            <Link href={`/ops/materials${companyId ? `?company=${companyId}` : ""}`} className="ml-2 underline">
+              会社の素材一覧に戻る
+            </Link>
+          </p>
+        )}
         <OperatorMaterials
-          key={`${companyId}:${page}:${pendingOnly}`}
+          key={`${companyId}:${assetId}:${page}:${pendingOnly}`}
           initial={initial}
           companyId={companyId}
+          assetId={assetId}
           page={page}
           pendingOnly={pendingOnly}
         />

@@ -207,13 +207,24 @@ export type PublicationMaterialItem = ReturnType<typeof view>;
 export async function listPublicationMaterials(
   db: DbOrTx,
   actor: Actor | null,
-  input: { companyId?: string; deliveryId?: string; page?: number; mode?: "pending" | "resolved" | "all" } = {},
+  input: {
+    companyId?: string;
+    deliveryId?: string;
+    deploymentId?: string;
+    page?: number;
+    mode?: "pending" | "resolved" | "all";
+  } = {},
 ) {
-  if ((input.companyId && !uuid(input.companyId)) || (input.deliveryId && !uuid(input.deliveryId)))
+  if (
+    (input.companyId && !uuid(input.companyId)) ||
+    (input.deliveryId && !uuid(input.deliveryId)) ||
+    (input.deploymentId && !uuid(input.deploymentId))
+  )
     throw new PublicationMaterialError("対象の企業・納品を確認してください");
   return db.transaction(async (tx) => {
     await activeContentOperator(tx, actor);
-    const all = await scan(tx, input),
+    const source = await scan(tx, input),
+      all = source.filter((r) => !input.deploymentId || r.deploymentId === input.deploymentId),
       mode = input.mode ?? "pending",
       rows = all.filter((r) => mode === "all" || r.state === mode);
     const page = Number.isSafeInteger(input.page) && input.page! >= 0 ? Math.min(input.page!, 100000) : 0;
@@ -222,7 +233,28 @@ export async function listPublicationMaterials(
       pending: all.filter((r) => r.state === "pending").length,
       resolved: all.filter((r) => r.state === "resolved").length,
       scanned: all.length,
-      items: rows.slice(page * 20, (page + 1) * 20).map((r) => view(r, all)),
+      items: rows.slice(page * 20, (page + 1) * 20).map((r) => view(r, source)),
+    };
+  });
+}
+/** Oldest actionable publications for the operations queue. No file bodies or confirmation notes. */
+export async function getPublicationMaterialWork(db: DbOrTx, actor: Actor | null) {
+  return db.transaction(async (tx) => {
+    await activeContentOperator(tx, actor);
+    const rows = (await scan(tx)).filter((r) => r.state === "pending");
+    rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.deploymentId.localeCompare(b.deploymentId));
+    return {
+      total: rows.length,
+      items: rows.slice(0, 20).map((r) => ({
+        id: r.deploymentId,
+        deliveryId: r.deliveryId,
+        companyId: r.companyId,
+        companyName: r.companyName,
+        version: r.version,
+        environment: r.environment,
+        since: r.createdAt,
+        reason: r.issues[0]!.reason,
+      })),
     };
   });
 }

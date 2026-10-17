@@ -12,7 +12,7 @@ import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { fmtDate } from "@/lib/ops/format";
 import { OperatorMaterialComparison, useComparisonFocus } from "./comparison";
-import { materialStatus, rightsLabels, useMaterialNavigationGuard } from "./shared";
+import { MATERIALS_CHANGED_EVENT, materialStatus, rightsLabels, useMaterialNavigationGuard } from "./shared";
 import { MaterialUpdatesStatus, useMaterialUpdates } from "./updates";
 
 type Item = ImageSubmissionView & { companyName: string; submitterName: string };
@@ -20,16 +20,20 @@ type Listing = { total: number; items: Item[] };
 export function OperatorMaterials({
   initial,
   companyId,
+  assetId,
   page,
   pendingOnly,
 }: {
   initial: Listing;
   companyId?: string;
+  assetId?: string;
   page: number;
   pendingOnly: boolean;
 }) {
   const [listing, setListing] = useState(initial),
-    [selected, setSelected] = useState<string | null>(null),
+    [selected, setSelected] = useState<string | null>(
+      assetId && initial.items[0]?.status === "pending" ? assetId : null,
+    ),
     [busy, setBusy] = useState(false),
     [pending, setPending] = useState<Parameters<typeof reviewCustomerImageAction>[0] | null>(null),
     [message, setMessage] = useState(""),
@@ -46,8 +50,8 @@ export function OperatorMaterials({
   useComparisonFocus(formRef, comparison !== null, formVersion, "decision");
   // Background reads detect changes but preserve the exact version being reviewed.
   const loadUpdates = useCallback(
-    () => refreshImageSubmissionsAction({ companyId, page, pendingOnly }),
-    [companyId, page, pendingOnly],
+    () => refreshImageSubmissionsAction({ companyId, assetId, page, pendingOnly }),
+    [companyId, assetId, page, pendingOnly],
   );
   const updates = useMaterialUpdates({
     snapshot: listing,
@@ -63,7 +67,7 @@ export function OperatorMaterials({
     updates.invalidate();
     setBusy(true);
     try {
-      const r = await refreshImageSubmissionsAction({ companyId, page, pendingOnly });
+      const r = await refreshImageSubmissionsAction({ companyId, assetId, page, pendingOnly });
       if (r.ok) {
         setListing(r.result);
         updates.acknowledge();
@@ -93,6 +97,7 @@ export function OperatorMaterials({
         return;
       }
       setPending(null);
+      window.dispatchEvent(new Event(MATERIALS_CHANGED_EVENT));
       setSelected(null);
       setResumed(null);
       setDirty(false);
@@ -115,7 +120,7 @@ export function OperatorMaterials({
           .filter((item) => !pendingOnly || item.status === "pending"),
       }));
       try {
-        const fresh = await refreshImageSubmissionsAction({ companyId, page, pendingOnly });
+        const fresh = await refreshImageSubmissionsAction({ companyId, assetId, page, pendingOnly });
         if (fresh.ok) {
           setListing(fresh.result);
           updates.acknowledge();
@@ -212,7 +217,11 @@ export function OperatorMaterials({
         </div>
       )}
       {listing.items.map((item) => (
-        <article key={item.assetId} className="min-w-0 rounded-xl border bg-white p-5 shadow-sm">
+        <article
+          id={`material-${item.assetId}`}
+          key={item.assetId}
+          className="min-w-0 rounded-xl border bg-white p-5 shadow-sm"
+        >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <Link href={`/ops/companies/${item.companyId}`} className="text-sm text-blue-700">

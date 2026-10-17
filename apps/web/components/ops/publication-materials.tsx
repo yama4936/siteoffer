@@ -23,14 +23,16 @@ type Pending =
 const status = { pending: "対応が必要", resolved: "対応確認済み", clear: "素材の問題なし" };
 export function PublicationMaterials({ initial, filter }: { initial: Listing; filter: Filter }) {
   const [listing, setListing] = useState(initial),
-    [selected, setSelected] = useState<PublicationMaterialItem | null>(null),
+    [selected, setSelected] = useState<PublicationMaterialItem | null>(
+      filter.deploymentId && initial.items[0]?.state === "pending" ? (initial.items[0] ?? null) : null,
+    ),
     [busy, setBusy] = useState(false),
     [pending, setPending] = useState<Pending | null>(null),
     [message, setMessage] = useState("");
   const [note, setNote] = useState(""),
     [outcome, setOutcome] = useState(""),
     [replacement, setReplacement] = useState(""),
-    [url, setUrl] = useState(""),
+    [url, setUrl] = useState(filter.deploymentId ? (initial.items[0]?.url ?? "") : ""),
     [confirmed, setConfirmed] = useState(false);
   const gate = useRef(false),
     heading = useRef<HTMLHeadingElement>(null);
@@ -160,6 +162,17 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
           </div>
         ))}
       </section>
+      {filter.deploymentId && (
+        <p className="text-sm">
+          選択した公開記録を表示しています。
+          <Link
+            href={`/ops/publication-checks${filter.deliveryId ? `?delivery=${filter.deliveryId}` : ""}`}
+            className="ml-2 underline"
+          >
+            このサイトの公開記録に戻る
+          </Link>
+        </p>
+      )}
       <nav aria-label="公開素材の確認状況" className="flex flex-wrap gap-2">
         {(
           [
@@ -176,7 +189,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
             {label}
           </Link>
         ))}
-        {(filter.companyId || filter.deliveryId) && (
+        {(filter.companyId || filter.deliveryId || filter.deploymentId) && (
           <Link className="px-3 py-2 text-sm underline" href="/ops/publication-checks">
             絞り込みを解除
           </Link>
@@ -359,6 +372,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
         {listing.items.map((item) => (
           <article
             key={item.deploymentId}
+            id={`publication-${item.deploymentId}`}
             data-publication={item.deploymentId}
             className="rounded-xl border bg-white p-5"
           >

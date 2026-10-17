@@ -2,7 +2,7 @@
 
 import { ChevronRight, Search } from "lucide-react";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 
 const titles: Record<string, string> = {
   discovery: "企業・案件",
@@ -33,6 +33,28 @@ export function OpsFrame({
   workspaceRole?: "ops" | "sales";
 }) {
   const pathname = usePathname();
+  const sidebarRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!pathname) return;
+    function revealActive() {
+      const nav = sidebarRef.current?.querySelector<HTMLElement>(".ops-nav:has(.ops-nav-group)");
+      const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!nav || !active) return;
+      // Scroll only the menu container, preserving a deep link's position in the page.
+      const box = nav.getBoundingClientRect(),
+        target = active.getBoundingClientRect();
+      if (getComputedStyle(nav).flexDirection === "row") {
+        if (target.left < box.left) nav.scrollLeft += target.left - box.left;
+        else if (target.right > box.right) nav.scrollLeft += target.right - box.right;
+      } else {
+        if (target.top < box.top) nav.scrollTop += target.top - box.top;
+        else if (target.bottom > box.bottom) nav.scrollTop += target.bottom - box.bottom;
+      }
+    }
+    revealActive();
+    window.addEventListener("resize", revealActive);
+    return () => window.removeEventListener("resize", revealActive);
+  }, [pathname]);
   const sales = workspaceRole === "sales";
   const review = pathname === "/ops/review" || (sales && /^\/sales\/companies\/[^/]+$/.test(pathname));
   const salesTitles: Record<string, string> = {
@@ -47,7 +69,9 @@ export function OpsFrame({
       <a href="#ops-main" className="ops-skip">
         本文へ移動
       </a>
-      <aside className="ops-sidebar">{sidebar}</aside>
+      <aside ref={sidebarRef} className="ops-sidebar">
+        {sidebar}
+      </aside>
       <div className="ops-body">
         <header className="ops-topbar">
           <div className="ops-breadcrumb">
