@@ -51,6 +51,14 @@ export default async function Page({
             </Link>
           )}
         </nav>
+        <p className="mb-5 text-sm">
+          <Link
+            className="text-blue-700 underline"
+            href={`/ops/publication-checks${companyId ? `?company=${companyId}` : ""}`}
+          >
+            利用許可の変更が公開済みサイトに影響していないか確認
+          </Link>
+        </p>
         <OperatorMaterials
           key={`${companyId}:${page}:${pendingOnly}`}
           initial={initial}

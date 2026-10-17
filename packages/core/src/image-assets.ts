@@ -148,7 +148,7 @@ export async function captureDeliveryImageAssets(tx: DbOrTx, contractId: string)
   }
   return result;
 }
-function readSnapshot(raw: unknown): DeliveryImageAsset[] | null {
+export function parseDeliveryImageSnapshot(raw: unknown): DeliveryImageAsset[] | null {
   if (raw === null) return []; // 既存の制作回は素材なし。後から自動追加しない。
   if (!Array.isArray(raw) || raw.length > 2) return null;
   if (
@@ -178,7 +178,7 @@ export async function deliveryImageAssetsValid(db: DbOrTx, buildId: string | nul
     .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
     .where(and(eq(deliveryBuilds.id, buildId), eq(deliveryBuilds.deliveryId, deliveryId)));
   if (!b) return false;
-  const snapshot = readSnapshot(b.snapshot);
+  const snapshot = parseDeliveryImageSnapshot(b.snapshot);
   if (!snapshot) return false;
   for (const s of [...snapshot].sort((a, b) => a.assetId.localeCompare(b.assetId))) {
     const query = db
@@ -210,7 +210,7 @@ export async function loadDeliveryImageAssets(db: DbOrTx, buildId: string, deliv
     .select({ snapshot: deliveryBuilds.imageAssetSnapshot })
     .from(deliveryBuilds)
     .where(eq(deliveryBuilds.id, buildId));
-  const snapshot = readSnapshot(b!.snapshot)!;
+  const snapshot = parseDeliveryImageSnapshot(b!.snapshot)!;
   const result = [];
   for (const a of snapshot) {
     const [f] = await db.select().from(imageAssetFiles).where(eq(imageAssetFiles.assetId, a.assetId));

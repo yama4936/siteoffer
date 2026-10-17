@@ -19,6 +19,7 @@ export * from "./image-assets.ts";
 export * from "./image-submissions.ts";
 export * from "./pipeline-handoff.ts";
 export * from "./proposal.ts";
+export * from "./publication-checks.ts";
 export * from "./review-draft.ts";
 export * from "./sales-offer.ts";
 export * from "./sales-offer-change.ts";

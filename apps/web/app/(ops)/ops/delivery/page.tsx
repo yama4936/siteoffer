@@ -99,6 +99,11 @@ export default async function DeliveryPage({
         </p>
       )}
       <Flash searchParams={sp} />
+      <p className="mb-5 text-sm">
+        <Link className="text-blue-700 underline" href="/ops/publication-checks">
+          公開後に利用許可が変わった素材と対応状況を確認
+        </Link>
+      </p>
       {details.value.some((d) => d.delivery.status === "building") && <DiscoveryRefresh />}
       <nav className="mb-6 flex flex-wrap gap-3 text-sm" aria-label="制作・公開の作業">
         <Link className="text-primary underline" href="/ops">
@@ -602,6 +607,11 @@ function DeliveryCard({
 
         <div>
           <SubHeading>公開の記録</SubHeading>
+          <p className="mb-3 text-sm">
+            <Link className="text-blue-700 underline" href={`/ops/publication-checks?delivery=${delivery.id}`}>
+              このサイトの公開後の素材確認・対応記録
+            </Link>
+          </p>
           {d.deployments.length === 0 ? (
             <p className="text-muted-foreground text-sm">記録はありません</p>
           ) : (

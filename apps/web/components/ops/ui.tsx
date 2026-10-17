@@ -33,6 +33,7 @@ export const NAV_ITEMS = [
   { href: "/ops/materials", label: "顧客の写真・ロゴ", icon: Images },
   { href: "/ops/content", label: "お知らせ・ブログ", icon: Newspaper },
   { href: "/ops/delivery", label: "制作・公開", icon: PackageCheck },
+  { href: "/ops/publication-checks", label: "公開後の素材確認", icon: ShieldCheck },
   { href: "/ops/consultations", label: "営業からの相談", icon: MessageCircle },
   { href: "/ops/assignments", label: "担当・引き継ぎ", icon: Users },
   { href: "/ops/contracts", label: "契約・報酬", icon: FileSignature },

@@ -1,4 +1,4 @@
-import { systemClock } from "@siteoffer/core";
+import { listPublicationMaterials, systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
 import Link from "next/link";
 import { Flash, Forbidden } from "@/components/ops/ui";
@@ -17,6 +17,9 @@ export default async function OpsHome({
   const db = getDb();
   const r = await getOpsWorkQueue(db, await getCurrentActor());
   if (!r.ok) return <Forbidden />;
+  const publication = await listPublicationMaterials(db, await getCurrentActor())
+    .then((r) => r.pending)
+    .catch(() => null);
   const capabilities = await discoveryAvailability(db, systemClock);
   const live = capabilities.some((p) => p.ready);
   const nta = capabilities.find((p) => p.provider === "nta-corporate-number")?.ready;
@@ -28,6 +31,19 @@ export default async function OpsHome({
         description="探す時間を減らして、案件を一歩先へ。確認が必要な仕事をまとめています。"
       />
       <Flash searchParams={await searchParams} />
+      <Link
+        href="/ops/publication-checks"
+        className={`mb-5 block rounded-xl border p-4 text-sm ${publication === null || publication > 0 ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-white"}`}
+      >
+        <strong>公開後の素材確認</strong>
+        <span className="ml-3">
+          {publication === null
+            ? "確認状況を取得できません。確認画面を開いてください。"
+            : publication > 0
+              ? `${publication}件の公開記録に対応が必要です。`
+              : "対応が必要な公開記録はありません。"}
+        </span>
+      </Link>
       <WorkQueue {...r.value} updatedAt={systemClock.now().toISOString()} />
       <p className="my-4 text-sm">
         <Link href="/ops/processing" className="text-primary underline">

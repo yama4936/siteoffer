@@ -15,6 +15,7 @@ const titles: Record<string, string> = {
   consultations: "営業からの相談",
   contracts: "契約・報酬",
   delivery: "制作・公開",
+  "publication-checks": "公開後の素材確認",
   processing: "処理の状況",
   settings: "設定・操作履歴",
   "account-recovery": "ログインの復旧",
