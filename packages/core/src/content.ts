@@ -1,9 +1,10 @@
+import type { ArticleImage } from "@siteoffer/db";
 import { contentEntries, contentRevisions, contracts, type DbOrTx, deliveries, deployments } from "@siteoffer/db";
 import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { recordEvent } from "./common/events.ts";
 import type { Actor, Clock } from "./common/index.ts";
-
 import { authorizeContentEditor, ContentError } from "./content-auth.ts";
+import { parseArticleImages, validateArticleImageSelection } from "./content-images.ts";
 
 export { ContentError } from "./content-auth.ts";
 export type ArticleInput = {
@@ -14,6 +15,7 @@ export type ArticleInput = {
   title: string;
   body: string;
   category: string;
+  images?: ArticleImage[];
 };
 export async function saveArticle(db: DbOrTx, clock: Clock, actor: Actor | null, input: ArticleInput) {
   if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(input.slug))
@@ -21,8 +23,10 @@ export async function saveArticle(db: DbOrTx, clock: Clock, actor: Actor | null,
   if (!input.title.trim() || input.title.length > 160 || !input.body.trim() || input.body.length > 30000)
     throw new ContentError("見出しは1〜160文字、本文は1〜30000文字で入力してください");
   if (!["news", "blog"].includes(input.category)) throw new ContentError("記事の種類が不正です");
+  const images = parseArticleImages(input.images);
   return db.transaction(async (tx) => {
     const editor = await authorizeContentEditor(tx, actor, input.companyId);
+    await validateArticleImageSelection(tx, editor, input.companyId, images);
     let entry: typeof contentEntries.$inferSelect;
     let revision = 1;
     if (input.entryId) {
@@ -57,6 +61,7 @@ export async function saveArticle(db: DbOrTx, clock: Clock, actor: Actor | null,
       revision,
       title: input.title.trim(),
       body: input.body.trim(),
+      images,
       category: input.category,
       createdBy: editor.userId,
       createdAt: clock.now(),
@@ -106,10 +111,11 @@ export async function publishArticle(
       throw new ContentError("記事が更新されています。画面を更新して確認してください");
     if (input.revision !== null) {
       const [r] = await tx
-        .select({ id: contentRevisions.id })
+        .select({ id: contentRevisions.id, images: contentRevisions.images })
         .from(contentRevisions)
         .where(and(eq(contentRevisions.entryId, entry.id), eq(contentRevisions.revision, input.revision)));
       if (!r) throw new ContentError("掲載する版がありません");
+      await validateArticleImageSelection(tx, editor, input.companyId, parseArticleImages(r.images), true);
     }
     if (entry.publishedRevision === input.revision) return entry;
     const [updated] = await tx

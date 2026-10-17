@@ -1,4 +1,4 @@
-import { hasPublishedSite, loadArticleWorkspace, loadContentAccess } from "@siteoffer/core";
+import { hasPublishedSite, listArticleImageChoices, loadArticleWorkspace, loadContentAccess } from "@siteoffer/core";
 import { companies, contentEntries, contentRevisions } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
 import Link from "next/link";
@@ -127,6 +127,7 @@ export default async function ContentPage({
           <ArticleEditor
             key={`${companyId}:${selected?.entry.id ?? "new"}`}
             initial={workspace}
+            imageChoices={await listArticleImageChoices(db, user.actor, companyId)}
             publicSite={publicSite}
           />
         </section>

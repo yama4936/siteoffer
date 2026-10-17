@@ -16,6 +16,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ company
         revision: contentRevisions.revision,
         title: contentRevisions.title,
         body: contentRevisions.body,
+        images: contentRevisions.images,
         category: contentRevisions.category,
         createdAt: contentRevisions.createdAt,
       })

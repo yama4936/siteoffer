@@ -11,6 +11,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import { recordEvent } from "./common/events.ts";
 import type { Actor, Clock } from "./common/index.ts";
 import { err, ok } from "./common/result.ts";
+import { ContentError } from "./content-auth.ts";
+import { validateArticleImageSelection } from "./content-images.ts";
 import { findSecretInFields } from "./domain-preference/secrets.ts";
 
 const sha = (v: string) => createHash("sha256").update(v).digest("hex");
@@ -37,13 +39,21 @@ async function allowed(db: DbOrTx, actor: Actor | null, lock = false) {
     .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")));
   return !!(await (lock ? q.for("share") : q))[0];
 }
-async function plan(db: DbOrTx, source: ArticleImportSource): Promise<ArticleImportPreview> {
+async function plan(db: DbOrTx, source: ArticleImportSource, actor: Actor): Promise<ArticleImportPreview> {
   const parsed = parseArticleImport(source.text, source.format);
   if (parsed.exportedCompanyId && parsed.exportedCompanyId !== source.companyId)
     parsed.errors.push({ row: 0, message: "別企業の書き出しです。対象企業を確認してください" });
   for (const [i, a] of parsed.articles.entries())
     if (findSecretInFields({ title: a.title, body: a.body, sourceUrl: a.sourceUrl ?? "" }))
       parsed.errors.push({ row: i + 1, message: "秘密情報らしき内容があります。元ファイルを確認してください" });
+  for (const [i, a] of parsed.articles.entries()) {
+    try {
+      await validateArticleImageSelection(db, actor, source.companyId, a.images ?? []);
+    } catch (e) {
+      if (!(e instanceof ContentError)) throw e;
+      parsed.errors.push({ row: i + 1, message: e.message });
+    }
+  }
   const slugs = parsed.articles.map((a) => a.slug);
   const existing = slugs.length
     ? await db
@@ -65,6 +75,11 @@ async function plan(db: DbOrTx, source: ArticleImportSource): Promise<ArticleImp
       draft?.title === article.title &&
       draft.body === article.body &&
       draft.category === article.category &&
+      draft.images.length === (article.images ?? []).length &&
+      draft.images.every((image, index) => {
+        const other = article.images?.[index];
+        return other && image.assetId === other.assetId && image.alt === other.alt && image.caption === other.caption;
+      }) &&
       before!.entry.sourceUrl === article.sourceUrl &&
       before!.entry.originalPublishedAt?.toISOString() === (article.originalPublishedAt ?? undefined);
     return {
@@ -92,7 +107,7 @@ export async function previewArticleImport(db: DbOrTx, actor: Actor | null, raw:
   if (!p.success) return err("invalid_input", "企業・ファイル名・形式・サイズを確認してください");
   const [company] = await db.select({ id: companies.id }).from(companies).where(eq(companies.id, p.data.companyId));
   if (!company) return err("not_found", "企業がありません");
-  return ok(await plan(db, p.data));
+  return ok(await plan(db, p.data, actor!));
 }
 export async function commitArticleImport(db: DbOrTx, clock: Clock, actor: Actor | null, raw: unknown) {
   if (actor?.kind !== "ops") return err("forbidden", "運営権限が必要です");
@@ -120,7 +135,7 @@ export async function commitArticleImport(db: DbOrTx, clock: Clock, actor: Actor
             alreadyRecorded: true,
           })
         : err("request_conflict", "受付番号と内容が一致しません。再度プレビューしてください");
-    const preview = await plan(tx, input);
+    const preview = await plan(tx, input, actor);
     if (preview.errors.length) return err("invalid_input", "取り込めない行があります。元ファイルを修正してください");
     if (preview.fingerprint !== input.fingerprint)
       return err("conflict", "確認後に記事が更新されました。同じファイルを再照合してください");
@@ -163,6 +178,7 @@ export async function commitArticleImport(db: DbOrTx, clock: Clock, actor: Actor
         revision: 1,
         title: a.title,
         body: a.body,
+        images: a.images ?? [],
         category: a.category,
         createdBy: actor.userId,
         createdAt: now,

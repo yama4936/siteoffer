@@ -1,18 +1,36 @@
 "use client";
-import type { ArticleOperation, ArticleValues, ArticleWorkspace } from "@siteoffer/core";
+import type { ArticleImageChoice, ArticleOperation, ArticleValues, ArticleWorkspace } from "@siteoffer/core";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { refreshArticleAction, saveArticleCopyAction, submitArticleAction } from "@/app/(ops)/ops/content/actions";
 import { usePersonalDraft } from "@/components/use-personal-draft";
+import { ArticleImages } from "./article-images";
 import "./article-editor.css";
 
 const same = (a: ArticleValues, b: ArticleValues) =>
-  a.slug === b.slug && a.title === b.title && a.body === b.body && a.category === b.category;
-function ArticlePreview({ title, body, category }: Pick<ArticleValues, "title" | "body" | "category">) {
+  a.slug === b.slug &&
+  a.title === b.title &&
+  a.body === b.body &&
+  a.category === b.category &&
+  JSON.stringify(a.images ?? []) === JSON.stringify(b.images ?? []);
+function ArticlePreview({
+  title,
+  body,
+  category,
+  images = [],
+  imageBase,
+}: Pick<ArticleValues, "title" | "body" | "category" | "images"> & { imageBase: string }) {
   return (
     <article className="min-w-0 rounded-lg border bg-slate-50 p-4 break-words">
       <p className="text-xs text-slate-500">{category === "blog" ? "ブログ" : "お知らせ"}</p>
       <h4 className="my-3 font-bold">{title || "見出しが入ります"}</h4>
+      {images.map((image) => (
+        <figure key={image.assetId} className="my-3">
+          {/* biome-ignore lint/performance/noImgElement: Each request must recheck permission; image optimization could retain withdrawn photos. */}
+          <img className="article-preview-photo" src={`${imageBase}/${image.assetId}`} alt={image.alt} loading="lazy" />
+          {image.caption && <figcaption className="mt-1 text-xs text-slate-500">{image.caption}</figcaption>}
+        </figure>
+      ))}
       <p className="whitespace-pre-wrap text-sm leading-7">{body || "本文が入ります"}</p>
     </article>
   );
@@ -21,12 +39,15 @@ export function ArticleEditor({
   initial,
   publicSite,
   audience = "ops",
+  imageChoices = [],
 }: {
   initial: ArticleWorkspace;
+  imageChoices?: ArticleImageChoice[];
   publicSite: boolean;
   audience?: "ops" | "customer";
 }) {
   const router = useRouter();
+  const imageBase = `/article-images/${initial.scope.companyId}`;
   const [workspace, setWorkspace] = useState(initial);
   const draft = usePersonalDraft(initial.copy, initial.current, (revision, values) =>
     saveArticleCopyAction(initial.scope, revision, values),
@@ -218,7 +239,7 @@ export function ArticleEditor({
           <h3>別の画面で作業コピーが変更されています</h3>
           <p className="text-sm">下の保存内容と、入力欄に残っている内容を比較して選んでください。</p>
           {draft.conflict.values ? (
-            <ArticlePreview {...draft.conflict.values} />
+            <ArticlePreview imageBase={imageBase} {...draft.conflict.values} />
           ) : (
             <p>別の画面では作業コピーを破棄、または共有下書きとして保存済みです。</p>
           )}
@@ -248,7 +269,7 @@ export function ArticleEditor({
           <p className="text-sm">
             最新は第{workspace.current.baseRevision}版です。自分の入力を残したまま、下の最新内容を確認してください。
           </p>
-          <ArticlePreview {...workspace.current} />
+          <ArticlePreview imageBase={imageBase} {...workspace.current} />
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -333,6 +354,18 @@ export function ArticleEditor({
             {draft.values.body.length.toLocaleString()} /
             30,000文字。本文はテキストとして表示します。HTMLは実行しません。
           </p>
+          <ArticleImages
+            companyId={initial.scope.companyId}
+            audience={audience}
+            initialChoices={imageChoices}
+            images={draft.values.images ?? []}
+            onChange={(images) => {
+              setConfirmed(false);
+              setError("");
+              setMessage("");
+              draft.change({ ...draft.latest.current, images });
+            }}
+          />
           <div className="mt-3 flex flex-wrap gap-2">
             <button className="design-button" disabled={stale || !!draft.conflict || !changed} type="submit">
               下書きを保存
@@ -364,7 +397,7 @@ export function ArticleEditor({
       {preview && (
         <section aria-label="入力内容のプレビュー">
           <h3>入力中の内容（まだ掲載されません）</h3>
-          <ArticlePreview {...draft.values} />
+          <ArticlePreview imageBase={imageBase} {...draft.values} />
         </section>
       )}
       {!!workspace.scope.entryId && (
@@ -407,12 +440,16 @@ export function ArticleEditor({
             <div className="grid min-w-0 gap-4 xl:grid-cols-2">
               <div className="min-w-0">
                 <h4 className="mb-2 text-sm font-semibold">現在の掲載内容</h4>
-                {published ? <ArticlePreview {...published} /> : <p className="p-4 text-sm">未掲載です</p>}
+                {published ? (
+                  <ArticlePreview imageBase={imageBase} {...published} />
+                ) : (
+                  <p className="p-4 text-sm">未掲載です</p>
+                )}
               </div>
               <div className="min-w-0">
                 <h4 className="mb-2 text-sm font-semibold">反映する内容</h4>
                 {selected ? (
-                  <ArticlePreview {...selected} />
+                  <ArticlePreview imageBase={imageBase} {...selected} />
                 ) : (
                   <p className="rounded border p-4 text-sm">この記事を掲載から外します。保存済みの版は残ります。</p>
                 )}

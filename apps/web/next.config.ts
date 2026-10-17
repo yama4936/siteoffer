@@ -10,6 +10,9 @@ if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 const config: NextConfig = {
   // Keep the local demo focused on the application. Compile/runtime errors still surface.
   devIndicators: false,
+  // Permission changes must reach the original image handler on every request.
+  // The optimizer would otherwise retain a public photo after its withdrawal.
+  images: { unoptimized: true },
   // Server Function arguments may contain private drafts or login credentials.
   logging: {
     serverFunctions: false,

@@ -1,13 +1,13 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { draftFingerprint as fingerprint } from "./draft-fingerprint";
 export type DraftSnapshot<T> = { revision: number; values: T | null; updatedAt: string | null };
 type DraftResult<T> =
   | { status: "ok"; snapshot: DraftSnapshot<T> }
   | { status: "conflict"; snapshot: DraftSnapshot<T> }
   | { status: "error"; message: string };
-const fingerprint = (value: Record<string, string | boolean>) => JSON.stringify(value, Object.keys(value).sort());
 /** Serializes saves and preserves tombstone revisions. Transport must authenticate on every request. */
-export function usePersonalDraft<T extends Record<string, string | boolean>>(
+export function usePersonalDraft<T extends object>(
   initial: DraftSnapshot<T>,
   defaults: T,
   save: (revision: number, values: T | null) => Promise<DraftResult<T>>,

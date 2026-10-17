@@ -274,6 +274,13 @@
       "when": 1792208392400,
       "tag": "0038_smooth_mathemanic",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1792219508676,
+      "tag": "0039_yielding_hawkeye",
+      "breakpoints": true
     }
   ]
 }

@@ -29,7 +29,7 @@ export default async function Page({
       { isolationLevel: "repeatable read" },
     );
     if (!result) notFound();
-    return <Articles {...result} basePath={`/customer/content/${companyId}/preview`} preview />;
+    return <Articles companyId={companyId} {...result} basePath={`/customer/content/${companyId}/preview`} preview />;
   } catch (e) {
     if (e instanceof ContentError) notFound();
     throw e;

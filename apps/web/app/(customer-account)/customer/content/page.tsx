@@ -1,6 +1,7 @@
 import {
   ContentError,
   hasPublishedSite,
+  listArticleImageChoices,
   listCustomerContentCompanies,
   loadArticleWorkspace,
   loadCustomerArticles,
@@ -134,6 +135,7 @@ export default async function Page({
             <ArticleEditor
               key={`${companyId}:${entryId ?? "new"}`}
               initial={workspace}
+              imageChoices={await listArticleImageChoices(db, user.actor, companyId)}
               publicSite={publicSite}
               audience="customer"
             />

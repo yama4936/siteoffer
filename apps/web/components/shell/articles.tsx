@@ -14,15 +14,19 @@ function ArticleDate({ value }: { value: Date | null }) {
 }
 export function Articles({
   name,
+  companyId,
   view,
   basePath,
   preview = false,
 }: {
   name: string;
+  companyId: string;
   view: PublishedArticlesView;
   basePath: string;
   preview?: boolean;
 }) {
+  const photoUrl = (entryId: string, assetId: string) =>
+    preview ? `/article-images/${companyId}/${assetId}` : `/published/${companyId}/news/images/${entryId}/${assetId}`;
   const filters = view.kind === "list" ? view.data.filters : view.filters;
   return (
     <main className="articles-shell" id="siteoffer_articles_top">
@@ -47,6 +51,17 @@ export function Articles({
               <span className="articles-category">{view.article.category === "blog" ? "ブログ" : "お知らせ"}</span>
               <ArticleDate value={view.article.publishedAt} />
             </p>
+            {view.article.images.length > 0 && (
+              <div className="articles-photos">
+                {view.article.images.map((image) => (
+                  <figure key={image.assetId}>
+                    {/* biome-ignore lint/performance/noImgElement: Each request must recheck permission; image optimization could retain withdrawn photos. */}
+                    <img src={photoUrl(view.article.id, image.assetId)} alt={image.alt} loading="lazy" />
+                    {image.caption && <figcaption>{image.caption}</figcaption>}
+                  </figure>
+                ))}
+              </div>
+            )}
             <div className="articles-body">{view.article.body}</div>
           </article>
           <Link className="articles-back" href={articleHref(basePath, filters)} prefetch={false}>
@@ -120,6 +135,17 @@ export function Articles({
           <div className="articles-list">
             {view.data.items.map((a) => (
               <article className="articles-card" key={a.slug} id={a.slug}>
+                {a.images[0] && (
+                  <Link
+                    href={articleHref(basePath, filters, a.slug)}
+                    prefetch={false}
+                    className="articles-cover"
+                    aria-label={`${a.title}を読む`}
+                  >
+                    {/* biome-ignore lint/performance/noImgElement: Each request must recheck permission; image optimization could retain withdrawn photos. */}
+                    <img src={photoUrl(a.id, a.images[0].assetId)} alt={a.images[0].alt} loading="lazy" />
+                  </Link>
+                )}
                 <p className="articles-meta">
                   <span className="articles-category">{a.category === "blog" ? "ブログ" : "お知らせ"}</span>
                   <ArticleDate value={a.publishedAt} />

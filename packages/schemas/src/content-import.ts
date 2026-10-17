@@ -27,6 +27,23 @@ function utf8Length(text: string) {
   }
   return n;
 }
+export const ARTICLE_IMAGE_LIMIT = 8;
+export const articleImagesSchema = z
+  .array(
+    z.strictObject({
+      assetId: z.string().uuid().toLowerCase(),
+      alt: z
+        .string()
+        .max(200)
+        .refine((v) => !v.includes(String.fromCharCode(0))),
+      caption: z
+        .string()
+        .max(400)
+        .refine((v) => !v.includes(String.fromCharCode(0))),
+    }),
+  )
+  .max(ARTICLE_IMAGE_LIMIT)
+  .refine((v) => new Set(v.map((i) => i.assetId)).size === v.length, "同じ写真は一度だけ追加してください");
 export const importedArticleSchema = z.object({
   slug: z
     .string()
@@ -45,6 +62,7 @@ export const importedArticleSchema = z.object({
     .max(30000)
     .refine((v) => !v.includes(String.fromCharCode(0))),
   category: z.enum(["news", "blog"]),
+  images: articleImagesSchema.optional(),
   sourceUrl: url.nullable(),
   originalPublishedAt: date.nullable(),
 });

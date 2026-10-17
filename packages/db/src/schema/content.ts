@@ -3,6 +3,8 @@ import { createdAt, id, ts } from "./common.ts";
 import { companies } from "./companies.ts";
 import { users } from "./users.ts";
 
+export type ArticleImage = { assetId: string; alt: string; caption: string };
+
 export const contentImports = pgTable(
   "content_imports",
   {
@@ -56,6 +58,7 @@ export const contentRevisions = pgTable(
     revision: integer("revision").notNull(),
     title: text("title").notNull(),
     body: text("body").notNull(),
+    images: jsonb("images").$type<ArticleImage[]>().notNull().default([]),
     category: text("category").notNull(),
     createdBy: uuid("created_by")
       .notNull()
@@ -84,6 +87,7 @@ export const contentWorkingCopies = pgTable(
       body: string;
       category: string;
       baseRevision: string;
+      images?: ArticleImage[];
     }>(),
     updatedAt: ts("updated_at").notNull(),
   },

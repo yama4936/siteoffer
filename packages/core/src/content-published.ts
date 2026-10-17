@@ -1,6 +1,8 @@
 import { contentEntries, contentRevisions, type DbOrTx } from "@siteoffer/db";
 import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
+import { hasPublishedSite } from "./content.ts";
 import { ContentError } from "./content-auth.ts";
+import { filterPublishedArticleImages, getPublishedImageBytes } from "./content-images.ts";
 
 export const ARTICLE_PAGE_SIZE = 20;
 export type ArticleFilters = { page: number; query: string; category: "all" | "news" | "blog" };
@@ -16,6 +18,7 @@ const columns = {
   revision: contentRevisions.revision,
   title: contentRevisions.title,
   category: contentRevisions.category,
+  images: contentRevisions.images,
 };
 const publishedRevision = and(
   eq(contentRevisions.entryId, contentEntries.id),
@@ -65,7 +68,19 @@ export async function listPublishedArticles(db: DbOrTx, companyId: string, filte
               .orderBy(desc(publishedAt), desc(contentEntries.id))
               .limit(ARTICLE_PAGE_SIZE)
               .offset((filters.page - 1) * ARTICLE_PAGE_SIZE);
-      return { filters: { ...filters, query }, items, total, pageCount, pageSize: ARTICLE_PAGE_SIZE };
+      const visible = await filterPublishedArticleImages(
+        tx,
+        companyId,
+        items.flatMap((i) => i.images),
+      );
+      const permitted = new Set(visible.map((i) => i.assetId));
+      return {
+        filters: { ...filters, query },
+        items: items.map((i) => ({ ...i, images: i.images.filter((image) => permitted.has(image.assetId)) })),
+        total,
+        pageCount,
+        pageSize: ARTICLE_PAGE_SIZE,
+      };
     },
     { isolationLevel: "repeatable read" },
   );
@@ -79,10 +94,28 @@ export async function findPublishedArticle(db: DbOrTx, companyId: string, slug: 
     .innerJoin(contentRevisions, publishedRevision)
     .where(and(company, eq(contentEntries.slug, slug)))
     .limit(1);
-  return article ?? null;
+  return article ? { ...article, images: await filterPublishedArticleImages(db, companyId, article.images) } : null;
 }
 export type PublishedArticlePage = Awaited<ReturnType<typeof listPublishedArticles>>;
 export type PublishedArticle = NonNullable<Awaited<ReturnType<typeof findPublishedArticle>>>;
 export type PublishedArticlesView =
   | { kind: "list"; data: PublishedArticlePage }
   | { kind: "article"; article: PublishedArticle; filters: ArticleFilters };
+
+export async function getPublishedArticleImage(db: DbOrTx, companyId: string, entryId: string, assetId: string) {
+  if (![companyId, entryId, assetId].every((id) => uuid.test(id))) return null;
+  return db.transaction(
+    async (tx) => {
+      if (!(await hasPublishedSite(tx, companyId))) return null;
+      const [entry] = await tx
+        .select({ images: contentRevisions.images })
+        .from(contentEntries)
+        .innerJoin(contentRevisions, publishedRevision)
+        .where(and(scope(companyId), eq(contentEntries.id, entryId)))
+        .limit(1);
+      if (!entry?.images.some((i) => i.assetId === assetId)) return null;
+      return getPublishedImageBytes(tx, companyId, assetId);
+    },
+    { isolationLevel: "repeatable read" },
+  );
+}

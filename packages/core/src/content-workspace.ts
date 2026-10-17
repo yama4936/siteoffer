@@ -1,20 +1,29 @@
 import { createHash } from "node:crypto";
+import type { ArticleImage } from "@siteoffer/db";
 import { contentEntries, contentOperations, contentRevisions, contentWorkingCopies, type DbOrTx } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
 import type { Actor, Clock } from "./common/index.ts";
 import { ContentError, publishArticle, saveArticle } from "./content.ts";
 import { authorizeContentEditor } from "./content-auth.ts";
+import { parseArticleImages } from "./content-images.ts";
 import { findSecretInFields } from "./domain-preference/secrets.ts";
 
 export type ArticleScope = { companyId: string; entryId: string | null };
-export type ArticleValues = { slug: string; title: string; body: string; category: string; baseRevision: string };
+export type ArticleValues = {
+  slug: string;
+  title: string;
+  body: string;
+  category: string;
+  baseRevision: string;
+  images?: ArticleImage[];
+};
 export type ArticleWorkingCopy = { revision: number; values: ArticleValues | null; updatedAt: string | null };
 export type ArticleWorkspace = {
   scope: ArticleScope;
   current: ArticleValues;
   publishedRevision: number | null;
   publicationRevision: number;
-  history: { revision: number; title: string; body: string; category: string }[];
+  history: { revision: number; title: string; body: string; category: string; images?: ArticleImage[] }[];
   copy: ArticleWorkingCopy;
 };
 export type ArticleOperation =
@@ -97,6 +106,7 @@ async function readWorkspace(db: DbOrTx, userId: string, scope: ArticleScope): P
       revision: contentRevisions.revision,
       title: contentRevisions.title,
       body: contentRevisions.body,
+      images: contentRevisions.images,
       category: contentRevisions.category,
     })
     .from(contentRevisions)
@@ -111,6 +121,7 @@ async function readWorkspace(db: DbOrTx, userId: string, scope: ArticleScope): P
       slug: entry.slug,
       title: current.title,
       body: current.body,
+      ...(current.images.length ? { images: current.images } : {}),
       category: current.category,
       baseRevision: String(entry.currentRevision),
     },
@@ -127,7 +138,12 @@ export async function loadArticleWorkspace(db: DbOrTx, actor: Actor | null, scop
 }
 function validateValues(raw: unknown): ArticleValues | null {
   if (raw === null) return null;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).length !== 5)
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    Array.isArray(raw) ||
+    Object.keys(raw).some((k) => !["slug", "title", "body", "category", "baseRevision", "images"].includes(k))
+  )
     throw new ContentError("作業コピーの形式を確認してください");
   const v = raw as Record<string, unknown>;
   for (const [key, max] of [
@@ -150,6 +166,7 @@ function validateValues(raw: unknown): ArticleValues | null {
     body: v.body as string,
     category: v.category as string,
     baseRevision: v.baseRevision as string,
+    ...(v.images !== undefined ? { images: parseArticleImages(v.images) } : {}),
   };
 }
 async function writeCopy(

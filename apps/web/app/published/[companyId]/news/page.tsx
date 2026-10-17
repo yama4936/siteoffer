@@ -28,5 +28,5 @@ export default async function Page({
     { isolationLevel: "repeatable read" },
   );
   if (!result) notFound();
-  return <Articles {...result} basePath={`/published/${companyId}/news`} />;
+  return <Articles companyId={companyId} {...result} basePath={`/published/${companyId}/news`} />;
 }
