@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
 import type { ArticleImage } from "@siteoffer/db";
 import { contentEntries, contentOperations, contentRevisions, contentWorkingCopies, type DbOrTx } from "@siteoffer/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, Clock } from "./common/index.ts";
 import { ContentError, publishArticle, saveArticle } from "./content.ts";
-import { authorizeContentEditor } from "./content-auth.ts";
+import { authorizeContentEditor, authorizeContentReader } from "./content-auth.ts";
+import {
+  type ArticleHistoryPage,
+  type ArticleSnapshot,
+  emptyArticleHistory,
+  readArticleHistoryIndex,
+} from "./content-history.ts";
 import { parseArticleImages } from "./content-images.ts";
 import { findSecretInFields } from "./domain-preference/secrets.ts";
 
@@ -23,7 +29,8 @@ export type ArticleWorkspace = {
   current: ArticleValues;
   publishedRevision: number | null;
   publicationRevision: number;
-  history: { revision: number; title: string; body: string; category: string; images?: ArticleImage[] }[];
+  published: ArticleSnapshot | null;
+  history: ArticleHistoryPage;
   copy: ArticleWorkingCopy;
 };
 export type ArticleOperation =
@@ -57,10 +64,10 @@ export class ArticleCopyConflict extends ContentError {
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const scopeKey = (scope: ArticleScope) => scope.entryId?.toLowerCase() ?? "new";
-async function access(db: DbOrTx, actor: Actor | null, scope: ArticleScope) {
+async function access(db: DbOrTx, actor: Actor | null, scope: ArticleScope, lock = true) {
   if (!scope || !uuid.test(scope.companyId) || (scope.entryId !== null && !uuid.test(scope.entryId)))
     throw new ContentError("企業・記事を確認してください");
-  const editor = await authorizeContentEditor(db, actor, scope.companyId);
+  const editor = await (lock ? authorizeContentEditor : authorizeContentReader)(db, actor, scope.companyId);
   if (scope.entryId) {
     const [entry] = await db
       .select({ id: contentEntries.id })
@@ -94,14 +101,15 @@ async function readWorkspace(db: DbOrTx, userId: string, scope: ArticleScope): P
       current: { slug: "", title: "", body: "", category: "news", baseRevision: "0" },
       publishedRevision: null,
       publicationRevision: 0,
-      history: [],
+      history: emptyArticleHistory(),
+      published: null,
     };
   const [entry] = await db
     .select()
     .from(contentEntries)
     .where(and(eq(contentEntries.id, scope.entryId), eq(contentEntries.companyId, scope.companyId)));
   if (!entry) throw new ContentError("記事がありません");
-  const history = await db
+  const snapshots = await db
     .select({
       revision: contentRevisions.revision,
       title: contentRevisions.title,
@@ -110,9 +118,17 @@ async function readWorkspace(db: DbOrTx, userId: string, scope: ArticleScope): P
       category: contentRevisions.category,
     })
     .from(contentRevisions)
-    .where(eq(contentRevisions.entryId, entry.id))
-    .orderBy(desc(contentRevisions.revision));
-  const current = history.find((r) => r.revision === entry.currentRevision);
+    .where(
+      and(
+        eq(contentRevisions.entryId, entry.id),
+        inArray(contentRevisions.revision, [
+          entry.currentRevision,
+          ...(entry.publishedRevision ? [entry.publishedRevision] : []),
+        ]),
+      ),
+    )
+    .limit(2);
+  const current = snapshots.find((r) => r.revision === entry.currentRevision);
   if (!current) throw new ContentError("記事の版がありません");
   return {
     scope,
@@ -125,16 +141,20 @@ async function readWorkspace(db: DbOrTx, userId: string, scope: ArticleScope): P
       category: current.category,
       baseRevision: String(entry.currentRevision),
     },
-    history,
+    history: await readArticleHistoryIndex(db, entry.id, { page: 1, query: "" }),
+    published: snapshots.find((r) => r.revision === entry.publishedRevision) ?? null,
     publishedRevision: entry.publishedRevision,
     publicationRevision: entry.publicationRevision,
   };
 }
 export async function loadArticleWorkspace(db: DbOrTx, actor: Actor | null, scope: ArticleScope) {
-  return db.transaction(async (tx) => {
-    const user = await access(tx, actor, scope);
-    return readWorkspace(tx, user.userId, scope);
-  });
+  return db.transaction(
+    async (tx) => {
+      const user = await access(tx, actor, scope, false);
+      return readWorkspace(tx, user.userId, scope);
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
 function validateValues(raw: unknown): ArticleValues | null {
   if (raw === null) return null;

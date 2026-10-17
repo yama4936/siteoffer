@@ -5,6 +5,7 @@ import { useId, useRef, useState } from "react";
 import { refreshArticleAction, saveArticleCopyAction, submitArticleAction } from "@/app/(ops)/ops/content/actions";
 import { usePersonalDraft } from "@/components/use-personal-draft";
 import { type ContentIndexQuery, contentIndexHref } from "@/lib/content-index-query";
+import { ArticleHistoryControls, useArticleHistory } from "./article-history";
 import { ArticleImages } from "./article-images";
 import { preservesArticleFilter } from "./content-filter-navigation";
 import "./article-editor.css";
@@ -65,7 +66,6 @@ export function ArticleEditor({
     [unknown, setUnknown] = useState(false);
   const [message, setMessage] = useState(""),
     [error, setError] = useState("");
-  const [target, setTarget] = useState(initial.current.baseRevision === "0" ? "none" : initial.current.baseRevision);
   const [confirmed, setConfirmed] = useState(false),
     [preview, setPreview] = useState(false);
   const pending = useRef<ArticleOperation | null>(null),
@@ -73,8 +73,9 @@ export function ArticleEditor({
   const locked = busy || unknown || !draft.ready;
   const stale = draft.values.baseRevision !== workspace.current.baseRevision;
   const changed = !same(draft.values, workspace.current);
-  const selected = workspace.history.find((r) => String(r.revision) === target);
-  const published = workspace.history.find((r) => r.revision === workspace.publishedRevision);
+  const history = useArticleHistory(workspace, () => setConfirmed(false));
+  const { target, selected } = history;
+  const published = workspace.published;
   function change(key: keyof ArticleValues, value: string) {
     setMessage("");
     setError("");
@@ -86,6 +87,7 @@ export function ArticleEditor({
   }
   function observe(next: ArticleWorkspace) {
     setWorkspace(next);
+    history.resetIndex(next.history);
     setConfirmed(false);
     if (next.copy.revision !== draft.revision.current) draft.showConflict(next.copy);
   }
@@ -142,7 +144,8 @@ export function ArticleEditor({
           return;
         }
         draft.applyStored(result.workspace.copy, result.workspace.current);
-        setTarget(String(result.savedRevision));
+        history.resetIndex(result.workspace.history);
+        void history.select(String(result.savedRevision), result.workspace);
         setMessage(`第${result.savedRevision}版を下書きとして保存しました。掲載内容は変わりません。`);
       } else {
         setMessage(
@@ -194,6 +197,8 @@ export function ArticleEditor({
       }
       await draft.discard(result.workspace.current);
       setWorkspace(result.workspace);
+      history.resetIndex(result.workspace.history);
+      void history.select(result.workspace.current.baseRevision, result.workspace);
       setConfirmed(false);
     } catch {
       setError("作業コピーを破棄できませんでした。入力は残っています");
@@ -441,7 +446,8 @@ export function ArticleEditor({
               入力中の変更があります。先に下書きとして保存するか、作業コピーを破棄してください。
             </p>
           )}
-          <fieldset disabled={locked || changed || stale || !!draft.conflict}>
+          <fieldset disabled={locked}>
+            <ArticleHistoryControls history={history} />
             <label>
               掲載版
               <select
@@ -449,16 +455,19 @@ export function ArticleEditor({
                 aria-label="掲載版"
                 value={target}
                 onChange={(e) => {
-                  setTarget(e.target.value);
+                  void history.select(e.target.value);
                   setConfirmed(false);
                 }}
               >
                 <option value="none">掲載を停止する</option>
-                {workspace.history.map((r) => (
-                  <option key={r.revision} value={r.revision}>
-                    第{r.revision}版：{r.title}
-                  </option>
-                ))}
+                {history.choices.map(
+                  (r) =>
+                    r && (
+                      <option key={r.revision} value={r.revision}>
+                        第{r.revision}版：{r.title}
+                      </option>
+                    ),
+                )}
               </select>
             </label>
             <div className="grid min-w-0 gap-4 xl:grid-cols-2">
@@ -472,7 +481,16 @@ export function ArticleEditor({
               </div>
               <div className="min-w-0">
                 <h4 className="mb-2 text-sm font-semibold">反映する内容</h4>
-                {selected ? (
+                {history.loading ? (
+                  <p role="status">第{target}版を確認中…</p>
+                ) : history.error ? (
+                  <div role="alert" className="rounded border border-amber-200 p-4 text-sm text-amber-800">
+                    <p>{history.error}</p>
+                    <button type="button" className="mt-2 underline" onClick={() => void history.select(target)}>
+                      選んだ版を再読み込み
+                    </button>
+                  </div>
+                ) : selected ? (
                   <ArticlePreview imageBase={imageBase} {...selected} />
                 ) : (
                   <p className="rounded border p-4 text-sm">この記事を掲載から外します。保存済みの版は残ります。</p>
@@ -480,7 +498,12 @@ export function ArticleEditor({
               </div>
             </div>
             <label className="design-check mt-4">
-              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+              <input
+                type="checkbox"
+                disabled={changed || stale || !!draft.conflict || history.loading || (target !== "none" && !selected)}
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+              />
               {target === "none" ? "掲載を停止することを確認しました" : "内容と利用権利を確認しました"}
             </label>
             <button
@@ -488,6 +511,11 @@ export function ArticleEditor({
               type="button"
               disabled={
                 !confirmed ||
+                changed ||
+                stale ||
+                !!draft.conflict ||
+                history.loading ||
+                (target !== "none" && !selected) ||
                 (target === "none"
                   ? workspace.publishedRevision === null
                   : Number(target) === workspace.publishedRevision)

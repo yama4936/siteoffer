@@ -6,6 +6,13 @@ export * from "./consultation-drafts.ts";
 export * from "./content.ts";
 export * from "./content-access.ts";
 export { authorizeContentEditor } from "./content-auth.ts";
+export type {
+  ArticleHistoryFilters,
+  ArticleHistoryPage,
+  ArticleHistorySummary,
+  ArticleSnapshot,
+} from "./content-history.ts";
+export { ArticleHistoryError, loadArticleHistory, loadArticleRevision } from "./content-history.ts";
 export type { ArticleImage, ArticleImageChoice } from "./content-images.ts";
 export { getArticleEditorImage, listArticleImageChoices } from "./content-images.ts";
 export * from "./content-import.ts";

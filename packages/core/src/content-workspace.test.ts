@@ -14,6 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
 import { publishArticle, publishedArticles, saveArticle } from "./content.ts";
+import { loadArticleRevision } from "./content-history.ts";
 import {
   ArticleCopyConflict,
   type ArticleValues,
@@ -138,7 +139,7 @@ it("別担当者の更新を比較し、明示した新しい基準版でのみ�
   });
   expect(merged.savedRevision).toBe(3);
   expect(merged.workspace.current.body).toBe("自分の変更");
-  expect(merged.workspace.history.find((x) => x.revision === 2)?.body).toBe("別担当の変更");
+  expect((await loadArticleRevision(db, s.ops, scope, 2)).body).toBe("別担当の変更");
 });
 it("他タブで共有保存・破棄された作業コピーから二重に版を作らない", async () => {
   const s = await setup(),
