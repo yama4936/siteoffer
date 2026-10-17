@@ -10,12 +10,14 @@ export function useMaterialUpdates<T>({
   snapshot,
   load,
   apply,
+  onRead,
   editing,
   paused,
 }: {
   snapshot: T;
   load: (signal: AbortSignal) => Promise<ReadResult<T>>;
   apply: (value: T) => void;
+  onRead?: (value: T) => void;
   editing: string | null;
   paused: boolean;
 }) {
@@ -70,6 +72,8 @@ export function useMaterialUpdates<T>({
         }
         setError("");
         setCheckedAt(Date.now());
+        // Safe metadata may update even while the editable snapshot stays fixed.
+        onRead?.(result.result);
         const changed = JSON.stringify(result.result) !== JSON.stringify(snapshot);
         if (editing) {
           setWaiting(changed);
@@ -121,7 +125,7 @@ export function useMaterialUpdates<T>({
       window.removeEventListener("offline", offline);
       document.removeEventListener("visibilitychange", wake);
     };
-  }, [snapshot, load, apply, editing, paused, waiting]);
+  }, [snapshot, load, apply, onRead, editing, paused, waiting]);
   return { error, waiting, notice, checkedAt, invalidate, acknowledge };
 }
 

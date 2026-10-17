@@ -15,7 +15,7 @@ import {
   publicationMaterialChecks,
   users,
 } from "@siteoffer/db";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { Actor } from "./common/actor.ts";
 import type { Clock } from "./common/clock.ts";
 import { recordEvent } from "./common/events.ts";
@@ -40,10 +40,85 @@ export function publicationUrl(value: unknown) {
   }
 }
 type Issue = { assetId: string | null; label: string; reason: string };
+const imagePolicyFields = {
+  id: imageAssets.id,
+  companyId: imageAssets.companyId,
+  policyRevision: imageAssets.policyRevision,
+  rightsStatus: imageAssets.rightsStatus,
+  allowProduction: imageAssets.allowProduction,
+  confirmedBy: imageAssets.confirmedBy,
+  confirmedAt: imageAssets.confirmedAt,
+};
+type ImagePolicy = Pick<typeof imageAssets.$inferSelect, keyof typeof imagePolicyFields>;
+async function publicationAssets(db: DbOrTx, snapshots: unknown[]) {
+  const ids = [
+    ...new Set(snapshots.flatMap((snapshot) => parseDeliveryImageSnapshot(snapshot)?.map((a) => a.assetId) ?? [])),
+  ];
+  const assets = new Map<string, { asset: ImagePolicy; file: { sha256: string } | null }>();
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const found = await db
+      .select({ asset: imagePolicyFields, file: { sha256: imageAssetFiles.sha256 } })
+      .from(imageAssets)
+      .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
+      .where(inArray(imageAssets.id, ids.slice(offset, offset + 500)));
+    for (const row of found) assets.set(row.asset.id, row);
+  }
+  return assets;
+}
+type ImageSource = {
+  companyId: string;
+  deliveryId: string;
+  versionDeliveryId: string | undefined;
+  build: { id: string; snapshot: unknown } | null;
+};
+function publicationIssues(row: ImageSource, assets: Awaited<ReturnType<typeof publicationAssets>>) {
+  const issues: Issue[] = [],
+    states: unknown[] = [];
+  const snapshot = parseDeliveryImageSnapshot(row.build?.snapshot);
+  if (row.versionDeliveryId !== row.deliveryId || !row.build)
+    issues.push({ assetId: null, label: "使用素材の記録", reason: "制作回と使用素材を追跡できません" });
+  else if (row.build.snapshot === null)
+    issues.push({ assetId: null, label: "使用素材の記録", reason: "使用素材が記録されていない旧版です" });
+  else if (!snapshot) issues.push({ assetId: null, label: "使用素材の記録", reason: "素材の記録を読み取れません" });
+  else
+    for (const source of snapshot) {
+      const found = assets.get(source.assetId),
+        a = found?.asset,
+        f = found?.file;
+      states.push([
+        source.assetId,
+        a?.companyId,
+        a?.policyRevision,
+        a?.rightsStatus,
+        a?.allowProduction,
+        a?.confirmedBy,
+        a?.confirmedAt,
+        f?.sha256,
+      ]);
+      const reason =
+        !a || a.companyId !== row.companyId
+          ? "素材を確認できません"
+          : !a.allowProduction || a.rightsStatus === "unknown" || !a.confirmedBy || !a.confirmedAt
+            ? "本番サイトでの利用許可が停止しています"
+            : !f
+              ? "画像ファイルを確認できません"
+              : f.sha256 !== source.sha256
+                ? "公開記録と画像ファイルが一致しません"
+                : null;
+      if (reason) issues.push({ assetId: source.assetId, label: source.label, reason });
+    }
+  return { issues, states };
+}
 async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: string } = {}) {
   const rows = await db
     .select({
-      deployment: deployments,
+      deployment: {
+        id: deployments.id,
+        deliveryVersionId: deployments.deliveryVersionId,
+        environment: deployments.environment,
+        url: deployments.url,
+        createdAt: deployments.createdAt,
+      },
       delivery: { id: deliveries.id, status: deliveries.status, lockedVersionId: deliveries.lockedVersionId },
       companyId: companies.id,
       companyName: companies.name,
@@ -81,18 +156,10 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
       ),
     )
     .orderBy(desc(deployments.createdAt), desc(deliveryVersions.version), desc(deployments.id));
-  const ids = [
-    ...new Set(rows.flatMap((r) => parseDeliveryImageSnapshot(r.build?.snapshot)?.map((a) => a.assetId) ?? [])),
-  ];
-  const assets = new Map<string, { asset: typeof imageAssets.$inferSelect; file: { sha256: string } | null }>();
-  for (let offset = 0; offset < ids.length; offset += 500) {
-    const found = await db
-      .select({ asset: imageAssets, file: { sha256: imageAssetFiles.sha256 } })
-      .from(imageAssets)
-      .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
-      .where(inArray(imageAssets.id, ids.slice(offset, offset + 500)));
-    for (const row of found) assets.set(row.asset.id, row);
-  }
+  const assets = await publicationAssets(
+    db,
+    rows.map((r) => r.build?.snapshot),
+  );
   const approved = new Set<string>(),
     versionIds = [...new Set(rows.map((r) => r.deployment.deliveryVersionId))];
   for (let offset = 0; offset < versionIds.length; offset += 500) {
@@ -108,41 +175,15 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
       approved.add(row.id);
   }
   return rows.map((row) => {
-    const issues: Issue[] = [],
-      states: unknown[] = [];
-    const snapshot = parseDeliveryImageSnapshot(row.build?.snapshot);
-    if (!row.version || row.version.deliveryId !== row.delivery.id || !row.build)
-      issues.push({ assetId: null, label: "使用素材の記録", reason: "制作回と使用素材を追跡できません" });
-    else if (row.build.snapshot === null)
-      issues.push({ assetId: null, label: "使用素材の記録", reason: "使用素材が記録されていない旧版です" });
-    else if (!snapshot) issues.push({ assetId: null, label: "使用素材の記録", reason: "素材の記録を読み取れません" });
-    else
-      for (const source of snapshot) {
-        const found = assets.get(source.assetId),
-          a = found?.asset,
-          f = found?.file;
-        states.push([
-          source.assetId,
-          a?.companyId,
-          a?.policyRevision,
-          a?.rightsStatus,
-          a?.allowProduction,
-          a?.confirmedBy,
-          a?.confirmedAt,
-          f?.sha256,
-        ]);
-        const reason =
-          !a || a.companyId !== row.companyId
-            ? "素材を確認できません"
-            : !a.allowProduction || a.rightsStatus === "unknown" || !a.confirmedBy || !a.confirmedAt
-              ? "本番サイトでの利用許可が停止しています"
-              : !f
-                ? "画像ファイルを確認できません"
-                : f.sha256 !== source.sha256
-                  ? "公開記録と画像ファイルが一致しません"
-                  : null;
-        if (reason) issues.push({ assetId: source.assetId, label: source.label, reason });
-      }
+    const { issues, states } = publicationIssues(
+      {
+        companyId: row.companyId,
+        deliveryId: row.delivery.id,
+        versionDeliveryId: row.version?.deliveryId,
+        build: row.build,
+      },
+      assets,
+    );
     const checked = !!row.check && !row.check.revokedAt;
     return {
       deploymentId: row.deployment.id,
@@ -255,24 +296,102 @@ export async function listPublicationMaterials(
 }
 /** Oldest actionable publications for the operations queue. No file bodies or confirmation notes. */
 export async function getPublicationMaterialWork(db: DbOrTx, actor: Actor | null) {
-  return db.transaction(async (tx) => {
-    await activeContentOperator(tx, actor);
-    const rows = (await scan(tx)).filter((r) => r.state === "pending");
-    rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.deploymentId.localeCompare(b.deploymentId));
-    return {
-      total: rows.length,
-      items: rows.slice(0, 20).map((r) => ({
-        id: r.deploymentId,
-        deliveryId: r.deliveryId,
-        companyId: r.companyId,
-        companyName: r.companyName,
-        version: r.version,
-        environment: r.environment,
-        since: r.createdAt,
-        reason: r.issues[0]!.reason,
-      })),
-    };
-  });
+  return db.transaction(
+    async (tx) => {
+      await activeContentOperator(tx, actor);
+      let total = 0;
+      let cursor: string | undefined;
+      const items: {
+        id: string;
+        deliveryId: string;
+        companyId: string;
+        companyName: string;
+        version: number;
+        environment: string;
+        since: string;
+        reason: string;
+      }[] = [];
+      for (;;) {
+        const rows = await tx
+          .select({
+            id: deployments.id,
+            deliveryId: deliveries.id,
+            companyId: companies.id,
+            companyName: companies.name,
+            version: { number: deliveryVersions.version, deliveryId: deliveryVersions.deliveryId },
+            build: { id: deliveryBuilds.id, snapshot: deliveryBuilds.imageAssetSnapshot },
+            environment: deployments.environment,
+            createdAt: deployments.createdAt,
+          })
+          .from(deployments)
+          .innerJoin(deliveries, eq(deliveries.id, deployments.deliveryId))
+          .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+          .innerJoin(companies, eq(companies.id, contracts.companyId))
+          .leftJoin(deliveryVersions, eq(deliveryVersions.id, deployments.deliveryVersionId))
+          .leftJoin(
+            deliveryBuilds,
+            and(eq(deliveryBuilds.id, deliveryVersions.buildId), eq(deliveryBuilds.deliveryId, deliveries.id)),
+          )
+          .leftJoin(publicationMaterialChecks, eq(publicationMaterialChecks.deploymentId, deployments.id))
+          .where(
+            and(
+              eq(deployments.status, "recorded"),
+              or(isNull(publicationMaterialChecks.deploymentId), isNotNull(publicationMaterialChecks.revokedAt)),
+              // Only an intact, explicitly empty snapshot is certainly clear without inspecting policies.
+              or(
+                isNull(deliveryBuilds.id),
+                ne(deliveryVersions.deliveryId, deliveries.id),
+                isNull(deliveryBuilds.imageAssetSnapshot),
+                sql`${deliveryBuilds.imageAssetSnapshot} <> '[]'::jsonb`,
+              ),
+              cursor ? gt(deployments.id, cursor) : undefined,
+            ),
+          )
+          // Walk the existing primary key; retain only the oldest 20 summaries below.
+          .orderBy(asc(deployments.id))
+          .limit(500);
+        const assets = await publicationAssets(
+          tx,
+          rows.map((r) => r.build?.snapshot),
+        );
+        for (const row of rows) {
+          const { issues } = publicationIssues(
+            {
+              companyId: row.companyId,
+              deliveryId: row.deliveryId,
+              versionDeliveryId: row.version?.deliveryId,
+              build: row.build,
+            },
+            assets,
+          );
+          if (!issues.length) continue;
+          total++;
+          const since = row.createdAt.toISOString(),
+            last = items[items.length - 1];
+          if (items.length < 20 || (last && (since.localeCompare(last.since) || row.id.localeCompare(last.id)) < 0)) {
+            items.push({
+              id: row.id,
+              deliveryId: row.deliveryId,
+              companyId: row.companyId,
+              companyName: row.companyName,
+              version: row.version?.number ?? 0,
+              environment: row.environment,
+              since,
+              reason: issues[0]!.reason,
+            });
+            items.sort((a, b) => a.since.localeCompare(b.since) || a.id.localeCompare(b.id));
+            if (items.length > 20) items.pop();
+          }
+        }
+        if (rows.length < 500) break;
+        const last: { id: string } = rows[rows.length - 1]!;
+        cursor = last.id;
+      }
+      return { total, items };
+    },
+    // All windows must see the same permissions and publication records.
+    { isolationLevel: "repeatable read" },
+  );
 }
 export async function getPublicationMaterial(db: DbOrTx, actor: Actor | null, deploymentId: string) {
   if (!uuid(deploymentId)) throw new PublicationMaterialError("公開記録を確認してください");

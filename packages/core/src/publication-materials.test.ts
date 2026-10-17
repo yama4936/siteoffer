@@ -14,7 +14,7 @@ import {
   users,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
-import { eq, sql } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
 import { seedDeliveryBase } from "./delivery/test-helpers.ts";
@@ -23,6 +23,7 @@ import {
   confirmPublicationMaterialCheck,
   getPublicationMaterial,
   getPublicationMaterialBatch,
+  getPublicationMaterialWork,
   getPublicationReopenBatch,
   listPublicationMaterials,
   publicationUrl,
@@ -691,4 +692,87 @@ it("元の一括受付と一致しない欠けた履歴では、残った記録�
   await expect(reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput)).rejects.toThrow("元の受付内容");
   expect(await s.listing()).toMatchObject({ resolved: 3, pending: 0 });
   expect(await db.select().from(publicationCheckOperations)).toHaveLength(1);
+});
+
+it("work detection matches the detailed detector for empty, malformed, foreign and reopened records", async () => {
+  const s = await setup();
+  await s.publish(2, { snapshot: [] });
+  await s.publish(3, { snapshot: null });
+  await s.publish(4, { snapshot: {} });
+  await s.publish(5, {
+    snapshot: [{ assetId: randomUUID(), slot: "hero", label: "missing", sha256: "b".repeat(64), policy: {} }],
+  });
+  await s.publish(6, {
+    snapshot: [{ assetId: s.asset.id, slot: "hero", label: "mismatch", sha256: "b".repeat(64), policy: {} }],
+  });
+  const unknown = await s.publish(7, { snapshot: null });
+  await s.publish(8, { snapshot: [] });
+  const foreign = await seedDeliveryBase(db);
+  const [otherDelivery] = await db.insert(deliveries).values({ contractId: foreign.contract.id }).returning();
+  // Even an empty snapshot must be checked when a version belongs to another delivery.
+  await db.update(deliveryVersions).set({ deliveryId: otherDelivery!.id }).where(eq(deliveryVersions.version, 8));
+  const resolved = await s.publish(9, { snapshot: null });
+  const reopened = await s.publish(10, { snapshot: null });
+  for (const [r, revokedAt] of [
+    [resolved, null],
+    [reopened, clock.now()],
+  ] as const)
+    await db.insert(publicationMaterialChecks).values({
+      deploymentId: r.dep.id,
+      revision: 1,
+      fingerprint: "a".repeat(64),
+      outcome: "site_offline",
+      observedUrl: "https://store.example.test/",
+      note: "内部だけで保持する確認メモです。",
+      checkedBy: s.ops.userId,
+      checkedAt: clock.now(),
+      revokedAt,
+    });
+  await db.update(deployments).set({ status: "failed" }).where(eq(deployments.id, unknown.dep.id));
+  const detailed = await listPublicationMaterials(db, s.ops, { mode: "pending" });
+  const work = await getPublicationMaterialWork(db, s.ops);
+  expect(work.total).toBe(detailed.pending);
+  expect(work.items.map((r) => r.id).sort()).toEqual(detailed.items.map((r) => r.deploymentId).sort());
+  for (const item of work.items)
+    expect(item.reason).toBe(detailed.items.find((r) => r.deploymentId === item.id)!.issues[0]!.reason);
+  expect(work.items.some((r) => r.id === resolved.dep.id)).toBe(false);
+  expect(work.items.some((r) => r.id === reopened.dep.id)).toBe(true);
+  expect(JSON.stringify(work)).not.toContain("内部だけで保持する確認メモ");
+  expect(JSON.stringify(work)).not.toContain("fingerprint");
+});
+
+it("work detection counts every candidate across 500-row windows and timestamp ties", async () => {
+  const s = await setup();
+  const legacy = await s.publish(2, { snapshot: null });
+  for (const [kind, n, versionId] of [
+    ["clear", 501, s.first.version.id],
+    ["pending", 1201, legacy.version.id],
+  ] as const)
+    await db.execute(sql`insert into deployments(id,delivery_id,delivery_version_id,environment,url,status,created_at)
+      select md5(${kind}||g::text)::uuid,${s.delivery.id}::uuid,${versionId}::uuid,'production','https://window.example.test/','recorded',timestamptz '2026-10-01'
+      from generate_series(1,${n}) g`);
+  const [lastById] = await db
+    .select({ id: deployments.id })
+    .from(deployments)
+    .where(eq(deployments.deliveryVersionId, legacy.version.id))
+    .orderBy(desc(deployments.id))
+    .limit(1);
+  await db
+    .update(deployments)
+    .set({ createdAt: new Date("2026-09-01T00:00:00Z") })
+    .where(eq(deployments.id, lastById!.id));
+  const expected = await db
+    .select({ id: deployments.id })
+    .from(deployments)
+    .where(eq(deployments.deliveryVersionId, legacy.version.id))
+    .orderBy(asc(deployments.createdAt), asc(deployments.id))
+    .limit(20);
+  const work = await getPublicationMaterialWork(db, s.ops);
+  expect(work.total).toBe(1202);
+  expect(work.items.map((r) => r.id)).toEqual(expected.map((r) => r.id));
+  expect(work.items[0]!.id).toBe(lastById!.id);
+  expect(new Set(work.items.map((r) => r.id)).size).toBe(20);
+  await db.update(imageAssets).set({ allowProduction: false }).where(eq(imageAssets.id, s.asset.id));
+  // Previously clean, nonempty snapshots are reconsidered using current policy.
+  expect((await getPublicationMaterialWork(db, s.ops)).total).toBe(1704);
 });

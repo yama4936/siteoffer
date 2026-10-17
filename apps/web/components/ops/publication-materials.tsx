@@ -1,7 +1,7 @@
 "use client";
 import type { listPublicationMaterials, PublicationMaterialItem } from "@siteoffer/core";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { confirmPublicationMaterialAction, reopenPublicationMaterialAction } from "@/app/publication-material-actions";
 import { useMaterialNavigationGuard } from "@/components/materials/shared";
 import { MaterialUpdatesStatus, useMaterialUpdates } from "@/components/materials/updates";
@@ -39,16 +39,25 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
   const gate = useRef(false),
     heading = useRef<HTMLHeadingElement>(null);
   const load = useCallback((signal?: AbortSignal) => readPublicationMaterials(filter, signal), [filter]);
+  const reflectCounts = useCallback((fresh: Listing) => {
+    setListing((previous) =>
+      previous.total === fresh.total &&
+      previous.pending === fresh.pending &&
+      previous.resolved === fresh.resolved &&
+      previous.scanned === fresh.scanned
+        ? previous
+        : { ...previous, total: fresh.total, pending: fresh.pending, resolved: fresh.resolved, scanned: fresh.scanned },
+    );
+    setCountsStale(false);
+  }, []);
   const updates = useMaterialUpdates({
     snapshot: listing,
     load,
     apply: setListing,
+    onRead: reflectCounts,
     editing: selected?.deploymentId ?? batchAnchor,
     paused: busy || pending !== null,
   });
-  useEffect(() => {
-    if (updates.checkedAt !== null) setCountsStale(false);
-  }, [updates.checkedAt]);
   useMaterialNavigationGuard(selected !== null || pending !== null || batchAnchor !== null);
   function reset(item: PublicationMaterialItem | null, keepNote = false) {
     setSelected(item);
@@ -114,6 +123,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
       }
       setPending(null);
       reset(null);
+      setCountsStale(true);
       setMessage(
         `${r.replayed ? "受付済みの結果を確認しました" : "確認記録を保存しました"}。現在の状態：${status[r.item.state]}。外部サイトの公開・停止はこの操作では行いません。`,
       );
@@ -138,6 +148,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
         const fresh = await load();
         if (fresh.ok) {
           setListing(fresh.result);
+          setCountsStale(false);
           updates.acknowledge();
         } else setMessage((v) => `${v} 一覧の再取得はできませんでした。`);
       } catch {
@@ -207,6 +218,9 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
           </div>
         ))}
       </section>
+      {(selected || batchAnchor) && (
+        <p className="text-xs leading-6 text-slate-600">件数が変わっても、入力中の確認内容は保持します。</p>
+      )}
       {countsStale && (
         <p role="status" className="text-sm text-amber-800">
           件数は最新の取得待ちです。「一覧を更新」で確認できます。
@@ -541,11 +555,13 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
       </div>
       {!listing.items.length && (
         <p className="rounded-xl border bg-white p-8 text-center text-sm text-slate-600">
-          {listing.total
-            ? "このページには記録がありません。前のページへ戻ってください。"
-            : filter.mode === "pending"
-              ? "対応が必要な公開記録はありません。外部サイトの状態を自動検証した結果ではありません。"
-              : "該当する公開記録はありません。"}
+          {countsStale
+            ? "保存結果は反映しました。残りの公開記録は「一覧を更新」で確認してください。"
+            : listing.total
+              ? "このページには記録がありません。前のページへ戻ってください。"
+              : filter.mode === "pending"
+                ? "対応が必要な公開記録はありません。外部サイトの状態を自動検証した結果ではありません。"
+                : "該当する公開記録はありません。"}
         </p>
       )}
       <nav aria-label="公開記録のページ" className="flex items-center gap-4 text-sm">
@@ -555,7 +571,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
           </Link>
         )}
         <span>{countsStale ? "件数は再取得待ち" : `${listing.total}件`}</span>
-        {((filter.page ?? 0) + 1) * 20 < listing.total && (
+        {!countsStale && ((filter.page ?? 0) + 1) * 20 < listing.total && (
           <Link href={`${prefix}mode=${filter.mode}&page=${(filter.page ?? 0) + 1}`} className="underline">
             次の20件
           </Link>
