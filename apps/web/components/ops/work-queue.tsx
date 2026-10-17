@@ -1,37 +1,36 @@
 "use client";
 import { ArrowRight, CheckCheck, CircleAlert, Clock3, RefreshCw, Search } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useRef, useState, useTransition } from "react";
 import { useMaterialUpdates } from "@/components/materials/updates";
 import { readWorkQueue } from "@/lib/client/material-reads";
-import type { WorkGroup, WorkItem } from "@/lib/ops/work-queue";
+import { workHref } from "@/lib/ops/work-filters";
+import type { WorkGroup } from "@/lib/ops/work-model";
+import type { WorkPage } from "@/lib/ops/work-page";
 
-export function WorkQueue({
-  items: initialItems,
-  groups: initialGroups,
-  total: initialTotal,
-  perGroup: initialPerGroup,
-  updatedAt,
-}: {
-  items: WorkItem[];
-  groups: { key: WorkGroup; label: string; href: string; count: number }[];
-  total: number;
-  perGroup: number;
-  updatedAt: string;
-}) {
-  const [group, setGroup] = useState<WorkGroup | "all">("all");
-  const [query, setQuery] = useState("");
-  const [data, setData] = useState({
-    items: initialItems,
-    groups: initialGroups,
-    total: initialTotal,
-    perGroup: initialPerGroup,
-  });
+export function WorkQueue({ page, updatedAt }: { page: WorkPage; updatedAt: string }) {
+  const router = useRouter();
+  const [navigating, startNavigation] = useTransition();
+  const [query, setQuery] = useState(page.filters.query);
+  const [data, setData] = useState(page);
+  const group = page.filters.group;
+  function navigate(nextGroup: WorkGroup | "all", nextQuery = query) {
+    startNavigation(() =>
+      router.push(workHref({ group: nextGroup, query: nextQuery.trim(), cursor: null }), { scroll: false }),
+    );
+  }
   const [pending, setPending] = useState(false),
     gate = useRef(false);
   const [manualError, setManualError] = useState<{ message: string; checkedAt: number | null } | null>(null);
-  const load = useCallback((signal?: AbortSignal) => readWorkQueue(signal), []);
-  const updates = useMaterialUpdates({ snapshot: data, load, apply: setData, editing: null, paused: pending });
+  const load = useCallback((signal?: AbortSignal) => readWorkQueue(signal, page.filters), [page.filters]);
+  const updates = useMaterialUpdates({
+    snapshot: data,
+    load,
+    apply: setData,
+    editing: null,
+    paused: pending || navigating,
+  });
   async function refresh() {
     if (gate.current) return;
     gate.current = true;
@@ -54,45 +53,41 @@ export function WorkQueue({
       setPending(false);
     }
   }
-  const { items, groups, total, perGroup } = data;
+  const { items, groups, matchedTotal, skipped } = data;
+  const total = data.total;
   const error = updates.error || (manualError?.checkedAt === updates.checkedAt ? manualError?.message : "");
-  const filtered = items.filter(
-    (item) =>
-      (group === "all" || item.group === group) &&
-      `${item.title} ${item.reason}`.toLocaleLowerCase("ja").includes(query.trim().toLocaleLowerCase("ja")),
-  );
-  const first = filtered[0];
+  const filtered = items;
+  const first = items[0];
+  const hasFilters = group !== "all" || !!page.filters.query || !!page.filters.cursor;
   const names = new Map(groups.map((g) => [g.key, g.label]));
-  const count = group === "all" ? total : (groups.find((g) => g.key === group)?.count ?? 0);
   const now = updates.checkedAt ?? new Date(updatedAt).getTime();
   const time = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" }).format(
     new Date(now),
   );
   return (
-    <div className="work-queue">
+    <div className="work-queue" aria-busy={navigating}>
       <section className="work-next" aria-labelledby="work-next-title">
         <div className="work-next-symbol">{first ? <ArrowRight size={24} /> : <CheckCheck size={24} />}</div>
         <div>
           <p className="work-eyebrow">
-            {first ? "次に進める仕事" : total ? "表示条件を確認してください" : "確認できる仕事は片付きました"}
+            {first ? "次に進める仕事" : hasFilters ? "表示条件を確認してください" : "確認できる仕事は片付きました"}
           </p>
           <h2 id="work-next-title">
-            {first?.title ?? (total ? "表示条件に合う仕事はありません" : "新しい案件を準備しましょう")}
+            {first?.title ?? (hasFilters ? "表示条件に合う仕事はありません" : "新しい案件を準備しましょう")}
           </h2>
           <p>
             {first?.reason ??
-              (total
+              (hasFilters
                 ? "検索や仕事の種類を変更すると、ほかの対応待ちの仕事を確認できます。"
                 : "企業の収集から始められます。各業務画面では作業履歴や処理中の案件も確認できます。")}
           </p>
         </div>
-        {!first && total > 0 ? (
+        {!first && hasFilters ? (
           <button
             type="button"
             className="work-primary"
             onClick={() => {
-              setGroup("all");
-              setQuery("");
+              navigate("all", "");
             }}
           >
             絞り込みを解除 <ArrowRight size={16} />
@@ -111,7 +106,7 @@ export function WorkQueue({
           </h2>
           <p>公開後の問題・停止対応 → 相談・担当・契約 → 素材などの確認 → 準備の順。同じ優先度は登録の古い順です。</p>
         </div>
-        <button type="button" onClick={() => void refresh()} disabled={pending} className="work-refresh">
+        <button type="button" onClick={() => void refresh()} disabled={pending || navigating} className="work-refresh">
           <RefreshCw size={15} className={pending ? "animate-spin" : ""} />
           {pending ? "更新中" : "最新に更新"}
         </button>
@@ -126,41 +121,61 @@ export function WorkQueue({
       )}
       <fieldset className="work-tabs">
         <legend className="sr-only">仕事の種類</legend>
-        <button type="button" aria-pressed={group === "all"} onClick={() => setGroup("all")}>
+        <button type="button" aria-pressed={group === "all"} onClick={() => navigate("all")}>
           すべて <b>{total}</b>
         </button>
         {groups
           .filter((g) => g.count > 0 || g.key === group)
           .map((g) => (
-            <button key={g.key} type="button" aria-pressed={group === g.key} onClick={() => setGroup(g.key)}>
+            <button key={g.key} type="button" aria-pressed={group === g.key} onClick={() => navigate(g.key)}>
               {g.label} <b>{g.count}</b>
             </button>
           ))}
       </fieldset>
-      <div className="work-filter">
+      <search className="work-filter" aria-label="すべての仕事を検索">
         <label>
           <Search size={16} />
           <input
-            aria-label="表示中の仕事を検索"
-            placeholder="表示中の企業名・確認内容を検索"
+            aria-label="企業名・確認内容を全件から検索"
+            placeholder="企業名・確認内容を全件から検索"
+            maxLength={200}
+            type="search"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                navigate(group);
+              }
+            }}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <span aria-live="polite">{time} 更新 · 30秒ごとに自動更新</span>
-      </div>
+        <button type="button" className="work-refresh" onClick={() => navigate(group)} disabled={navigating}>
+          仕事を検索
+        </button>
+        {hasFilters && (
+          <button type="button" className="work-refresh" onClick={() => navigate("all", "")}>
+            条件をクリア
+          </button>
+        )}
+        <span aria-live="polite">{navigating ? "仕事を検索中…" : `${time} 更新 · 30秒ごとに自動更新`}</span>
+      </search>
+      {query.trim() !== page.filters.query && (
+        <p role="status" className="work-footnote">
+          検索語を変更しています。「仕事を検索」で一覧に反映します。
+        </p>
+      )}
       <section className="work-list" aria-label="対応する仕事">
         {filtered.length === 0 ? (
           <div className="work-empty">
             <CheckCheck size={25} />
-            <h3>{total === 0 ? "現在、対応待ちの仕事はありません" : "該当する仕事はありません"}</h3>
+            <h3>{!hasFilters && total === 0 ? "現在、対応待ちの仕事はありません" : "該当する仕事はありません"}</h3>
             <p>{query ? "検索条件を変更してください。" : "ほかの種類の仕事や、各業務画面も確認できます。"}</p>
-            {total > 0 && (
+            {hasFilters && (
               <button
                 type="button"
                 onClick={() => {
-                  setGroup("all");
-                  setQuery("");
+                  navigate("all", "");
                 }}
               >
                 絞り込みを解除
@@ -205,21 +220,24 @@ export function WorkQueue({
           })
         )}
       </section>
-      <p className="work-footnote">
-        {filtered.length}件を表示 / 対象 {count}件。各種類の上位{perGroup}
-        件を表示しています。承認・契約・公開は、それぞれの画面で内容を確認して行います。
-      </p>
-      {groups.some((g) => g.count > perGroup) && (
-        <div className="work-more">
-          {groups
-            .filter((g) => g.count > perGroup)
-            .map((g) => (
-              <Link key={g.key} href={g.href}>
-                {g.label}の一覧を開く（{g.count}件待ち） <ArrowRight size={14} />
-              </Link>
-            ))}
-        </div>
-      )}
+      <div className="work-pagination">
+        <p className="work-footnote" role="status">
+          {items.length ? `${skipped + 1}〜${skipped + items.length}件` : "0件"}を表示 / 対象 {matchedTotal}件。
+          承認・契約・公開は、それぞれの画面で内容を確認して行います。
+        </p>
+        <nav aria-label="仕事のページ">
+          {page.filters.cursor && (
+            <Link className="work-refresh" href={workHref({ ...page.filters, cursor: null })} scroll={false}>
+              先頭の20件
+            </Link>
+          )}
+          {data.nextCursor && (
+            <Link className="work-refresh" href={workHref({ ...page.filters, cursor: data.nextCursor })} scroll={false}>
+              次の20件 <ArrowRight size={14} />
+            </Link>
+          )}
+        </nav>
+      </div>
     </div>
   );
 }

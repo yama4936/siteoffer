@@ -1,11 +1,13 @@
 import { systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { Flash, Forbidden } from "@/components/ops/ui";
 import { WorkQueue } from "@/components/ops/work-queue";
 import { PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
-import { getOpsWorkQueue } from "@/lib/ops/work-queue";
+import { parseWorkFilters } from "@/lib/ops/work-filters";
+import { getOpsWorkPage } from "@/lib/ops/work-page";
 import { getCurrentActor } from "@/lib/session";
 import "@/components/ops/work-queue.css";
 
@@ -15,7 +17,15 @@ export default async function OpsHome({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const db = getDb();
-  const r = await getOpsWorkQueue(db, await getCurrentActor());
+  const sp = await searchParams;
+  const params = new URLSearchParams();
+  for (const key of ["group", "q", "cursor"]) {
+    const value = sp[key];
+    for (const part of Array.isArray(value) ? value : value === undefined ? [] : [value]) params.append(key, part);
+  }
+  const filters = parseWorkFilters(params);
+  if (!filters) notFound();
+  const r = await getOpsWorkPage(db, await getCurrentActor(), filters);
   if (!r.ok) return <Forbidden />;
   const capabilities = await discoveryAvailability(db, systemClock);
   const live = capabilities.some((p) => p.ready);
@@ -27,8 +37,8 @@ export default async function OpsHome({
         title="今日の仕事"
         description="探す時間を減らして、案件を一歩先へ。確認が必要な仕事をまとめています。"
       />
-      <Flash searchParams={await searchParams} />
-      <WorkQueue {...r.value} updatedAt={systemClock.now().toISOString()} />
+      <Flash searchParams={sp} />
+      <WorkQueue key={JSON.stringify(filters)} page={r.value} updatedAt={systemClock.now().toISOString()} />
       <p className="my-4 text-sm">
         <Link href="/ops/processing" className="text-primary underline">
           待機中の処理・ワーカーの状態を確認

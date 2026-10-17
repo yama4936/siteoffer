@@ -1,4 +1,4 @@
-import { type Actor, type Clock, err, getPublicationMaterialWork, ok, systemClock } from "@siteoffer/core";
+import { type Actor, type Clock, err, getPublicationMaterialWork, ok, type Result, systemClock } from "@siteoffer/core";
 import {
   assignments,
   auditRequests,
@@ -30,42 +30,33 @@ import { isUuid } from "./form";
 import { requireOps } from "./guard";
 import { getReviewInbox } from "./review-inbox";
 
-export const WORK_GROUPS = {
-  materials: { label: "写真・ロゴの確認", href: "/ops/materials" },
-  publication_materials: { label: "公開後の素材確認", href: "/ops/publication-checks" },
-  discovery: { label: "収集の復旧", href: "/ops/discovery" },
-  audit_attention: { label: "診断の対応", href: "/ops/processing#audit-attention" },
-  design: { label: "デザイン", href: "/ops/designs" },
-  proposal: { label: "提案レビュー", href: "/ops/review" },
-  sales_ready: { label: "営業への引き継ぎ", href: "/ops/review/ready" },
-  consultation: { label: "営業からの相談", href: "/ops/consultations" },
-  assignment: { label: "担当の調整", href: "/ops/assignments" },
-  contract: { label: "契約確認", href: "/ops/contracts" },
-  delivery_start: { label: "制作の着手", href: "/ops/delivery#delivery-start" },
-  domain: { label: "ドメイン確認", href: "/ops/delivery#domain-preferences" },
-  delivery_recovery: { label: "制作の復旧", href: "/ops/processing?deliveryState=stopped#processing-deliveries" },
-  delivery: { label: "制作・公開", href: "/ops/delivery" },
-  website: { label: "公式サイト確認", href: "/ops/discovery?pipeline=collected" },
-  audit_preparation: { label: "診断の準備", href: "/ops/processing#audit-preparation" },
-  preparation: { label: "デザインの準備", href: "/ops/designs" },
-} as const;
-export type WorkGroup = keyof typeof WORK_GROUPS;
-export interface WorkItem {
-  id: string;
-  group: WorkGroup;
-  title: string;
-  reason: string;
-  action: string;
-  href: string;
-  since: string;
-  priority: number;
-  attentionLabel?: string;
-}
+import { WORK_GROUPS, type WorkGroup, type WorkItem } from "./work-model";
+
+export { WORK_GROUPS, type WorkGroup, type WorkItem } from "./work-model";
+export type WorkQueueData = {
+  items: WorkItem[];
+  groups: { key: WorkGroup; label: string; href: string; count: number }[];
+  total: number;
+  perGroup: number;
+};
+type QueueResult = Result<WorkQueueData, "forbidden" | "invalid_input">;
+export type WorkReadOptions = {
+  query?: string;
+  limit?: number;
+  offsets?: Partial<Record<WorkGroup, number>>;
+  only?: WorkGroup[];
+  publicationAfter?: { since: string; id: string };
+};
 const PER_GROUP = 20;
 const total = sql<number>`count(*) over ()`.mapWith(Number);
 
 /** Only current, actionable versions enter the queue. Large image/PDF bodies are never selected. */
-export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Clock = systemClock) {
+export async function getOpsWorkQueue(
+  db: DbOrTx,
+  actor: Actor | null,
+  clock: Clock = systemClock,
+  input: WorkReadOptions = {},
+): Promise<QueueResult> {
   const auth = requireOps(actor);
   if (!auth.ok) return auth;
   if (!isUuid(auth.value.userId)) return err("forbidden");
@@ -74,6 +65,16 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     .from(users)
     .where(and(eq(users.id, auth.value.userId), eq(users.role, "ops"), eq(users.status, "active")));
   if (!user) return err("forbidden");
+  if (
+    (input.query?.length ?? 0) > 200 ||
+    (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500)) ||
+    Object.values(input.offsets ?? {}).some((n) => !Number.isSafeInteger(n) || n < 0 || n > 2147483647)
+  )
+    return err("invalid_input");
+  const query = input.query?.trim() ?? "";
+  const readLimit = input.limit ?? PER_GROUP;
+  if (query) return searchWorkQueue(db, actor, clock, input, query, readLimit);
+  const include = (group: WorkGroup) => !input.only || input.only.includes(group);
   const now = clock.now();
   const newerDesign = alias(designVersions, "newer_design");
   const newerProposal = alias(proposalVersions, "newer_proposal");
@@ -98,260 +99,325 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     materialReview,
     publicationReview,
   ] = await Promise.all([
-    db
-      .select({
-        id: discoveryJobs.id,
-        provider: discoveryJobs.provider,
-        criteria: discoveryJobs.criteria,
-        since: discoveryJobs.createdAt,
-        total,
-      })
-      .from(discoveryJobs)
-      .where(
-        and(
-          eq(discoveryJobs.status, "failed"),
-          notExists(db.select({ id: retried.id }).from(retried).where(eq(retried.retryOfJobId, discoveryJobs.id))),
-        ),
-      )
-      .orderBy(asc(discoveryJobs.createdAt), asc(discoveryJobs.id))
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: designVersions.id,
-        companyId: companies.id,
-        name: companies.name,
-        status: designVersions.status,
-        version: designVersions.version,
-        since: designVersions.createdAt,
-        total,
-      })
-      .from(designVersions)
-      .innerJoin(companies, eq(companies.id, designVersions.companyId))
-      .where(
-        and(
-          activeCompany,
-          inArray(designVersions.status, ["draft", "in_review", "failed", "rejected", "approved"]),
-          isNull(designVersions.buildRequestedAt),
-          notExists(
-            db
-              .select({ id: newerDesign.id })
-              .from(newerDesign)
-              .where(
-                and(
-                  eq(newerDesign.companyId, designVersions.companyId),
-                  gt(newerDesign.version, designVersions.version),
-                ),
+    include("discovery")
+      ? db
+          .select({
+            id: discoveryJobs.id,
+            provider: discoveryJobs.provider,
+            criteria: discoveryJobs.criteria,
+            since: discoveryJobs.createdAt,
+            total,
+          })
+          .from(discoveryJobs)
+          .where(
+            and(
+              eq(discoveryJobs.status, "failed"),
+              notExists(db.select({ id: retried.id }).from(retried).where(eq(retried.retryOfJobId, discoveryJobs.id))),
+            ),
+          )
+          .orderBy(asc(sql`date_trunc('milliseconds', ${discoveryJobs.createdAt})`), asc(discoveryJobs.id))
+          .limit(readLimit)
+          .offset(input.offsets?.discovery ?? 0)
+      : Promise.resolve([]),
+    include("design")
+      ? db
+          .select({
+            id: designVersions.id,
+            companyId: companies.id,
+            name: companies.name,
+            status: designVersions.status,
+            version: designVersions.version,
+            since: designVersions.createdAt,
+            total,
+          })
+          .from(designVersions)
+          .innerJoin(companies, eq(companies.id, designVersions.companyId))
+          .where(
+            and(
+              activeCompany,
+              inArray(designVersions.status, ["draft", "in_review", "failed", "rejected", "approved"]),
+              isNull(designVersions.buildRequestedAt),
+              notExists(
+                db
+                  .select({ id: newerDesign.id })
+                  .from(newerDesign)
+                  .where(
+                    and(
+                      eq(newerDesign.companyId, designVersions.companyId),
+                      gt(newerDesign.version, designVersions.version),
+                    ),
+                  ),
               ),
-          ),
-        ),
-      )
-      .orderBy(
-        sql`case when ${designVersions.status} = 'failed' then 0 when ${designVersions.status} = 'draft' then 3 else 2 end`,
-        asc(designVersions.createdAt),
-        asc(designVersions.id),
-      )
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: proposalVersions.id,
-        companyId: companies.id,
-        name: companies.name,
-        status: proposalVersions.status,
-        version: proposalVersions.version,
-        since: proposalVersions.createdAt,
-        total,
-      })
-      .from(proposalVersions)
-      .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
-      .innerJoin(companies, eq(companies.id, proposals.companyId))
-      .where(
-        and(
-          activeCompany,
-          inArray(proposalVersions.status, ["in_review", "failed", "rejected"]),
-          notExists(
-            db
-              .select({ id: newerProposal.id })
-              .from(newerProposal)
-              .where(
-                and(
-                  eq(newerProposal.proposalId, proposalVersions.proposalId),
-                  gt(newerProposal.version, proposalVersions.version),
-                ),
+            ),
+          )
+          .orderBy(
+            sql`case when ${designVersions.status} = 'failed' then 0 when ${designVersions.status} = 'draft' then 3 else 2 end`,
+            asc(sql`date_trunc('milliseconds', ${designVersions.createdAt})`),
+            asc(designVersions.id),
+          )
+          .limit(readLimit)
+          .offset(input.offsets?.design ?? 0)
+      : Promise.resolve([]),
+    include("proposal")
+      ? db
+          .select({
+            id: proposalVersions.id,
+            companyId: companies.id,
+            name: companies.name,
+            status: proposalVersions.status,
+            version: proposalVersions.version,
+            since: proposalVersions.createdAt,
+            total,
+          })
+          .from(proposalVersions)
+          .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+          .innerJoin(companies, eq(companies.id, proposals.companyId))
+          .where(
+            and(
+              activeCompany,
+              inArray(proposalVersions.status, ["in_review", "failed", "rejected"]),
+              notExists(
+                db
+                  .select({ id: newerProposal.id })
+                  .from(newerProposal)
+                  .where(
+                    and(
+                      eq(newerProposal.proposalId, proposalVersions.proposalId),
+                      gt(newerProposal.version, proposalVersions.version),
+                    ),
+                  ),
               ),
-          ),
-        ),
-      )
-      .orderBy(
-        sql`case when ${proposalVersions.status} = 'failed' then 0 else 2 end`,
-        asc(proposalVersions.createdAt),
-        asc(proposalVersions.id),
-      )
-      .limit(PER_GROUP),
-    db
-      .select({ id: assignments.id, name: companies.name, since: assignments.createdAt, total })
-      .from(assignments)
-      .innerJoin(companies, eq(companies.id, assignments.companyId))
-      .where(eq(assignments.status, "awaiting_ops"))
-      .orderBy(asc(assignments.createdAt), asc(assignments.id))
-      .limit(PER_GROUP),
-    db
-      .select({ id: contracts.id, name: companies.name, since: contracts.reportedAt, total })
-      .from(contracts)
-      .innerJoin(companies, eq(companies.id, contracts.companyId))
-      .where(inArray(contracts.status, ["reported", "under_review"]))
-      .orderBy(asc(contracts.reportedAt), asc(contracts.id))
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: deliveries.id,
-        name: companies.name,
-        status: deliveries.status,
-        since: deliveries.updatedAt,
-        total,
-      })
-      .from(deliveries)
-      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
-      .innerJoin(companies, eq(companies.id, contracts.companyId))
-      .where(
-        and(
-          eq(contracts.status, "completed"),
-          inArray(deliveries.status, ["info_gathering", "ops_review", "ready", "published"]),
-        ),
-      )
-      .orderBy(asc(deliveries.updatedAt), asc(deliveries.id))
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: companies.id,
-        name: companies.name,
-        status: companies.officialSiteStatus,
-        since: companies.createdAt,
-        total,
-      })
-      .from(companies)
-      .where(
-        and(
-          activeCompany,
-          eq(companies.pipelineStatus, "collected"),
-          inArray(companies.officialSiteStatus, ["needs_review", "candidate", "not_found"]),
-        ),
-      )
-      .orderBy(asc(companies.createdAt), asc(companies.id))
-      .limit(PER_GROUP),
-    db
-      .select({ id: companies.id, name: companies.name, since: companies.updatedAt, total })
-      .from(companies)
-      .where(
-        and(
-          activeCompany,
-          eq(companies.pipelineStatus, "audited"),
-          sql`not exists(select 1 from ${auditRequests} where ${auditRequests.companyId}=${companies.id} and ${auditRequests.finishedAt} is null)`,
-          sql`exists (select 1 from ${siteAudits} where ${siteAudits.companyId} = ${companies.id}
+            ),
+          )
+          .orderBy(
+            sql`case when ${proposalVersions.status} = 'failed' then 0 else 2 end`,
+            asc(sql`date_trunc('milliseconds', ${proposalVersions.createdAt})`),
+            asc(proposalVersions.id),
+          )
+          .limit(readLimit)
+          .offset(input.offsets?.proposal ?? 0)
+      : Promise.resolve([]),
+    include("assignment")
+      ? db
+          .select({ id: assignments.id, name: companies.name, since: assignments.createdAt, total })
+          .from(assignments)
+          .innerJoin(companies, eq(companies.id, assignments.companyId))
+          .where(and(eq(assignments.status, "awaiting_ops")))
+          .orderBy(asc(sql`date_trunc('milliseconds', ${assignments.createdAt})`), asc(assignments.id))
+          .limit(readLimit)
+          .offset(input.offsets?.assignment ?? 0)
+      : Promise.resolve([]),
+    include("contract")
+      ? db
+          .select({ id: contracts.id, name: companies.name, since: contracts.reportedAt, total })
+          .from(contracts)
+          .innerJoin(companies, eq(companies.id, contracts.companyId))
+          .where(and(inArray(contracts.status, ["reported", "under_review"])))
+          .orderBy(asc(sql`date_trunc('milliseconds', ${contracts.reportedAt})`), asc(contracts.id))
+          .limit(readLimit)
+          .offset(input.offsets?.contract ?? 0)
+      : Promise.resolve([]),
+    include("delivery")
+      ? db
+          .select({
+            id: deliveries.id,
+            name: companies.name,
+            status: deliveries.status,
+            since: deliveries.updatedAt,
+            total,
+          })
+          .from(deliveries)
+          .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+          .innerJoin(companies, eq(companies.id, contracts.companyId))
+          .where(
+            and(
+              eq(contracts.status, "completed"),
+              inArray(deliveries.status, ["info_gathering", "ops_review", "ready", "published"]),
+            ),
+          )
+          .orderBy(
+            sql`case when ${deliveries.status}='info_gathering' then 3 else 2 end`,
+            asc(sql`date_trunc('milliseconds', ${deliveries.updatedAt})`),
+            asc(deliveries.id),
+          )
+          .limit(readLimit)
+          .offset(input.offsets?.delivery ?? 0)
+      : Promise.resolve([]),
+    include("website")
+      ? db
+          .select({
+            id: companies.id,
+            name: companies.name,
+            status: companies.officialSiteStatus,
+            since: companies.createdAt,
+            total,
+          })
+          .from(companies)
+          .where(
+            and(
+              activeCompany,
+              eq(companies.pipelineStatus, "collected"),
+              inArray(companies.officialSiteStatus, ["needs_review", "candidate", "not_found"]),
+            ),
+          )
+          .orderBy(asc(sql`date_trunc('milliseconds', ${companies.createdAt})`), asc(companies.id))
+          .limit(readLimit)
+          .offset(input.offsets?.website ?? 0)
+      : Promise.resolve([]),
+    include("preparation")
+      ? db
+          .select({ id: companies.id, name: companies.name, since: companies.updatedAt, total })
+          .from(companies)
+          .where(
+            and(
+              activeCompany,
+              eq(companies.pipelineStatus, "audited"),
+              sql`not exists(select 1 from ${auditRequests} where ${auditRequests.companyId}=${companies.id} and ${auditRequests.finishedAt} is null)`,
+              sql`exists (select 1 from ${siteAudits} where ${siteAudits.companyId} = ${companies.id}
             and ${siteAudits.status} = 'evaluated' and ${siteAudits.decision} = 'create'
             and ${siteAudits.id} = (select latest.id from site_audits latest where latest.company_id = ${companies.id}
               order by latest.created_at desc, latest.id desc limit 1)
             and not exists (select 1 from ${proposalHandoffs} where ${proposalHandoffs.auditId} = ${siteAudits.id}))`,
-          notExists(
-            db.select({ id: designVersions.id }).from(designVersions).where(eq(designVersions.companyId, companies.id)),
-          ),
-        ),
-      )
-      .orderBy(asc(companies.updatedAt), asc(companies.id))
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: contracts.id,
-        name: companies.name,
-        since: sql<Date>`coalesce(${contracts.completedAt}, ${contracts.reportedAt})`.mapWith(contracts.reportedAt),
-        total,
-      })
-      .from(contracts)
-      .innerJoin(companies, eq(companies.id, contracts.companyId))
-      .where(
-        and(
-          eq(contracts.status, "completed"),
-          notExists(db.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.contractId, contracts.id))),
-        ),
-      )
-      .orderBy(asc(contracts.completedAt), asc(contracts.reportedAt), asc(contracts.id))
-      .limit(PER_GROUP),
-    db
-      .select({ id: domainPreferences.id, name: companies.name, since: domainPreferences.updatedAt, total })
-      .from(domainPreferences)
-      .innerJoin(companies, eq(companies.id, domainPreferences.companyId))
-      // 契約後の聞き取りも対象。営業抑止や担当終了は、運営確認済みを意味しない。
-      .where(isNull(domainPreferences.confirmedAt))
-      .orderBy(asc(domainPreferences.updatedAt), asc(domainPreferences.id))
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: salesActivities.id,
-        name: companies.name,
-        since: sql<Date>`coalesce(${consultationCases.updatedAt}, ${salesActivities.createdAt})`.mapWith(
-          salesActivities.createdAt,
-        ),
-        total,
-      })
-      .from(salesActivities)
-      .innerJoin(companies, eq(companies.id, salesActivities.companyId))
-      .leftJoin(consultationCases, eq(consultationCases.activityId, salesActivities.id))
-      .where(
-        and(eq(salesActivities.consultOps, true), sql`coalesce(${consultationCases.status}, 'open') <> 'resolved'`),
-      )
-      .orderBy(
-        asc(sql`coalesce(${consultationCases.updatedAt}, ${salesActivities.createdAt})`),
-        asc(salesActivities.id),
-      )
-      .limit(PER_GROUP),
-    db
-      .select({
-        id: deliveries.id,
-        name: companies.name,
-        status: deliveryBuilds.status,
-        since:
-          sql<Date>`case when ${deliveryBuilds.status} = 'failed' then coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.createdAt}) else coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}) end`.mapWith(
-            deliveryBuilds.createdAt,
-          ),
-        total,
-      })
-      .from(deliveries)
-      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
-      .innerJoin(companies, eq(companies.id, contracts.companyId))
-      .innerJoin(deliveryBuilds, currentDeliveryBuild)
-      .where(
-        and(
-          eq(contracts.status, "completed"),
-          eq(deliveries.status, "building"),
-          isNull(deliveries.lockedVersionId),
-          deliveryNeedsAttention(now),
-        ),
-      )
-      .orderBy(
-        asc(
-          sql`case when ${deliveryBuilds.status} = 'failed' then coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.createdAt}) else coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}) end`,
-        ),
-        asc(deliveries.id),
-      )
-      .limit(PER_GROUP),
-    getAuditAttentionWork(db, actor),
-    listAuditPreparation(db, actor),
-    getReviewInbox(db, actor, { view: "ready" }),
-    db
-      .select({
-        id: imageAssets.id,
-        companyId: companies.id,
-        name: companies.name,
-        label: imageAssets.label,
-        since: imageSubmissions.updatedAt,
-        total,
-      })
-      .from(imageSubmissions)
-      .innerJoin(imageAssets, eq(imageAssets.id, imageSubmissions.assetId))
-      .innerJoin(companies, eq(companies.id, imageAssets.companyId))
-      .where(eq(imageSubmissions.status, "pending"))
-      .orderBy(asc(imageSubmissions.updatedAt), asc(imageAssets.id))
-      .limit(PER_GROUP),
-    getPublicationMaterialWork(db, actor),
+              notExists(
+                db
+                  .select({ id: designVersions.id })
+                  .from(designVersions)
+                  .where(eq(designVersions.companyId, companies.id)),
+              ),
+            ),
+          )
+          .orderBy(asc(sql`date_trunc('milliseconds', ${companies.updatedAt})`), asc(companies.id))
+          .limit(readLimit)
+          .offset(input.offsets?.preparation ?? 0)
+      : Promise.resolve([]),
+    include("delivery_start")
+      ? db
+          .select({
+            id: contracts.id,
+            name: companies.name,
+            since: sql<Date>`coalesce(${contracts.completedAt}, ${contracts.reportedAt})`.mapWith(contracts.reportedAt),
+            total,
+          })
+          .from(contracts)
+          .innerJoin(companies, eq(companies.id, contracts.companyId))
+          .where(
+            and(
+              eq(contracts.status, "completed"),
+              notExists(
+                db.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.contractId, contracts.id)),
+              ),
+            ),
+          )
+          .orderBy(
+            asc(sql`date_trunc('milliseconds', coalesce(${contracts.completedAt}, ${contracts.reportedAt}))`),
+            asc(contracts.id),
+          )
+          .limit(readLimit)
+          .offset(input.offsets?.delivery_start ?? 0)
+      : Promise.resolve([]),
+    include("domain")
+      ? db
+          .select({ id: domainPreferences.id, name: companies.name, since: domainPreferences.updatedAt, total })
+          .from(domainPreferences)
+          .innerJoin(companies, eq(companies.id, domainPreferences.companyId))
+          // 契約後の聞き取りも対象。営業抑止や担当終了は、運営確認済みを意味しない。
+          .where(and(isNull(domainPreferences.confirmedAt)))
+          .orderBy(asc(sql`date_trunc('milliseconds', ${domainPreferences.updatedAt})`), asc(domainPreferences.id))
+          .limit(readLimit)
+          .offset(input.offsets?.domain ?? 0)
+      : Promise.resolve([]),
+    include("consultation")
+      ? db
+          .select({
+            id: salesActivities.id,
+            name: companies.name,
+            since: sql<Date>`coalesce(${consultationCases.updatedAt}, ${salesActivities.createdAt})`.mapWith(
+              salesActivities.createdAt,
+            ),
+            total,
+          })
+          .from(salesActivities)
+          .innerJoin(companies, eq(companies.id, salesActivities.companyId))
+          .leftJoin(consultationCases, eq(consultationCases.activityId, salesActivities.id))
+          .where(
+            and(eq(salesActivities.consultOps, true), sql`coalesce(${consultationCases.status}, 'open') <> 'resolved'`),
+          )
+          .orderBy(
+            asc(
+              sql`date_trunc('milliseconds', coalesce(${consultationCases.updatedAt}, ${salesActivities.createdAt}))`,
+            ),
+            asc(salesActivities.id),
+          )
+          .limit(readLimit)
+          .offset(input.offsets?.consultation ?? 0)
+      : Promise.resolve([]),
+    include("delivery_recovery")
+      ? db
+          .select({
+            id: deliveries.id,
+            name: companies.name,
+            status: deliveryBuilds.status,
+            since:
+              sql<Date>`case when ${deliveryBuilds.status} = 'failed' then coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.createdAt}) else coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}) end`.mapWith(
+                deliveryBuilds.createdAt,
+              ),
+            total,
+          })
+          .from(deliveries)
+          .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+          .innerJoin(companies, eq(companies.id, contracts.companyId))
+          .innerJoin(deliveryBuilds, currentDeliveryBuild)
+          .where(
+            and(
+              eq(contracts.status, "completed"),
+              eq(deliveries.status, "building"),
+              isNull(deliveries.lockedVersionId),
+              deliveryNeedsAttention(now),
+            ),
+          )
+          .orderBy(
+            asc(
+              sql`date_trunc('milliseconds', case when ${deliveryBuilds.status} = 'failed' then coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.createdAt}) else coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}) end)`,
+            ),
+            asc(deliveries.id),
+          )
+          .limit(readLimit)
+          .offset(input.offsets?.delivery_recovery ?? 0)
+      : Promise.resolve([]),
+    include("audit_attention")
+      ? getAuditAttentionWork(db, actor, { query, offset: input.offsets?.audit_attention ?? 0, limit: readLimit })
+      : Promise.resolve(ok({ total: 0, items: [] })),
+    include("audit_preparation")
+      ? listAuditPreparation(db, actor, { query, offset: input.offsets?.audit_preparation ?? 0, limit: readLimit })
+      : Promise.resolve(ok({ total: 0, items: [] })),
+    include("sales_ready")
+      ? getReviewInbox(db, actor, { view: "ready", query, offset: input.offsets?.sales_ready ?? 0, limit: readLimit })
+      : Promise.resolve(ok({ total: 0, items: [] })),
+    include("materials")
+      ? db
+          .select({
+            id: imageAssets.id,
+            companyId: companies.id,
+            name: companies.name,
+            label: imageAssets.label,
+            since: imageSubmissions.updatedAt,
+            total,
+          })
+          .from(imageSubmissions)
+          .innerJoin(imageAssets, eq(imageAssets.id, imageSubmissions.assetId))
+          .innerJoin(companies, eq(companies.id, imageAssets.companyId))
+          .where(and(eq(imageSubmissions.status, "pending")))
+          .orderBy(asc(sql`date_trunc('milliseconds', ${imageSubmissions.updatedAt})`), asc(imageAssets.id))
+          .limit(readLimit)
+          .offset(input.offsets?.materials ?? 0)
+      : Promise.resolve([]),
+    include("publication_materials")
+      ? getPublicationMaterialWork(db, actor, {
+          query,
+          limit: readLimit,
+          ...(input.publicationAfter ? { after: input.publicationAfter } : {}),
+        })
+      : Promise.resolve({ total: 0, items: [] }),
   ]);
   if (!auditAttention.ok) return auditAttention;
   if (!auditPreparation.ok) return auditPreparation;
@@ -367,17 +433,7 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
       since: r.since.toISOString(),
       priority: 2,
     })),
-    ...publicationReview.items.map((r) => ({
-      id: r.id,
-      group: "publication_materials" as const,
-      title: r.companyName,
-      reason: `第${r.version}版 · ${r.environment} · ${r.reason}。元の公開先への影響を確認してください。`,
-      action: "公開先の対応を確認",
-      href: `/ops/publication-checks?delivery=${r.deliveryId}&focus=${r.id}&mode=all#publication-${r.id}`,
-      since: r.since,
-      priority: 0,
-      attentionLabel: "公開後の確認",
-    })),
+    ...publicationReview.items.map(publicationWorkItem),
     ...salesReady.value.items.map((r) => ({
       id: r.id,
       group: "sales_ready" as const,
@@ -582,11 +638,83 @@ export async function getOpsWorkQueue(db: DbOrTx, actor: Actor | null, clock: Cl
     website,
     preparation,
   }).map(([key, rows]) => ({ key: key as WorkGroup, ...WORK_GROUPS[key as WorkGroup], count: rows[0]?.total ?? 0 }));
-  return ok({ items, groups, total: groups.reduce((n, g) => n + g.count, 0), perGroup: PER_GROUP });
+  return ok({ items, groups, total: groups.reduce((n, g) => n + g.count, 0), perGroup: readLimit });
 }
 
 function discoveryScope(criteria: unknown, provider: string) {
   const parsed = discoveryCriteriaSchema.safeParse(criteria);
   const area = parsed.success ? [parsed.data.prefecture, parsed.data.city].filter(Boolean).join(" ") : "";
   return `${area ? `${area} · ` : ""}${provider === "fixture" ? "架空企業の収集" : "企業情報の収集"}`;
+}
+
+type PublicationWork = Awaited<ReturnType<typeof getPublicationMaterialWork>>["items"][number];
+function publicationWorkItem(r: PublicationWork): WorkItem {
+  return {
+    id: r.id,
+    group: "publication_materials" as const,
+    title: r.companyName,
+    reason: `第${r.version}版 · ${r.environment} · ${r.reason}。元の公開先への影響を確認してください。`,
+    action: "公開先の対応を確認",
+    href: `/ops/publication-checks?delivery=${r.deliveryId}&focus=${r.id}&mode=all#publication-${r.id}`,
+    since: r.since,
+    priority: 0,
+    attentionLabel: "公開後の確認",
+  };
+}
+function matchesWork(item: WorkItem, query: string) {
+  return `${item.title} ${item.reason} ${item.action}`.toLocaleLowerCase("ja").includes(query);
+}
+/** Exact title/reason search, including derived policy and recovery explanations. Scan bounded metadata windows only. */
+async function searchWorkQueue(
+  db: DbOrTx,
+  actor: Actor | null,
+  clock: Clock,
+  input: WorkReadOptions,
+  text: string,
+  limit: number,
+): Promise<QueueResult> {
+  const query = text.toLocaleLowerCase("ja"),
+    items: WorkItem[] = [],
+    groups = Object.entries(WORK_GROUPS).map(([key, value]) => ({ key: key as WorkGroup, ...value, count: 0 }));
+  for (const group of groups) {
+    if (input.only && !input.only.includes(group.key)) continue;
+    if (group.key === "publication_materials") {
+      const result = await getPublicationMaterialWork(db, actor, {
+        limit,
+        matches: (r) => matchesWork(publicationWorkItem(r), query),
+        ...(input.publicationAfter ? { after: input.publicationAfter } : {}),
+      });
+      group.count = result.total;
+      items.push(...result.items.map(publicationWorkItem));
+      continue;
+    }
+    const skip = input.offsets?.[group.key] ?? 0;
+    let scanned = 0,
+      matched = 0;
+    for (;;) {
+      const result = await getOpsWorkQueue(db, actor, clock, {
+        only: [group.key],
+        offsets: { [group.key]: scanned },
+        limit: 500,
+      });
+      if (!result.ok) return result;
+      const count = result.value.groups.find((g) => g.key === group.key)!.count;
+      for (const item of result.value.items) {
+        if (!matchesWork(item, query)) continue;
+        if (matched >= skip && matched < skip + limit) items.push(item);
+        matched++;
+      }
+      scanned += result.value.items.length;
+      if (!result.value.items.length || scanned >= count) break;
+    }
+    group.count = matched;
+  }
+  items.sort(
+    (a, b) =>
+      a.priority - b.priority ||
+      a.since.localeCompare(b.since) ||
+      a.id.localeCompare(b.id) ||
+      a.group.localeCompare(b.group),
+  );
+  return ok({ items, groups, total: groups.reduce((n, g) => n + g.count, 0), perGroup: limit });
 }

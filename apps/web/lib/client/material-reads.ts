@@ -6,7 +6,8 @@ import type {
   listImageSubmissionsForOps,
   listPublicationMaterials,
 } from "@siteoffer/core";
-import type { getOpsWorkQueue } from "@/lib/ops/work-queue";
+import { emptyWorkFilters, type WorkFilters, workHref } from "@/lib/ops/work-filters";
+import type { WorkPage } from "@/lib/ops/work-page";
 import { readPrivate } from "./private-read";
 
 function query(values: Record<string, string | number | undefined>) {
@@ -16,9 +17,8 @@ function query(values: Record<string, string | number | undefined>) {
       .map(([key, value]) => [key, String(value)]),
   );
 }
-export function readWorkQueue(signal?: AbortSignal) {
-  type Result = Extract<Awaited<ReturnType<typeof getOpsWorkQueue>>, { ok: true }>["value"];
-  return readPrivate<Result>("/ops/work-queue", signal);
+export function readWorkQueue(signal?: AbortSignal, filters: WorkFilters = emptyWorkFilters) {
+  return readPrivate<WorkPage>(workHref(filters, "/ops/work-queue"), signal);
 }
 export function readCustomerImages(companyId: string, page: number, signal?: AbortSignal) {
   return readPrivate<Awaited<ReturnType<typeof listCustomerImages>>>(

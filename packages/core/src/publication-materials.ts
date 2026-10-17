@@ -412,23 +412,44 @@ export async function listPublicationMaterials(
   );
 }
 
+export type PublicationWorkItem = {
+  id: string;
+  deliveryId: string;
+  companyId: string;
+  companyName: string;
+  version: number;
+  environment: string;
+  since: string;
+  reason: string;
+};
 /** Oldest actionable publications for the operations queue. No file bodies or confirmation notes. */
-export async function getPublicationMaterialWork(db: DbOrTx, actor: Actor | null) {
+export async function getPublicationMaterialWork(
+  db: DbOrTx,
+  actor: Actor | null,
+  input: {
+    query?: string;
+    after?: { since: string; id: string };
+    limit?: number;
+    matches?: (item: PublicationWorkItem) => boolean;
+  } = {},
+) {
+  if (
+    (input.query?.length ?? 0) > 200 ||
+    (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500)) ||
+    (input.after &&
+      (!uuid(input.after.id) ||
+        !Number.isFinite(Date.parse(input.after.since)) ||
+        new Date(input.after.since).toISOString() !== input.after.since))
+  )
+    throw new PublicationMaterialError("確認条件を確認してください");
+  const query = input.query?.trim().toLocaleLowerCase("ja") ?? "";
   return db.transaction(
     async (tx) => {
-      await activeContentOperator(tx, actor);
+      await activeContentOperator(tx, actor, false);
       let total = 0;
       let cursor: string | undefined;
-      const items: {
-        id: string;
-        deliveryId: string;
-        companyId: string;
-        companyName: string;
-        version: number;
-        environment: string;
-        since: string;
-        reason: string;
-      }[] = [];
+      const items: PublicationWorkItem[] = [],
+        limit = input.limit ?? 20;
       for (;;) {
         const rows = await tx
           .select({
@@ -482,23 +503,30 @@ export async function getPublicationMaterialWork(db: DbOrTx, actor: Actor | null
             },
             assets,
           );
-          if (!issues.length) continue;
+          if (!issues.length || (query && !row.companyName.toLocaleLowerCase("ja").includes(query))) continue;
+          const candidate: PublicationWorkItem = {
+            id: row.id,
+            deliveryId: row.deliveryId,
+            companyId: row.companyId,
+            companyName: row.companyName,
+            version: row.version?.number ?? 0,
+            environment: row.environment,
+            since: row.createdAt.toISOString(),
+            reason: issues[0]!.reason,
+          };
+          if (input.matches && !input.matches(candidate)) continue;
           total++;
           const since = row.createdAt.toISOString(),
             last = items[items.length - 1];
-          if (items.length < 20 || (last && (since.localeCompare(last.since) || row.id.localeCompare(last.id)) < 0)) {
-            items.push({
-              id: row.id,
-              deliveryId: row.deliveryId,
-              companyId: row.companyId,
-              companyName: row.companyName,
-              version: row.version?.number ?? 0,
-              environment: row.environment,
-              since,
-              reason: issues[0]!.reason,
-            });
+          if (input.after && (since.localeCompare(input.after.since) || row.id.localeCompare(input.after.id)) <= 0)
+            continue;
+          if (
+            items.length < limit ||
+            (last && (since.localeCompare(last.since) || row.id.localeCompare(last.id)) < 0)
+          ) {
+            items.push(candidate);
             items.sort((a, b) => a.since.localeCompare(b.since) || a.id.localeCompare(b.id));
-            if (items.length > 20) items.pop();
+            if (items.length > limit) items.pop();
           }
         }
         if (rows.length < 500) break;

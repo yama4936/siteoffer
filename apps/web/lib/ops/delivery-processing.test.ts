@@ -14,6 +14,8 @@ import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { getProcessingOverview } from "./processing";
+import { emptyWorkFilters } from "./work-filters";
+import { getOpsWorkPage } from "./work-page";
 import { getOpsWorkQueue } from "./work-queue";
 
 let db: Db, close: () => Promise<void>;
@@ -148,4 +150,17 @@ it("別納品の制作回や無効な運営権限から停止情報を取得し�
   await db.update(users).set({ status: "suspended" }).where(eq(users.id, b.ops.userId));
   expect((await getOpsWorkQueue(db, b.ops, clock)).ok).toBe(false);
   expect((await getProcessingOverview(db, clock, b.ops)).ok).toBe(false);
+});
+
+it("1回の仕事の読み取りは期限判定の基準時刻も揃える", async () => {
+  const b = await seed();
+  must(await claimDeliveryBuild(db, clock, worker, b.d.id, randomUUID()));
+  const started = clock.now().getTime();
+  let calls = 0;
+  const moving = { now: () => new Date(started + calls++ * 3600000) };
+  const r = must(
+    await getOpsWorkPage(db, b.ops, { ...emptyWorkFilters, group: "delivery_recovery", query: b.company.name }, moving),
+  );
+  expect(r.groups.find((g) => g.key === "delivery_recovery")?.count).toBe(0);
+  expect(r.items).toEqual([]);
 });

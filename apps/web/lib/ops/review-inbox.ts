@@ -6,7 +6,7 @@ import { isUuid } from "./form";
 export async function getReviewInbox(
   db: DbOrTx,
   actor: Actor | null,
-  input: { view?: string; query?: string; page?: number; companyId?: string } = {},
+  input: { view?: string; query?: string; page?: number; companyId?: string; offset?: number; limit?: number } = {},
 ) {
   if (actor?.kind !== "ops" || !isUuid(actor.userId)) return err("forbidden");
   const [user] = await db
@@ -17,9 +17,13 @@ export async function getReviewInbox(
   const view = input.view ?? "pending";
   if (
     !["pending", "ready", "all"].includes(view) ||
+    (input.offset !== undefined &&
+      (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > 2147483647)) ||
     (input.query?.length ?? 0) > 200 ||
     (input.companyId !== undefined && !isUuid(input.companyId))
   )
+    return err("invalid_input");
+  if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500))
     return err("invalid_input");
   const query = input.query?.trim() ?? "";
   const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",o.id as "salesOfferId",
@@ -39,7 +43,7 @@ export async function getReviewInbox(
   const page = Math.min(pages, Math.max(1, Number.isSafeInteger(input.page) ? input.page! : 1));
   const result =
     await db.execute(sql`select * from (${base}) inbox where ${view === "pending" ? sql`pending` : view === "ready" ? sql`ready` : sql`true`}
-   order by pending desc,since asc,id asc limit 20 offset ${(page - 1) * 20}`);
+   order by pending desc,date_trunc('milliseconds', since) asc,id asc limit ${input.limit ?? 20} offset ${input.offset ?? (page - 1) * 20}`);
   const rows = (
     result as {
       rows: {

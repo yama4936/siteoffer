@@ -24,6 +24,8 @@ import {
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { emptyWorkFilters } from "./work-filters";
+import { getOpsWorkPage } from "./work-page";
 import { getOpsWorkQueue } from "./work-queue";
 
 let db: Db, close: () => Promise<void>;
@@ -183,4 +185,28 @@ it("新しい要約と対象絞り込みも、有効な運営だけに返す", a
   await db.update(users).set({ status: "suspended" }).where(eq(users.id, f.ops.userId));
   expect(await getOpsWorkQueue(db, f.ops)).toMatchObject({ ok: false, error: "forbidden" });
   await expect(getPublicationMaterialWork(db, f.ops)).rejects.toThrow("有効な運営");
+});
+
+it("公開後の素材確認も全件を読み、本文を増やさず2ページ目と会社検索へ進める", async () => {
+  const f = await fixture(),
+    ids: string[] = [];
+  for (let i = 1; i <= 25; i++) ids.push((await f.publication(i)).id);
+  const filters = { ...emptyWorkFilters, group: "publication_materials" as const };
+  const first = await getOpsWorkPage(db, f.ops, filters, clock);
+  expect(first.ok).toBe(true);
+  if (!first.ok) throw Error(first.error);
+  const tail = await getOpsWorkPage(db, f.ops, { ...filters, cursor: first.value.nextCursor }, clock);
+  expect(tail.ok).toBe(true);
+  if (!tail.ok) throw Error(tail.error);
+  expect(first.value.matchedTotal).toBe(25);
+  expect(first.value.items.map((i) => i.id)).toEqual(ids.slice(0, 20));
+  expect(tail.value.items.map((i) => i.id)).toEqual(ids.slice(20));
+  expect(tail.value.nextCursor).toBeNull();
+  expect(JSON.stringify(tail.value)).not.toContain("private-image-fixture");
+  const actualReason = first.value.items[0]!.reason;
+  const byReason = await getOpsWorkPage(db, f.ops, { ...filters, query: actualReason }, clock);
+  expect(byReason).toMatchObject({ ok: true, value: { matchedTotal: 1, items: [{ id: ids[0] }] } });
+
+  const none = await getOpsWorkPage(db, f.ops, { ...filters, query: "一致しない会社" }, clock);
+  expect(none).toMatchObject({ ok: true, value: { matchedTotal: 0, items: [] } });
 });

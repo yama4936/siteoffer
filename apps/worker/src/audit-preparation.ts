@@ -10,10 +10,17 @@ const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export async function listAuditPreparation(
   db: DbOrTx,
   actor: Actor | null,
-  input: { companyId?: string; query?: string; page?: number } = {},
+  input: { companyId?: string; query?: string; page?: number; offset?: number; limit?: number } = {},
 ) {
   if (!(await isAuditOperator(db, actor))) return err("forbidden");
   if ((input.companyId && !UUID.test(input.companyId)) || (input.query?.length ?? 0) > 200) return err("invalid_input");
+  if (
+    input.offset !== undefined &&
+    (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > 2147483647)
+  )
+    return err("invalid_input");
+  if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500))
+    return err("invalid_input");
   const query = input.query?.trim() ?? "";
   const exists = await db.execute(sql`select to_regclass('pgboss.job') is not null as present`);
   const hasQueue = (exists as { rows: { present: boolean }[] }).rows[0]?.present;
@@ -38,7 +45,9 @@ export async function listAuditPreparation(
   const total = (count as { rows: { total: number }[] }).rows[0]!.total;
   const pages = Math.max(1, Math.ceil(total / 20));
   const page = Math.min(pages, Math.max(1, Number.isSafeInteger(input.page) ? input.page! : 1));
-  const result = await db.execute(sql`${base} order by c.updated_at asc,c.id asc limit 20 offset ${(page - 1) * 20}`);
+  const result = await db.execute(
+    sql`${base} order by date_trunc('milliseconds', c.updated_at) asc,c.id asc limit ${input.limit ?? 20} offset ${input.offset ?? (page - 1) * 20}`,
+  );
   return ok({
     total,
     pages,

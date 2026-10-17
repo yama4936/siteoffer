@@ -108,8 +108,21 @@ export async function getAuditRecoveryCandidates(
   });
 }
 /** ホームでは同じ企業を重複して数えず、保存済み結果の再利用を先に案内する。 */
-export async function getAuditAttentionWork(db: DbOrTx, actor: Actor | null) {
+export async function getAuditAttentionWork(
+  db: DbOrTx,
+  actor: Actor | null,
+  input: { query?: string; offset?: number; limit?: number } = {},
+) {
   if (!(await allowed(db, actor))) return err("forbidden");
+  if (
+    (input.query?.length ?? 0) > 200 ||
+    (input.offset !== undefined &&
+      (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > 2147483647))
+  )
+    return err("invalid_input");
+  if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500))
+    return err("invalid_input");
+  const query = input.query?.trim() ?? "";
   const base = sql`with recovery as (${auditRecoveryCandidatesQuery()}), work as (
     select 'recovery' as kind, r."auditId" as id, r."companyId", r."companyName", r."createdAt", row_to_json(r) as detail
       from recovery r
@@ -119,9 +132,11 @@ export async function getAuditAttentionWork(db: DbOrTx, actor: Actor | null) {
       from audit_requests r join companies c on c.id=r.company_id
       where ${auditRequestNeedsAttention}
         and not exists(select 1 from recovery saved where saved."companyId"=r.company_id)
-  )`;
-  const count = await db.execute(sql`${base} select count(*)::int as total from work`);
-  const result = await db.execute(sql`${base} select * from work order by "createdAt" asc,id asc limit ${LIMIT}`);
+  ), filtered as(select * from work where ${query ? sql`position(lower(${query}) in lower("companyName")) > 0` : sql`true`})`;
+  const count = await db.execute(sql`${base} select count(*)::int as total from filtered`);
+  const result = await db.execute(
+    sql`${base} select * from filtered order by date_trunc('milliseconds', "createdAt") asc,id asc limit ${input.limit ?? LIMIT} offset ${input.offset ?? 0}`,
+  );
   const rows = (
     result as {
       rows: {
