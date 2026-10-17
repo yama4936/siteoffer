@@ -1,6 +1,7 @@
 "use client";
 import type { ArticleHistoryPage, ArticleSnapshot, ArticleWorkspace } from "@siteoffer/core";
 import { useEffect, useRef, useState } from "react";
+import { PrivateReadFailure, readPrivateJson } from "@/lib/client/private-json";
 
 const snapshot = (w: ArticleWorkspace): ArticleSnapshot => ({
   revision: Number(w.current.baseRevision),
@@ -48,20 +49,28 @@ function validHistory(value: unknown): value is ArticleHistoryPage {
     )
   );
 }
-async function read(base: string, params: URLSearchParams, controller: AbortController) {
-  const timer = setTimeout(() => controller.abort(), 15000);
-  try {
-    const res = await fetch(`${base}?${params}`, {
-      signal: controller.signal,
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) throw new Error("read failed");
-    return (await res.json()) as { kind?: string; result?: unknown };
-  } finally {
-    clearTimeout(timer);
-  }
+async function read(base: string, params: URLSearchParams, controller: AbortController, onRetry: () => void) {
+  const { response, body } = await readPrivateJson(`${base}?${params}`, {
+    signal: controller.signal,
+    timeoutMs: 15000,
+    retryOnce: true,
+    onRetry,
+  });
+  if (!response.ok)
+    throw new PrivateReadFailure(
+      response.status === 403 ? "forbidden" : response.status === 404 ? "not_found" : "network",
+    );
+  if (!body || typeof body !== "object") throw new PrivateReadFailure("invalid_response");
+  return body as { kind?: string; result?: unknown };
+}
+function failure(error: unknown, fallback: string) {
+  if (error instanceof PrivateReadFailure && error.code === "forbidden")
+    return "記事の利用権限を確認してください。編集中の入力はこの画面に残っています。";
+  if (error instanceof PrivateReadFailure && error.code === "timeout")
+    return "読み取りに時間がかかっています。入力は残っています。接続を確認して再読み込みしてください。";
+  if (error instanceof PrivateReadFailure && error.code === "not_found")
+    return "選んだ記事・版が見つかりません。履歴を更新して選び直してください。入力は残っています。";
+  return fallback;
 }
 
 export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => void) {
@@ -74,6 +83,8 @@ export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => v
   const [choice, setChoice] = useState(selected ? { revision: selected.revision, title: selected.title } : null);
   const [loading, setLoading] = useState(false),
     [listing, setListing] = useState(false);
+  const [retrying, setRetrying] = useState(false),
+    [listRetrying, setListRetrying] = useState(false);
   const [error, setError] = useState(""),
     [listError, setListError] = useState("");
   const version = useRef(0),
@@ -97,6 +108,7 @@ export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => v
     onSelect();
     setTarget(value);
     setError("");
+    setRetrying(false);
     if (value === "none") {
       setChoice(null);
       setSelected(null);
@@ -120,15 +132,17 @@ export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => v
     const controller = new AbortController();
     request.current = controller;
     try {
-      const result = await read(base, new URLSearchParams({ revision: String(revision) }), controller);
+      const result = await read(base, new URLSearchParams({ revision: String(revision) }), controller, () => {
+        if (ticket === version.current) setRetrying(true);
+      });
       if (ticket !== version.current) return;
       if (result.kind !== "revision" || !validSnapshot(result.result) || result.result.revision !== revision)
         throw new Error("invalid revision");
       setSelected(result.result);
       setChoice({ revision, title: result.result.title });
-    } catch {
+    } catch (error) {
       if (ticket === version.current)
-        setError("選んだ版を取得できませんでした。入力は残っています。再読み込みしてください。");
+        setError(failure(error, "選んだ版を取得できませんでした。入力は残っています。再読み込みしてください。"));
     } finally {
       if (ticket === version.current) setLoading(false);
     }
@@ -138,19 +152,22 @@ export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => v
     pageRequest.current?.abort();
     setListing(true);
     setListError("");
+    setListRetrying(false);
     attempted.current = { page, query: text };
     const controller = new AbortController();
     pageRequest.current = controller;
     try {
-      const result = await read(base, new URLSearchParams({ page: String(page), q: text }), controller);
+      const result = await read(base, new URLSearchParams({ page: String(page), q: text }), controller, () => {
+        if (ticket === pageVersion.current) setListRetrying(true);
+      });
       if (ticket !== pageVersion.current) return;
       if (result.kind !== "history" || !validHistory(result.result)) throw new Error("invalid history");
       setData(result.result);
       const normalized = result.result.filters.query;
       setQuery((current) => (current === text ? normalized : current));
-    } catch {
+    } catch (error) {
       if (ticket === pageVersion.current)
-        setListError("履歴を取得できませんでした。前回の一覧を表示しています。入力は残っています。");
+        setListError(failure(error, "履歴を取得できませんでした。前回の一覧を表示しています。入力は残っています。"));
     } finally {
       if (ticket === pageVersion.current) setListing(false);
     }
@@ -159,6 +176,7 @@ export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => v
     ++pageVersion.current;
     pageRequest.current?.abort();
     setData(next);
+    setListRetrying(false);
     setQuery(next.filters.query);
     setListing(false);
     setListError("");
@@ -175,6 +193,8 @@ export function useArticleHistory(workspace: ArticleWorkspace, onSelect: () => v
     selected,
     loading,
     listing,
+    retrying,
+    listRetrying,
     error,
     listError,
     choices,
@@ -213,7 +233,11 @@ export function ArticleHistoryControls({ history }: { history: ReturnType<typeof
         </button>
       </search>
       <p className="text-xs text-slate-500" role="status">
-        {history.listing ? "履歴を取得中…" : `全${data.total}版 / ${data.filters.page} / ${data.pageCount}ページ`}
+        {history.listing
+          ? history.listRetrying
+            ? "接続を再確認しています…"
+            : "履歴を取得中…"
+          : `全${data.total}版 / ${data.filters.page} / ${data.pageCount}ページ`}
       </p>
       {!data.items.length && !history.listing && (
         <p className="text-sm">条件に合う版はありません。現在の下書き・掲載版・選択中の版は引き続き確認できます。</p>

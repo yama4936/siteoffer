@@ -482,7 +482,7 @@ export function ArticleEditor({
               <div className="min-w-0">
                 <h4 className="mb-2 text-sm font-semibold">反映する内容</h4>
                 {history.loading ? (
-                  <p role="status">第{target}版を確認中…</p>
+                  <p role="status">{history.retrying ? `第${target}版の接続を再確認中…` : `第${target}版を確認中…`}</p>
                 ) : history.error ? (
                   <div role="alert" className="rounded border border-amber-200 p-4 text-sm text-amber-800">
                     <p>{history.error}</p>

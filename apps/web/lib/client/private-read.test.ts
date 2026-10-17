@@ -74,7 +74,15 @@ describe("private GET read lifecycle", () => {
     const body = new Promise((resolve) => {
       finish = resolve;
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: () => body }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "Content-Type": "application/json" }),
+        json: () => body,
+      }),
+    );
     const request = readPrivate("/ops/work-queue", controller.signal);
     const outcome = expect(request).rejects.toBeDefined();
     await Promise.resolve();
