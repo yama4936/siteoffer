@@ -2,8 +2,8 @@
 import { ArrowRight, CheckCheck, CircleAlert, Clock3, RefreshCw, Search } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
-import { refreshOpsWorkQueueAction } from "@/app/work-queue-actions";
 import { useMaterialUpdates } from "@/components/materials/updates";
+import { readWorkQueue } from "@/lib/client/material-reads";
 import type { WorkGroup, WorkItem } from "@/lib/ops/work-queue";
 
 export function WorkQueue({
@@ -30,7 +30,7 @@ export function WorkQueue({
   const [pending, setPending] = useState(false),
     gate = useRef(false);
   const [manualError, setManualError] = useState<{ message: string; checkedAt: number | null } | null>(null);
-  const load = useCallback(() => refreshOpsWorkQueueAction(), []);
+  const load = useCallback((signal?: AbortSignal) => readWorkQueue(signal), []);
   const updates = useMaterialUpdates({ snapshot: data, load, apply: setData, editing: null, paused: pending });
   async function refresh() {
     if (gate.current) return;

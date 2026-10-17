@@ -2,14 +2,11 @@
 import type { ImageSubmissionView } from "@siteoffer/core";
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
-import {
-  compareImageSubmissionAction,
-  refreshImageSubmissionsAction,
-  reviewCustomerImageAction,
-} from "@/app/image-submission-actions";
+import { reviewCustomerImageAction } from "@/app/image-submission-actions";
 import { Button } from "@/components/ui/button";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
+import { readImageSubmission, readOpsImages } from "@/lib/client/material-reads";
 import { fmtDate } from "@/lib/ops/format";
 import { OperatorMaterialComparison, useComparisonFocus } from "./comparison";
 import { MATERIALS_CHANGED_EVENT, materialStatus, rightsLabels, useMaterialNavigationGuard } from "./shared";
@@ -50,7 +47,7 @@ export function OperatorMaterials({
   useComparisonFocus(formRef, comparison !== null, formVersion, "decision");
   // Background reads detect changes but preserve the exact version being reviewed.
   const loadUpdates = useCallback(
-    () => refreshImageSubmissionsAction({ companyId, assetId, page, pendingOnly }),
+    (signal: AbortSignal) => readOpsImages({ companyId, assetId, page, pendingOnly }, signal),
     [companyId, assetId, page, pendingOnly],
   );
   const updates = useMaterialUpdates({
@@ -67,7 +64,7 @@ export function OperatorMaterials({
     updates.invalidate();
     setBusy(true);
     try {
-      const r = await refreshImageSubmissionsAction({ companyId, assetId, page, pendingOnly });
+      const r = await readOpsImages({ companyId, assetId, page, pendingOnly });
       if (r.ok) {
         setListing(r.result);
         updates.acknowledge();
@@ -120,7 +117,7 @@ export function OperatorMaterials({
           .filter((item) => !pendingOnly || item.status === "pending"),
       }));
       try {
-        const fresh = await refreshImageSubmissionsAction({ companyId, assetId, page, pendingOnly });
+        const fresh = await readOpsImages({ companyId, assetId, page, pendingOnly });
         if (fresh.ok) {
           setListing(fresh.result);
           updates.acknowledge();
@@ -140,8 +137,8 @@ export function OperatorMaterials({
     updates.invalidate();
     setBusy(true);
     try {
-      const result = await compareImageSubmissionAction(item.companyId, item.assetId);
-      if (result.ok) setComparison({ before: item, latest: result.item, note });
+      const result = await readImageSubmission("ops", item.companyId, item.assetId);
+      if (result.ok) setComparison({ before: item, latest: result.result, note });
       else setMessage(result.message);
     } catch {
       setMessage("最新の内容を取得できませんでした。確認メモは残っています。再試行してください。");

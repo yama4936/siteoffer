@@ -2,17 +2,13 @@
 import type { listPublicationMaterials, PublicationMaterialItem } from "@siteoffer/core";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  confirmPublicationMaterialAction,
-  getPublicationMaterialAction,
-  refreshPublicationMaterialsAction,
-  reopenPublicationMaterialAction,
-} from "@/app/publication-material-actions";
+import { confirmPublicationMaterialAction, reopenPublicationMaterialAction } from "@/app/publication-material-actions";
 import { useMaterialNavigationGuard } from "@/components/materials/shared";
 import { MaterialUpdatesStatus, useMaterialUpdates } from "@/components/materials/updates";
 import { Button } from "@/components/ui/button";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
+import { readPublicationMaterial, readPublicationMaterials } from "@/lib/client/material-reads";
 import { fmtDate } from "@/lib/ops/format";
 import { PublicationMaterialBatch } from "./publication-material-batch";
 import { PublicationMaterialReopenBatch } from "./publication-material-reopen-batch";
@@ -42,7 +38,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     [batchNote, setBatchNote] = useState("");
   const gate = useRef(false),
     heading = useRef<HTMLHeadingElement>(null);
-  const load = useCallback(() => refreshPublicationMaterialsAction(filter), [filter]);
+  const load = useCallback((signal?: AbortSignal) => readPublicationMaterials(filter, signal), [filter]);
   const updates = useMaterialUpdates({
     snapshot: listing,
     load,
@@ -77,12 +73,12 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     setBusy(true);
     try {
       if (selected) {
-        const current = await getPublicationMaterialAction(selected.deploymentId);
+        const current = await readPublicationMaterial(selected.deploymentId);
         if (!current.ok) {
           setMessage(current.message);
           return;
         }
-        reset(current.item, true);
+        reset(current.result, true);
         setMessage("最新状態を取得しました。メモを保持しています。対応内容と確認チェックを選び直してください。");
       }
       const r = await load();

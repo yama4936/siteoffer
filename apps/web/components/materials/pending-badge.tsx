@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { pendingMaterialCountAction } from "@/app/image-submission-actions";
+import { readMaterialCount } from "@/lib/client/material-reads";
 import { MATERIALS_CHANGED_EVENT } from "./shared";
 export function PendingMaterialBadge({ initialCount }: { initialCount: number | null }) {
   const [count, setCount] = useState(initialCount),
@@ -12,6 +12,7 @@ export function PendingMaterialBadge({ initialCount }: { initialCount: number | 
       running = false,
       queued = false,
       version = 0;
+    let controller: AbortController | null = null;
     async function update() {
       if (disposed || document.visibilityState === "hidden") return;
       if (running) {
@@ -24,16 +25,19 @@ export function PendingMaterialBadge({ initialCount }: { initialCount: number | 
       }
       running = true;
       const expected = version;
+      const request = new AbortController();
+      controller = request;
       try {
-        const r = await pendingMaterialCountAction();
-        if (!disposed && version === expected) {
+        const r = await readMaterialCount(request.signal);
+        if (!disposed && version === expected && !request.signal.aborted) {
           setFailed(!r.ok);
-          if (r.ok) setCount(r.count);
+          if (r.ok) setCount(r.result);
         }
       } catch {
-        if (!disposed && version === expected) setFailed(true);
+        if (!disposed && version === expected && !request.signal.aborted) setFailed(true);
       } finally {
         running = false;
+        if (controller === request) controller = null;
         if (queued && !disposed) {
           queued = false;
           void update();
@@ -42,20 +46,31 @@ export function PendingMaterialBadge({ initialCount }: { initialCount: number | 
     }
     function changed() {
       version++;
+      controller?.abort();
       void update();
     }
-    const wake = () => void update();
+    const wake = () => {
+      if (document.visibilityState === "hidden") controller?.abort();
+      else void update();
+    };
+    const offline = () => {
+      controller?.abort();
+      setFailed(true);
+    };
     const timer = window.setInterval(wake, 30000);
     window.addEventListener(MATERIALS_CHANGED_EVENT, changed);
     window.addEventListener("focus", wake);
     window.addEventListener("online", wake);
+    window.addEventListener("offline", offline);
     document.addEventListener("visibilitychange", wake);
     return () => {
       disposed = true;
+      controller?.abort();
       window.clearInterval(timer);
       window.removeEventListener(MATERIALS_CHANGED_EVENT, changed);
       window.removeEventListener("focus", wake);
       window.removeEventListener("online", wake);
+      window.removeEventListener("offline", offline);
       document.removeEventListener("visibilitychange", wake);
     };
   }, [initialCount]);

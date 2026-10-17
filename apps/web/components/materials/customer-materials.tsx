@@ -3,13 +3,12 @@ import type { CustomerImageDetails, ImageSubmissionView } from "@siteoffer/core"
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  compareImageSubmissionAction,
-  refreshCustomerImagesAction,
   reviseCustomerImageAction,
   submitCustomerImageAction,
   withdrawCustomerImageAction,
 } from "@/app/image-submission-actions";
 import { Button } from "@/components/ui/button";
+import { readCustomerImages, readImageSubmission } from "@/lib/client/material-reads";
 import { fmtDate } from "@/lib/ops/format";
 import { CustomerMaterialComparison, useComparisonFocus } from "./comparison";
 import type { MaterialDraft } from "./merge";
@@ -51,7 +50,10 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
   useComparisonFocus(formRef, comparison !== null, formVersion, "label");
   // Keep the editable snapshot stable across Server Action revalidation.
   // Route keys remount on scope changes; background reads preserve an open editor.
-  const loadUpdates = useCallback(() => refreshCustomerImagesAction(companyId, page), [companyId, page]);
+  const loadUpdates = useCallback(
+    (signal: AbortSignal) => readCustomerImages(companyId, page, signal),
+    [companyId, page],
+  );
   const updates = useMaterialUpdates({
     snapshot: listing,
     load: loadUpdates,
@@ -84,7 +86,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
     updates.invalidate();
     setBusy(true);
     try {
-      const r = await refreshCustomerImagesAction(companyId, page);
+      const r = await readCustomerImages(companyId, page);
       if (r.ok) {
         setListing(r.result);
         updates.acknowledge();
@@ -141,7 +143,7 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
             : previous.items.map((item) => (item.assetId === r.item.assetId ? r.item : item)),
       }));
       try {
-        const latest = await refreshCustomerImagesAction(companyId, page);
+        const latest = await readCustomerImages(companyId, page);
         if (latest.ok) {
           setListing(latest.result);
           updates.acknowledge();
@@ -161,8 +163,8 @@ export function CustomerMaterials({ companyId, page, initial }: { companyId: str
     updates.invalidate();
     setBusy(true);
     try {
-      const result = await compareImageSubmissionAction(companyId, item.assetId);
-      if (result.ok) setComparison({ before: item, latest: result.item, draft });
+      const result = await readImageSubmission("customer", companyId, item.assetId);
+      if (result.ok) setComparison({ before: item, latest: result.result, draft });
       else setMessage(result.message);
     } catch {
       setMessage("最新の内容を取得できませんでした。入力は残っています。再試行してください。");

@@ -3,10 +3,6 @@ import {
   ContentError,
   confirmPublicationMaterialBatch,
   confirmPublicationMaterialCheck,
-  getPublicationMaterial,
-  getPublicationMaterialBatch,
-  getPublicationReopenBatch,
-  listPublicationMaterials,
   PublicationMaterialError,
   reopenPublicationMaterialBatch,
   reopenPublicationMaterialCheck,
@@ -20,20 +16,6 @@ function failure(e: unknown) {
   if (e instanceof ContentError || e instanceof PublicationMaterialError)
     return { ok: false as const, message: e.message };
   throw new Error("処理結果を確認できません。同じ受付で再試行してください。");
-}
-export async function refreshPublicationMaterialsAction(input: Parameters<typeof listPublicationMaterials>[2]) {
-  try {
-    return { ok: true as const, result: await listPublicationMaterials(getDb(), await getCurrentActor(), input) };
-  } catch (e) {
-    return failure(e);
-  }
-}
-export async function getPublicationMaterialAction(id: string) {
-  try {
-    return { ok: true as const, item: await getPublicationMaterial(getDb(), await getCurrentActor(), id) };
-  } catch (e) {
-    return failure(e);
-  }
 }
 export async function confirmPublicationMaterialAction(input: Parameters<typeof confirmPublicationMaterialCheck>[3]) {
   try {
@@ -56,13 +38,6 @@ export async function reopenPublicationMaterialAction(input: Parameters<typeof r
   }
 }
 
-export async function getPublicationMaterialBatchAction(id: string) {
-  try {
-    return { ok: true as const, preview: await getPublicationMaterialBatch(getDb(), await getCurrentActor(), id) };
-  } catch (e) {
-    return failure(e);
-  }
-}
 export async function confirmPublicationMaterialBatchAction(
   input: Parameters<typeof confirmPublicationMaterialBatch>[3],
 ) {
@@ -76,13 +51,6 @@ export async function confirmPublicationMaterialBatchAction(
   }
 }
 
-export async function getPublicationReopenBatchAction(id: string) {
-  try {
-    return { ok: true as const, preview: await getPublicationReopenBatch(getDb(), await getCurrentActor(), id) };
-  } catch (e) {
-    return failure(e);
-  }
-}
 export async function reopenPublicationMaterialBatchAction(
   input: Parameters<typeof reopenPublicationMaterialBatch>[3],
 ) {

@@ -14,7 +14,7 @@ export function useMaterialUpdates<T>({
   paused,
 }: {
   snapshot: T;
-  load: () => Promise<ReadResult<T>>;
+  load: (signal: AbortSignal) => Promise<ReadResult<T>>;
   apply: (value: T) => void;
   editing: string | null;
   paused: boolean;
@@ -24,12 +24,14 @@ export function useMaterialUpdates<T>({
     [notice, setNotice] = useState(""),
     [checkedAt, setCheckedAt] = useState<number | null>(null);
   const generation = useRef(0),
-    flight = useRef<{ startedAt: number } | null>(null),
+    flight = useRef<{ startedAt: number; controller: AbortController } | null>(null),
     resume = useRef<(() => void) | null>(null);
   // Call synchronously before a manual read, mutation or editor switch. A background
   // response may still arrive, but it must not replace the user's newer state.
   const invalidate = useCallback(() => {
     generation.current += 1;
+    flight.current?.controller.abort();
+    flight.current = null;
   }, []);
   const acknowledge = useCallback(() => {
     setError("");
@@ -40,6 +42,7 @@ export function useMaterialUpdates<T>({
   useEffect(() => {
     if (paused) return;
     let active = true;
+    let owned: AbortController | null = null;
     const version = generation.current;
     const current = () => active && generation.current === version;
     async function check() {
@@ -52,13 +55,15 @@ export function useMaterialUpdates<T>({
         if (Date.now() - flight.current.startedAt >= 15000) setError(delayed);
         return;
       }
-      flight.current = { startedAt: Date.now() };
+      const request = { startedAt: Date.now(), controller: new AbortController() };
+      flight.current = request;
+      owned = request.controller;
       const slow = window.setTimeout(() => {
         if (current()) setError(delayed);
       }, 15000);
       try {
-        const result = await load();
-        if (!current()) return;
+        const result = await load(request.controller.signal);
+        if (!current() || request.controller.signal.aborted) return;
         if (!result.ok) {
           setError(`確認状況を取得できません。${result.message}`);
           return;
@@ -76,20 +81,30 @@ export function useMaterialUpdates<T>({
           setNotice("新しい確認状況を反映しました。");
         }
       } catch {
-        if (current()) setError(unavailable);
+        if (current() && !request.controller.signal.aborted) setError(unavailable);
       } finally {
         window.clearTimeout(slow);
-        flight.current = null;
+        if (flight.current === request) flight.current = null;
         // A newer editor/state may have ignored this response. Resume its read
         // once the old request settles instead of waiting for another interval.
         if (!current()) resume.current?.();
       }
     }
     const offline = () => {
-      if (current()) setError(unavailable);
+      if (current()) {
+        setError(unavailable);
+        cancel();
+      }
     };
+    function cancel() {
+      owned?.abort();
+      if (flight.current?.controller === owned) flight.current = null;
+    }
     const timer = window.setInterval(() => void check(), 30000);
-    const wake = () => void check();
+    const wake = () => {
+      if (document.visibilityState === "hidden") cancel();
+      else void check();
+    };
     resume.current = wake;
     window.addEventListener("focus", wake);
     window.addEventListener("online", wake);
@@ -98,6 +113,7 @@ export function useMaterialUpdates<T>({
     if (waiting && !editing) void check();
     return () => {
       active = false;
+      cancel();
       if (resume.current === wake) resume.current = null;
       window.clearInterval(timer);
       window.removeEventListener("focus", wake);

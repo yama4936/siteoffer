@@ -3,12 +3,8 @@ import {
   authorizeCustomerImageSubmission,
   ContentError,
   type CustomerImageDetails,
-  countPendingImageSubmissions,
-  getImageSubmission,
   ImageAssetError,
   ImageSubmissionError,
-  listCustomerImages,
-  listImageSubmissionsForOps,
   reviewCustomerImage,
   reviseCustomerImage,
   submitCustomerImage,
@@ -88,41 +84,6 @@ export async function reviewCustomerImageAction(input: Parameters<typeof reviewC
     const result = await reviewCustomerImage(getDb(), systemClock, await getCurrentActor(), input);
     refresh(input.companyId);
     return { ok: true as const, ...result };
-  } catch (e) {
-    return failure(e);
-  }
-}
-export async function refreshCustomerImagesAction(companyId: string, page: number) {
-  try {
-    return { ok: true as const, result: await listCustomerImages(getDb(), await getCurrentActor(), companyId, page) };
-  } catch (e) {
-    return failure(e);
-  }
-}
-export async function refreshImageSubmissionsAction(input: {
-  companyId?: string;
-  assetId?: string;
-  page: number;
-  pendingOnly: boolean;
-}) {
-  try {
-    return { ok: true as const, result: await listImageSubmissionsForOps(getDb(), await getCurrentActor(), input) };
-  } catch (e) {
-    return failure(e);
-  }
-}
-
-export async function compareImageSubmissionAction(companyId: string, assetId: string) {
-  try {
-    return { ok: true as const, item: await getImageSubmission(getDb(), await getCurrentActor(), companyId, assetId) };
-  } catch (e) {
-    return failure(e);
-  }
-}
-
-export async function pendingMaterialCountAction() {
-  try {
-    return { ok: true as const, count: await countPendingImageSubmissions(getDb(), await getCurrentActor()) };
   } catch (e) {
     return failure(e);
   }
