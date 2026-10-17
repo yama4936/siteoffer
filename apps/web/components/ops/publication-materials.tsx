@@ -15,6 +15,7 @@ import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { fmtDate } from "@/lib/ops/format";
 import { PublicationMaterialBatch } from "./publication-material-batch";
+import { PublicationMaterialReopenBatch } from "./publication-material-reopen-batch";
 
 type Listing = Awaited<ReturnType<typeof listPublicationMaterials>>;
 type Filter = NonNullable<Parameters<typeof listPublicationMaterials>[2]>;
@@ -36,6 +37,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     [url, setUrl] = useState(filter.deploymentId ? (initial.items[0]?.url ?? "") : ""),
     [confirmed, setConfirmed] = useState(false);
   const [countsStale, setCountsStale] = useState(false);
+  const [batchMode, setBatchMode] = useState<"confirm" | "reopen">("confirm");
   const [batchAnchor, setBatchAnchor] = useState<string | null>(null),
     [batchNote, setBatchNote] = useState("");
   const gate = useRef(false),
@@ -152,22 +154,23 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
       setBusy(false);
     }
   }
-  function openBatch(item: PublicationMaterialItem) {
+  function openBatch(item: PublicationMaterialItem, mode: "confirm" | "reopen" = "confirm") {
     if (gate.current || pending || batchAnchor) return;
     const same = selected?.deploymentId === item.deploymentId;
     if (selected && !same && note && !window.confirm("入力中のメモを破棄して別の公開先を開きますか？")) return;
     updates.invalidate();
+    setBatchMode(mode);
     setBatchNote(same ? note : "");
     reset(null);
     setBatchAnchor(item.deploymentId);
     setMessage("");
   }
-  function batchSaved(items: PublicationMaterialItem[], replayed: boolean) {
+  function batchSaved(items: PublicationMaterialItem[], replayed: boolean, mode: "confirm" | "reopen" = "confirm") {
     updates.invalidate();
     setBusy(true);
     setBatchAnchor(null);
     setMessage(
-      `${replayed ? "受付済みの結果を確認しました" : "まとめて確認記録を保存しました"}。対象${items.length}件の現在の状態：確認済み${items.filter((r) => r.state === "resolved").length}件、対応が必要${items.filter((r) => r.state === "pending").length}件。外部サイトの公開・停止はこの操作では行いません。`,
+      `${replayed ? "受付済みの結果を確認しました" : mode === "reopen" ? "まとめて確認を取り消しました" : "まとめて確認記録を保存しました"}。対象${items.length}件の現在の状態：確認済み${items.filter((r) => r.state === "resolved").length}件、対応が必要${items.filter((r) => r.state === "pending").length}件、素材の問題なし${items.filter((r) => r.state === "clear").length}件。外部サイトの公開・停止はこの操作では行いません。`,
     );
     setCountsStale(true);
     setListing((previous) => {
@@ -262,17 +265,28 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
         </p>
       )}
       {pending && !busy && <Button onClick={() => void send(pending)}>同じ受付で再試行</Button>}
-      {batchAnchor && (
-        <PublicationMaterialBatch
-          deploymentId={batchAnchor}
-          initialNote={batchNote}
-          onClose={() => {
-            updates.invalidate();
-            setBatchAnchor(null);
-          }}
-          onSaved={batchSaved}
-        />
-      )}
+      {batchAnchor &&
+        (batchMode === "confirm" ? (
+          <PublicationMaterialBatch
+            deploymentId={batchAnchor}
+            initialNote={batchNote}
+            onClose={() => {
+              updates.invalidate();
+              setBatchAnchor(null);
+            }}
+            onSaved={batchSaved}
+          />
+        ) : (
+          <PublicationMaterialReopenBatch
+            deploymentId={batchAnchor}
+            initialNote={batchNote}
+            onClose={() => {
+              updates.invalidate();
+              setBatchAnchor(null);
+            }}
+            onSaved={(items, replayed) => batchSaved(items, replayed, "reopen")}
+          />
+        ))}
       {selected && (
         <section className="rounded-xl border-2 border-blue-200 bg-white p-5" aria-label="公開後の対応を記録">
           <h2 tabIndex={-1} ref={heading} className="text-lg font-semibold">
@@ -508,6 +522,15 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
                   onClick={() => openBatch(item)}
                 >
                   同じ公開先をまとめて確認
+                </Button>
+              )}
+              {item.state === "resolved" && item.relatedConfirmedBatch > 1 && (
+                <Button
+                  variant="outline"
+                  disabled={busy || pending !== null || batchAnchor !== null}
+                  onClick={() => openBatch(item, "reopen")}
+                >
+                  同じ一括確認をまとめてやり直す
                 </Button>
               )}
               <Link className="text-sm text-blue-700 underline" href={`/ops/delivery?focus=${item.deliveryId}`}>

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
 import { createdAt, id } from "./common.ts";
 import { users } from "./users.ts";
@@ -17,5 +18,12 @@ export const auditEvents = pgTable(
     after: jsonb("after"),
     createdAt: createdAt(),
   },
-  (t) => [index("audit_events_target").on(t.targetType, t.targetId)],
+  (t) => [
+    index("audit_events_target").on(t.targetType, t.targetId),
+    index("audit_events_publication_batch")
+      .on(t.actorId, sql`(${t.after}->>'batchRequestId')`)
+      .where(
+        sql`${t.action}='publication_material.confirm' and ${t.targetType}='deployment' and ${t.after}->>'batchRequestId' is not null`,
+      ),
+  ],
 );

@@ -1,0 +1,1 @@
+CREATE INDEX "audit_events_publication_batch" ON "audit_events" USING btree ("actor_id",("after"->>'batchRequestId')) WHERE "audit_events"."action"='publication_material.confirm' and "audit_events"."target_type"='deployment' and "audit_events"."after"->>'batchRequestId' is not null;

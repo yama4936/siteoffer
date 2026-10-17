@@ -23,8 +23,10 @@ import {
   confirmPublicationMaterialCheck,
   getPublicationMaterial,
   getPublicationMaterialBatch,
+  getPublicationReopenBatch,
   listPublicationMaterials,
   publicationUrl,
+  reopenPublicationMaterialBatch,
   reopenPublicationMaterialCheck,
 } from "./publication-materials.ts";
 
@@ -489,4 +491,204 @@ it("50件を超える場合は全体件数と表示上限を明示し、指定�
   expect(p.items).toHaveLength(50);
   expect(p.items.some((x) => x.deploymentId === last.dep.id)).toBe(true);
   expect(new Set(p.items.map((x) => x.deploymentId)).size).toBe(50);
+});
+
+async function confirmedBatchFixture() {
+  const s = await batchFixture();
+  await confirmPublicationMaterialBatch(db, clock, s.ops, s.input);
+  const preview = await getPublicationReopenBatch(db, s.ops, s.first.dep.id);
+  return {
+    ...s,
+    reopenPreview: preview,
+    reopenInput: {
+      deploymentId: s.first.dep.id,
+      scope: preview.scope,
+      items: preview.items
+        .filter((r) => r.eligible)
+        .map((r) => ({ deploymentId: r.deploymentId, revision: r.revision })),
+      requestId: randomUUID(),
+      note: "公開先の確認に誤りがあったため、選択した確認記録を再確認へ戻します。",
+      confirmed: true,
+    },
+  };
+}
+it("既存の一括監査から対象をたどり、別の運営担当者でも理由付きでまとめて再確認へ戻せる", async () => {
+  const s = await confirmedBatchFixture(),
+    peer = await setup();
+  expect(s.reopenPreview.items).toHaveLength(3);
+  expect(s.reopenPreview.items.every((r) => r.eligible)).toBe(true);
+  expect(await getPublicationMaterial(db, s.ops, s.first.dep.id)).toMatchObject({
+    relatedConfirmedBatch: 3,
+    check: { batchRequestId: s.input.requestId },
+  });
+  expect(await db.select().from(auditEvents)).toHaveLength(3);
+  const r = await reopenPublicationMaterialBatch(db, clock, peer.ops, s.reopenInput);
+  expect(
+    r.items.every((x) => x.state === "pending" && x.check?.revision === 2 && x.check.revokedBy === peer.ops.userId),
+  ).toBe(true);
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(2);
+  const events = await db.select().from(auditEvents);
+  expect(events).toHaveLength(6);
+  expect(
+    events
+      .filter((e) => e.action === "publication_material.reopen")
+      .every((e) => (e.after as { sourceBatchRequestId: string }).sourceBatchRequestId === s.input.requestId),
+  ).toBe(true);
+  expect(
+    await reopenPublicationMaterialBatch(db, clock, peer.ops, {
+      ...s.reopenInput,
+      items: [...s.reopenInput.items].reverse(),
+    }),
+  ).toMatchObject({ replayed: true });
+});
+it("後から個別に確認し直した対象は履歴に表示するが、一括取り消しでは変更しない", async () => {
+  const s = await confirmedBatchFixture(),
+    item = s.reopenPreview.items[1]!;
+  await reopenPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: item.deploymentId,
+    revision: 1,
+    requestId: randomUUID(),
+    note: "この版だけ先に確認をやり直すことにしました。",
+    confirmed: true,
+  });
+  const fresh = await getPublicationMaterial(db, s.ops, item.deploymentId);
+  await confirmPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: item.deploymentId,
+    revision: 2,
+    fingerprint: fresh.fingerprint,
+    requestId: randomUUID(),
+    outcome: "site_offline",
+    replacementId: null,
+    observedUrl: s.input.observedUrl,
+    note: "この版を個別に確認し直して公開停止を確認しました。",
+    confirmed: true,
+  });
+  const p = await getPublicationReopenBatch(db, s.ops, s.first.dep.id);
+  expect(p.items).toHaveLength(3);
+  expect(p.items.filter((r) => r.eligible)).toHaveLength(2);
+  expect(p.items.find((r) => r.deploymentId === item.deploymentId)!.reason).toContain("別の確認操作");
+  await expect(reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput)).rejects.toThrow("変わりました");
+  await reopenPublicationMaterialBatch(db, clock, s.ops, {
+    ...s.reopenInput,
+    requestId: randomUUID(),
+    items: p.items.filter((r) => r.eligible).map((r) => ({ deploymentId: r.deploymentId, revision: r.revision })),
+  });
+  expect(await getPublicationMaterial(db, s.ops, item.deploymentId)).toMatchObject({
+    state: "resolved",
+    check: { revision: 3, note: "この版を個別に確認し直して公開停止を確認しました。" },
+  });
+});
+it("履歴の取得後に1件が再確認へ戻された場合、一括操作は残りも変更しない", async () => {
+  const s = await confirmedBatchFixture(),
+    item = s.reopenPreview.items[1]!;
+  await reopenPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: item.deploymentId,
+    revision: 1,
+    requestId: randomUUID(),
+    note: "別の担当者がこの版を先に再確認へ戻しました。",
+    confirmed: true,
+  });
+  await expect(reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput)).rejects.toThrow("変わりました");
+  expect(await s.listing()).toMatchObject({ resolved: 2, pending: 1 });
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(2);
+});
+it("同じ公開先でも別の一括確認は取り消し対象に混ぜず、同じ受付番号を使った別担当者とも混ぜない", async () => {
+  const s = await confirmedBatchFixture();
+  await s.publish(5);
+  await s.publish(6);
+  const next = await s.publish(7, { snapshot: [] });
+  const p = await getPublicationMaterialBatch(
+    db,
+    s.ops,
+    (await s.listing()).items.find((r) => r.version === 5)!.deploymentId,
+  );
+  const r = await confirmPublicationMaterialBatch(db, clock, s.ops, {
+    ...s.input,
+    deploymentId: p.deploymentId,
+    scope: p.scope,
+    items: p.items.map((i) => ({ deploymentId: i.deploymentId, revision: i.revision, fingerprint: i.fingerprint })),
+    requestId: randomUUID(),
+    replacementId: next.dep.id,
+  });
+  await expect(
+    reopenPublicationMaterialBatch(db, clock, s.ops, {
+      ...s.reopenInput,
+      items: [s.reopenInput.items[0]!, { deploymentId: r.items[0]!.deploymentId, revision: 1 }],
+    }),
+  ).rejects.toThrow("変わりました");
+  const other = await batchFixture();
+  await confirmPublicationMaterialBatch(db, clock, other.ops, { ...other.input, requestId: s.input.requestId });
+  expect((await getPublicationReopenBatch(db, s.ops, s.first.dep.id)).items).toHaveLength(3);
+});
+it("再確認への一括取り消しも、途中の監査失敗では全件を巻き戻す", async () => {
+  const s = await confirmedBatchFixture();
+  await db.execute(
+    sql`CREATE FUNCTION fail_later_reopen_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='publication_material.reopen' AND (SELECT count(*) FROM audit_events WHERE action='publication_material.reopen')>0 THEN RAISE EXCEPTION 'audit unavailable'; END IF; RETURN NEW; END $$`,
+  );
+  await db.execute(
+    sql`CREATE TRIGGER fail_later_reopen_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fail_later_reopen_audit()`,
+  );
+  await expect(reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput)).rejects.toThrow();
+  expect(await s.listing()).toMatchObject({ resolved: 3, pending: 0 });
+  expect(await db.select().from(auditEvents)).toHaveLength(3);
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(1);
+});
+it("取り消し後に新たに確認した記録は、古い取り消しの再送で再度戻さない", async () => {
+  const s = await confirmedBatchFixture();
+  const r = await reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput),
+    item = r.items[0]!;
+  await confirmPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: item.deploymentId,
+    revision: 2,
+    fingerprint: item.fingerprint,
+    requestId: randomUUID(),
+    outcome: "site_offline",
+    replacementId: null,
+    observedUrl: s.input.observedUrl,
+    note: "最新の確認で元サイトの公開停止が反映されたことを確認しました。",
+    confirmed: true,
+  });
+  const replay = await reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput);
+  expect(replay.replayed).toBe(true);
+  expect(replay.items.find((r) => r.deploymentId === item.deploymentId)).toMatchObject({
+    state: "resolved",
+    check: { revision: 3 },
+  });
+  expect(await db.select().from(auditEvents)).toHaveLength(7);
+});
+it("一括取り消しも理由・明示チェック・確認版・運営権限を要求する", async () => {
+  const s = await confirmedBatchFixture();
+  for (const patch of [
+    { items: [] },
+    { items: s.reopenInput.items.slice(0, 1) },
+    { items: [s.reopenInput.items[0]!, s.reopenInput.items[0]!] },
+    { scope: "0".repeat(64) },
+    { confirmed: false },
+    { note: "短い" },
+    { requestId: s.input.requestId },
+  ])
+    await expect(reopenPublicationMaterialBatch(db, clock, s.ops, { ...s.reopenInput, ...patch })).rejects.toThrow();
+  for (const actor of [null, s.sales, { kind: "ops" as const, userId: s.sales.userId }]) {
+    await expect(getPublicationReopenBatch(db, actor, s.first.dep.id)).rejects.toThrow();
+    await expect(reopenPublicationMaterialBatch(db, clock, actor, s.reopenInput)).rejects.toThrow();
+  }
+  await db.update(users).set({ status: "suspended" }).where(eq(users.id, s.ops.userId));
+  await expect(reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput)).rejects.toThrow("有効な運営");
+});
+it("素材の問題が解消済みなら確認を取り消しても新しい対応待ちを作らない", async () => {
+  const s = await confirmedBatchFixture();
+  await db.update(imageAssets).set({ allowProduction: true }).where(eq(imageAssets.id, s.asset.id));
+  const r = await reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput);
+  expect(r.items.every((i) => i.state === "clear" && i.check?.revokedAt !== null)).toBe(true);
+  expect(await s.listing()).toMatchObject({ pending: 0, resolved: 0 });
+});
+
+it("元の一括受付と一致しない欠けた履歴では、残った記録だけを取り消さない", async () => {
+  const s = await confirmedBatchFixture();
+  const target = s.reopenPreview.items[1]!.deploymentId;
+  await db.delete(auditEvents).where(eq(auditEvents.targetId, target));
+  await expect(getPublicationReopenBatch(db, s.ops, s.first.dep.id)).rejects.toThrow("元の受付内容");
+  await expect(reopenPublicationMaterialBatch(db, clock, s.ops, s.reopenInput)).rejects.toThrow("元の受付内容");
+  expect(await s.listing()).toMatchObject({ resolved: 3, pending: 0 });
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(1);
 });

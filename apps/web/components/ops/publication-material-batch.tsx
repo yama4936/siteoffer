@@ -1,13 +1,11 @@
 "use client";
 import type { getPublicationMaterialBatch, PublicationMaterialItem } from "@siteoffer/core";
 import { useEffect, useRef, useState } from "react";
-import {
-  confirmPublicationMaterialBatchAction,
-  getPublicationMaterialBatchAction,
-} from "@/app/publication-material-actions";
+import { confirmPublicationMaterialBatchAction } from "@/app/publication-material-actions";
 import { Button } from "@/components/ui/button";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
+import { readPublicationPreview } from "@/lib/client/publication-preview";
 import { fmtDate } from "@/lib/ops/format";
 
 type Preview = Awaited<ReturnType<typeof getPublicationMaterialBatch>>;
@@ -32,12 +30,15 @@ export function PublicationMaterialBatch({
     [outcome, setOutcome] = useState(""),
     [replacement, setReplacement] = useState(""),
     [confirmed, setConfirmed] = useState(false);
+  const readController = useRef<AbortController | null>(null);
   const gate = useRef(false),
     heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    readController.current = controller;
     heading.current?.focus();
-    void getPublicationMaterialBatchAction(deploymentId)
+    void readPublicationPreview(deploymentId, "confirm", controller.signal)
       .then((r) => {
         if (!active) return;
         if (r.ok) setPreview(r.preview);
@@ -48,17 +49,23 @@ export function PublicationMaterialBatch({
       })
       .finally(() => {
         if (active) setBusy(false);
+        if (readController.current === controller) readController.current = null;
       });
     return () => {
       active = false;
+      controller.abort();
+      readController.current?.abort();
     };
   }, [deploymentId]);
   async function refresh() {
     if (gate.current || pending) return;
     gate.current = true;
     setBusy(true);
+    const controller = new AbortController();
+    readController.current = controller;
     try {
-      const r = await getPublicationMaterialBatchAction(deploymentId);
+      const r = await readPublicationPreview(deploymentId, "confirm", controller.signal);
+      if (controller.signal.aborted) return;
       if (r.ok) {
         setPreview(r.preview);
         setIds([]);
@@ -68,10 +75,11 @@ export function PublicationMaterialBatch({
         setMessage("最新状態を取得しました。メモを保持しています。対象と対応内容を選び直してください。");
       } else setMessage(r.message);
     } catch {
-      setMessage("対象を取得できませんでした。入力は保持しています。");
+      if (!controller.signal.aborted) setMessage("対象を取得できませんでした。入力は保持しています。");
     } finally {
       gate.current = false;
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
+      if (readController.current === controller) readController.current = null;
     }
   }
   async function send(input: Payload) {
@@ -130,7 +138,7 @@ export function PublicationMaterialBatch({
         </Button>
         <Button
           variant="outline"
-          disabled={busy || pending !== null}
+          disabled={pending !== null}
           onClick={() => {
             if (note && !window.confirm("未送信のメモを破棄して閉じますか？")) return;
             onClose();

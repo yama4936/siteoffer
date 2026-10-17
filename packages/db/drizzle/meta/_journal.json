@@ -267,6 +267,13 @@
       "when": 1792195523731,
       "tag": "0037_easy_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1792208392400,
+      "tag": "0038_smooth_mathemanic",
+      "breakpoints": true
     }
   ]
 }

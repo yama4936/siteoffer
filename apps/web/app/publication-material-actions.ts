@@ -5,8 +5,10 @@ import {
   confirmPublicationMaterialCheck,
   getPublicationMaterial,
   getPublicationMaterialBatch,
+  getPublicationReopenBatch,
   listPublicationMaterials,
   PublicationMaterialError,
+  reopenPublicationMaterialBatch,
   reopenPublicationMaterialCheck,
   systemClock,
 } from "@siteoffer/core";
@@ -66,6 +68,26 @@ export async function confirmPublicationMaterialBatchAction(
 ) {
   try {
     const result = await confirmPublicationMaterialBatch(getDb(), systemClock, await getCurrentActor(), input);
+    revalidatePath("/ops/publication-checks");
+    revalidatePath("/ops");
+    return { ok: true as const, ...result };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+export async function getPublicationReopenBatchAction(id: string) {
+  try {
+    return { ok: true as const, preview: await getPublicationReopenBatch(getDb(), await getCurrentActor(), id) };
+  } catch (e) {
+    return failure(e);
+  }
+}
+export async function reopenPublicationMaterialBatchAction(
+  input: Parameters<typeof reopenPublicationMaterialBatch>[3],
+) {
+  try {
+    const result = await reopenPublicationMaterialBatch(getDb(), systemClock, await getCurrentActor(), input);
     revalidatePath("/ops/publication-checks");
     revalidatePath("/ops");
     return { ok: true as const, ...result };

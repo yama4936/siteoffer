@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   approvals,
+  auditEvents,
   companies,
   contracts,
   type DbOrTx,
@@ -14,7 +15,7 @@ import {
   publicationMaterialChecks,
   users,
 } from "@siteoffer/db";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Actor } from "./common/actor.ts";
 import type { Clock } from "./common/clock.ts";
 import { recordEvent } from "./common/events.ts";
@@ -55,6 +56,11 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
       build: { id: deliveryBuilds.id, snapshot: deliveryBuilds.imageAssetSnapshot },
       check: publicationMaterialChecks,
       checkedByName: users.displayName,
+      batchRequestId: sql<string | null>`(select ae."after"->>'batchRequestId' from ${auditEvents} ae
+        where ae.target_type='deployment' and ae.target_id=${deployments.id}::text
+          and ae.action='publication_material.confirm' and ae.actor_id=${publicationMaterialChecks.checkedBy}
+          and ae."after"->>'revision'=${publicationMaterialChecks.revision}::text
+        order by ae.created_at desc,ae.id desc limit 1)`,
     })
     .from(deployments)
     .innerJoin(deliveries, eq(deliveries.id, deployments.deliveryId))
@@ -163,6 +169,7 @@ async function scan(db: DbOrTx, filter: { companyId?: string; deliveryId?: strin
         ? {
             ...row.check,
             checkedByName: row.checkedByName ?? "運営",
+            batchRequestId: uuid(row.batchRequestId) ? row.batchRequestId : null,
             checkedAt: row.check.checkedAt.toISOString(),
             revokedAt: row.check.revokedAt?.toISOString() ?? null,
           }
@@ -195,6 +202,14 @@ function candidates(item: ScanItem, rows: ScanItem[]) {
 function view(item: ScanItem, rows: ScanItem[]) {
   return {
     ...item,
+    relatedConfirmedBatch: item.check?.batchRequestId
+      ? rows.filter(
+          (r) =>
+            r.state === "resolved" &&
+            r.check?.checkedBy === item.check?.checkedBy &&
+            r.check?.batchRequestId === item.check?.batchRequestId,
+        ).length
+      : 0,
     relatedPending: item.url ? rows.filter((r) => samePublicationTarget(item, r) && r.state === "pending").length : 0,
     replacements: candidates(item, rows).map((r) => ({
       deploymentId: r.deploymentId,
@@ -436,6 +451,34 @@ export async function confirmPublicationMaterialCheck(
     return { item: view(fresh.find((r) => r.deploymentId === item.deploymentId)!, fresh), replayed: false };
   });
 }
+async function writeReopen(
+  tx: DbOrTx,
+  clock: Clock,
+  who: Extract<Actor, { kind: "ops" }>,
+  item: ScanItem,
+  note: string,
+  reopenBatchRequestId?: string,
+  sourceBatchRequestId?: string,
+) {
+  const patch = {
+    revision: item.check!.revision + 1,
+    revokedAt: clock.now(),
+    revokedBy: who.userId,
+    revocationNote: note,
+  };
+  await tx
+    .update(publicationMaterialChecks)
+    .set(patch)
+    .where(eq(publicationMaterialChecks.deploymentId, item.deploymentId));
+  await recordEvent(tx, clock, {
+    actor: who,
+    action: "publication_material.reopen",
+    targetType: "deployment",
+    targetId: item.deploymentId,
+    before: item.check,
+    after: reopenBatchRequestId ? { ...patch, reopenBatchRequestId, sourceBatchRequestId } : patch,
+  });
+}
 export async function reopenPublicationMaterialCheck(
   db: DbOrTx,
   clock: Clock,
@@ -455,27 +498,10 @@ export async function reopenPublicationMaterialCheck(
     if (prior) return { item: view(item, rows), replayed: true };
     if (item.state !== "resolved" || item.check?.revision !== input.revision)
       throw new PublicationMaterialError("対応状況が変わりました。最新の一覧を確認してください");
-    const patch = {
-      revision: input.revision + 1,
-      revokedAt: clock.now(),
-      revokedBy: target.who.userId,
-      revocationNote: note,
-    };
-    await tx
-      .update(publicationMaterialChecks)
-      .set(patch)
-      .where(eq(publicationMaterialChecks.deploymentId, item.deploymentId));
+    await writeReopen(tx, clock, target.who, item, note);
     await tx
       .insert(publicationCheckOperations)
       .values({ ...op, deploymentId: item.deploymentId, createdAt: clock.now() });
-    await recordEvent(tx, clock, {
-      actor: target.who,
-      action: "publication_material.reopen",
-      targetType: "deployment",
-      targetId: item.deploymentId,
-      before: item.check,
-      after: patch,
-    });
     const fresh = await scan(tx, { deliveryId: target.deliveryId });
     return { item: view(fresh.find((r) => r.deploymentId === item.deploymentId)!, fresh), replayed: false };
   });
@@ -612,6 +638,193 @@ export async function confirmPublicationMaterialBatch(
     await tx
       .insert(publicationCheckOperations)
       .values({ ...op, deploymentId: anchor.deploymentId, createdAt: clock.now() });
+    const fresh = await scan(tx, { deliveryId: target.deliveryId });
+    return {
+      items: entries.map((e) => view(fresh.find((r) => r.deploymentId === e.deploymentId)!, fresh)),
+      replayed: false,
+    };
+  });
+}
+
+async function reopenBatchContext(db: DbOrTx, rows: ScanItem[], deploymentId: string) {
+  const anchor = rows.find((r) => r.deploymentId === deploymentId);
+  if (!anchor?.check?.batchRequestId || anchor.state !== "resolved")
+    throw new PublicationMaterialError("現在も確認済みの一括確認の記録を選んでください");
+  const actorId = anchor.check.checkedBy,
+    batchRequestId = anchor.check.batchRequestId;
+  const history = await db
+    .select({ targetId: auditEvents.targetId, after: auditEvents.after })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.actorId, actorId),
+        eq(auditEvents.action, "publication_material.confirm"),
+        eq(auditEvents.targetType, "deployment"),
+        sql`${auditEvents.after}->>'batchRequestId'=${batchRequestId}`,
+      ),
+    )
+    .limit(PUBLICATION_BATCH_LIMIT + 1);
+  if (history.length < 2 || history.length > PUBLICATION_BATCH_LIMIT)
+    throw new PublicationMaterialError("一括確認の履歴を照合できません。個別に確認してください");
+  const members = history
+    .map((event) => {
+      const data = event.after as Record<string, unknown> | null;
+      if (
+        !uuid(event.targetId) ||
+        !data ||
+        data.deploymentId !== event.targetId ||
+        !Number.isSafeInteger(data.revision) ||
+        Number(data.revision) < 1 ||
+        data.checkedBy !== actorId ||
+        data.batchRequestId !== batchRequestId ||
+        typeof data.observedUrl !== "string" ||
+        typeof data.fingerprint !== "string" ||
+        !/^[0-9a-f]{64}$/.test(data.fingerprint)
+      )
+        throw new PublicationMaterialError("一括確認の履歴を照合できません。個別に確認してください");
+      const current = rows.find((r) => r.deploymentId === event.targetId),
+        originalRevision = Number(data.revision);
+      const eligible =
+        !!current &&
+        samePublicationTarget(anchor, current) &&
+        current.url === publicationUrl(data.observedUrl) &&
+        current.state === "resolved" &&
+        current.check?.revision === originalRevision &&
+        current.check.checkedBy === actorId &&
+        current.check.batchRequestId === batchRequestId;
+      return {
+        deploymentId: event.targetId,
+        originalRevision,
+        originalFingerprint: String(data.fingerprint),
+        revision: current?.check?.revision ?? 0,
+        version: current?.version ?? 0,
+        state: current?.state ?? "unavailable",
+        eligible,
+        reason: eligible
+          ? "この一括確認のままです"
+          : !current
+            ? "現在の記録を取得できません"
+            : current.check?.revokedAt
+              ? "すでに再確認へ戻されています"
+              : "別の確認操作や公開先の変更があります",
+      };
+    })
+    .sort((a, b) => a.deploymentId.localeCompare(b.deploymentId));
+  if (new Set(members.map((r) => r.deploymentId)).size !== members.length)
+    throw new PublicationMaterialError("一括確認の履歴を照合できません。個別に確認してください");
+  // Verify the entire original member set against its immutable successful receipt.
+  const [source] = await db
+    .select()
+    .from(publicationCheckOperations)
+    .where(eq(publicationCheckOperations.key, hash([actorId, batchRequestId.toLowerCase()])));
+  const sourcePayload = [
+    "confirm_batch",
+    source?.deploymentId,
+    hash([anchor.deliveryId, anchor.environment, publicationUrl(anchor.check.observedUrl)]),
+    members.map((r) => ({
+      deploymentId: r.deploymentId,
+      revision: r.originalRevision - 1,
+      fingerprint: r.originalFingerprint,
+    })),
+    anchor.check.outcome,
+    anchor.check.replacementId,
+    publicationUrl(anchor.check.observedUrl),
+    anchor.check.note,
+  ];
+  if (!source || source.payloadHash !== hash(sourcePayload))
+    throw new PublicationMaterialError("元の受付内容と履歴が一致しません。個別に確認してください");
+  return {
+    deploymentId: anchor.deploymentId,
+    companyName: anchor.companyName,
+    deliveryId: anchor.deliveryId,
+    environment: anchor.environment,
+    url: anchor.check.observedUrl,
+    checkedByName: anchor.check.checkedByName,
+    checkedAt: anchor.check.checkedAt,
+    originalNote: anchor.check.note,
+    batchRequestId,
+    scope: hash([actorId, batchRequestId, members.map((r) => [r.deploymentId, r.originalRevision])]),
+    items: [...members].sort((a, b) => a.version - b.version || a.deploymentId.localeCompare(b.deploymentId)),
+  };
+}
+export async function getPublicationReopenBatch(db: DbOrTx, actor: Actor | null, deploymentId: string) {
+  if (!uuid(deploymentId)) throw new PublicationMaterialError("公開記録を確認してください");
+  return db.transaction(async (tx) => {
+    await activeContentOperator(tx, actor);
+    const [hint] = await tx
+      .select({ deliveryId: deployments.deliveryId })
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+    if (!hint) throw new PublicationMaterialError("公開記録が見つかりません");
+    return reopenBatchContext(tx, await scan(tx, { deliveryId: hint.deliveryId }), deploymentId);
+  });
+}
+export async function reopenPublicationMaterialBatch(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor | null,
+  input: {
+    deploymentId: string;
+    scope: string;
+    items: { deploymentId: string; revision: number }[];
+    requestId: string;
+    note: string;
+    confirmed: boolean;
+  },
+) {
+  const note = validateNote(input?.note);
+  if (
+    input.confirmed !== true ||
+    !Array.isArray(input.items) ||
+    input.items.length < 2 ||
+    input.items.length > PUBLICATION_BATCH_LIMIT ||
+    typeof input.scope !== "string" ||
+    !/^[0-9a-f]{64}$/.test(input.scope)
+  )
+    throw new PublicationMaterialError("2〜50件の対象、再確認の理由とチェックを確認してください");
+  const entries = input.items
+    .map((r) => {
+      if (!r || !uuid(r.deploymentId) || !Number.isSafeInteger(r.revision) || r.revision < 1)
+        throw new PublicationMaterialError("対象と確認版を確認してください");
+      return { deploymentId: r.deploymentId.toLowerCase(), revision: r.revision };
+    })
+    .sort((a, b) => a.deploymentId.localeCompare(b.deploymentId));
+  if (new Set(entries.map((r) => r.deploymentId)).size !== entries.length)
+    throw new PublicationMaterialError("同じ公開記録を複数回選択できません");
+  return db.transaction(async (tx) => {
+    const target = await lockTarget(tx, actor, input.deploymentId),
+      op = operation(target.who.userId, input.requestId, [
+        "reopen_batch",
+        input.deploymentId.toLowerCase(),
+        input.scope,
+        entries,
+        note,
+      ]);
+    const prior = await receipt(tx, op),
+      rows = await scan(tx, { deliveryId: target.deliveryId });
+    if (prior)
+      return {
+        items: entries
+          .map((e) => rows.find((r) => r.deploymentId === e.deploymentId))
+          .filter((r): r is ScanItem => !!r)
+          .map((r) => view(r, rows)),
+        replayed: true,
+      };
+    const context = await reopenBatchContext(tx, rows, input.deploymentId.toLowerCase());
+    if (context.scope !== input.scope)
+      throw new PublicationMaterialError("一括確認の対象が変わりました。最新の履歴を確認してください");
+    const selected = entries.map((entry) => {
+      const member = context.items.find((r) => r.deploymentId === entry.deploymentId),
+        current = rows.find((r) => r.deploymentId === entry.deploymentId);
+      if (!member?.eligible || member.revision !== entry.revision || !current)
+        throw new PublicationMaterialError("確認状況が変わりました。最新の履歴を確認してください");
+      return current;
+    });
+    for (const item of selected)
+      await writeReopen(tx, clock, target.who, item, note, input.requestId, context.batchRequestId);
+    await tx
+      .insert(publicationCheckOperations)
+      .values({ ...op, deploymentId: input.deploymentId, createdAt: clock.now() });
     const fresh = await scan(tx, { deliveryId: target.deliveryId });
     return {
       items: entries.map((e) => view(fresh.find((r) => r.deploymentId === e.deploymentId)!, fresh)),
