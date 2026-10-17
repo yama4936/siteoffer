@@ -1,4 +1,4 @@
-import { type Actor, type Clock, err, ok } from "@siteoffer/core";
+import { type Actor, assessWorkerIntake, type Clock, err, INTAKE_PHASE_LABELS, ok } from "@siteoffer/core";
 import {
   companies,
   contracts,
@@ -17,50 +17,21 @@ import { currentDeliveryBuild, deliveryNeedsAttention, deliveryProcessingState }
 import { isUuid } from "./form";
 
 export const PROCESSING_LIMIT = 20;
-export const WORKER_FRESH_MS = 45_000;
-export const PHASE_LABELS = {
-  starting: "受付を起動中",
-  designs: "サイト制作の依頼を受付中",
-  images: "画像生成を処理中",
-  discovery: "収集の依頼を受付中",
-  deliveries: "納品サイトを制作中",
-  idle: "次の受付を待機中",
-  error: "受付処理でエラー",
-} as const;
+export { WORKER_FRESH_MS } from "@siteoffer/core";
+export const PHASE_LABELS = INTAKE_PHASE_LABELS;
 type Runtime = typeof workerRuntimes.$inferSelect;
 export function assessWorkers(rows: Runtime[], now: Date) {
   const workers = rows.map((w) => {
-    const age = now.getTime() - w.heartbeatAt.getTime();
-    // A future heartbeat cannot establish liveness when machine clocks disagree.
-    const live = age >= -5000 && age <= WORKER_FRESH_MS;
+    const intake = assessWorkerIntake(w, now);
+    const { known } = intake;
     const c = w.capabilities;
-    const known =
-      c?.version === 1 &&
-      typeof c.discoveryOnly === "boolean" &&
-      typeof c.imageConfigured === "boolean" &&
-      Number.isFinite(c.intakeIntervalMs) &&
-      c.intakeIntervalMs > 0;
-    const p = w.progress;
-    const phase = p && Object.hasOwn(PHASE_LABELS, p.phase) ? p.phase : null;
-    const since = p?.since ? new Date(p.since) : null;
     return {
+      ...intake,
       id: w.id,
-      live,
       heartbeatAt: w.heartbeatAt.toISOString(),
       image: !!known && !c!.discoveryOnly && c!.imageConfigured,
       site: !!known && !c!.discoveryOnly,
-      known,
       generator: known && ["mock", "codex"].includes(c!.generator) ? c!.generator : "unknown",
-      phase,
-      since: since && Number.isFinite(since.getTime()) ? since.toISOString() : null,
-      intakeOverdue:
-        live &&
-        !!known &&
-        (phase === "idle" || phase === "starting") &&
-        !!since &&
-        Number.isFinite(since.getTime()) &&
-        now.getTime() - since.getTime() > Math.max(60_000, c!.intakeIntervalMs * 3),
-      completedAt: p?.completedAt && Number.isFinite(Date.parse(p.completedAt)) ? p.completedAt : null,
       mode: w.mode === "demo" ? "demo" : "standard",
     };
   });
@@ -89,7 +60,7 @@ export function assessWorkers(rows: Runtime[], now: Date) {
                 ? "画像生成の設定がある制作ワーカーが必要です。用意した画像の取り込みは利用できます。"
                 : "収集専用のワーカーではサイトを制作できません。制作を有効にしたワーカーが必要です。",
           };
-    if (capable.every((w) => w.phase === "error" || w.intakeOverdue))
+    if (capable.every((w) => (kind === "image" ? w.imageAttention : w.dispatchAttention || w.deliveryAttention)))
       return {
         status: "attention",
         label: "受付処理を確認してください",

@@ -177,18 +177,35 @@ export default async function ProcessingPage({
           ワーカー {d.workers.findIndex((item) => item.id === w.id) + 1} ·{" "}
           {w.live ? "稼働通知あり" : "通知を確認できません"} · {w.mode === "demo" ? "デモ起動" : "通常起動"}
         </p>
-        <p className="mt-1">
-          {!w.live && "最終記録："}
-          {w.phase ? PHASE_LABELS[w.phase] : "受付状況は未通知"}
-          {w.since ? `（${fmtDate(w.since)}から）` : ""}
-        </p>
-        {w.intakeOverdue && (
+        {w.lanes ? (
+          <ul className="mt-3 grid gap-3 sm:grid-cols-3" aria-label="処理別の受付状況">
+            {w.lanes.map((lane) => (
+              <li key={lane.key} className="rounded-lg bg-muted/40 p-3">
+                <p className="font-medium">{lane.label}</p>
+                <p className={`mt-1 ${lane.attention ? "text-amber-800" : "text-muted-foreground"}`}>
+                  {lane.phase ? PHASE_LABELS[lane.phase] : "受付状況は未通知"}
+                </p>
+                {lane.intakeOverdue && <p className="mt-1 text-amber-800">受付待機の更新が遅れています</p>}
+                <p className="mt-1 text-xs text-muted-foreground">状態の更新 {fmtDate(lane.since)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">最終完了 {fmtDate(lane.completedAt)}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1">
+            {!w.live && "最終記録："}
+            {w.phase ? PHASE_LABELS[w.phase] : "受付状況は未通知"}
+            {w.since ? `（${fmtDate(w.since)}から）` : ""}
+          </p>
+        )}
+        {!w.lanes && w.intakeOverdue && (
           <p className="mt-1 text-amber-800">
             稼働通知はありますが、受付待機の更新が遅れています。ワーカーのログを確認してください。
           </p>
         )}
         <p className="mt-1 text-xs text-muted-foreground">
-          最終通知 {fmtDate(w.heartbeatAt)} · 最終受付完了 {fmtDate(w.completedAt)}
+          最終通知 {fmtDate(w.heartbeatAt)}
+          {!w.lanes && ` · 最終受付完了 ${fmtDate(w.completedAt)}`}
         </p>
       </li>
     );
@@ -251,7 +268,7 @@ export default async function ProcessingPage({
       <section className="mb-6 rounded-xl border bg-card p-5" aria-label="ワーカーの通知">
         <h2 className="font-semibold">ワーカーの通知</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          稼働通知だけで個別の処理成功は判断できません。通知があっても受付処理が長く変わらない場合は、管理者が処理履歴とログを確認してください。
+          収集・制作依頼の受付、画像生成、納品制作はそれぞれ進みます。稼働通知と処理別の状態を確認してください。個別の成功は各依頼の結果で確認できます。
         </p>
         <ul className="mt-4 space-y-4">{d.workers.filter((w) => w.live).map(workerNotice)}</ul>
         {!d.workers.some((w) => w.live) && <p className="mt-4 text-sm">現在の稼働通知がありません。</p>}

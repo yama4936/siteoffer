@@ -14,21 +14,31 @@ const actor = { kind: "system", job: "design-worker" } as const;
 /** Durable claim before API call. A crash is surfaced, never silently charged again. */
 export async function processDesignJobs(deps: WorkerDeps, provider?: ImageGenerator) {
   const { db, clock } = deps;
+  // Maintenance does not call the provider and must also run when credentials were removed.
+  await db.transaction(async (tx) => {
+    const message = "処理が中断されました。API側の実行状況を確認して新しい版で再実行してください";
+    const interrupted = await tx
+      .update(designVersions)
+      .set({ status: "failed", error: message, finishedAt: clock.now() })
+      .where(
+        and(
+          eq(designVersions.status, "generating"),
+          lt(designVersions.startedAt, new Date(clock.now().getTime() - 10 * 60_000)),
+        ),
+      )
+      .returning({ id: designVersions.id });
+    for (const d of interrupted)
+      await recordEvent(tx, clock, {
+        actor,
+        action: "design.failed",
+        targetType: "design",
+        targetId: d.id,
+        before: { status: "generating" },
+        after: { message, reason: "interrupted" },
+      });
+  });
   // A worker without image credentials must leave queued images for a configured worker.
   if (!provider && !process.env.OPENAI_API_KEY?.trim()) return;
-  await db
-    .update(designVersions)
-    .set({
-      status: "failed",
-      error: "処理が中断されました。API側の実行状況を確認して新しい版で再実行してください",
-      finishedAt: clock.now(),
-    })
-    .where(
-      and(
-        eq(designVersions.status, "generating"),
-        lt(designVersions.startedAt, new Date(clock.now().getTime() - 10 * 60_000)),
-      ),
-    );
   const [candidate] = await db
     .select({ id: designVersions.id })
     .from(designVersions)
@@ -61,10 +71,12 @@ export async function processDesignJobs(deps: WorkerDeps, provider?: ImageGenera
         ? error.message
         : "画像生成が完了しませんでした。通信・利用上限を確認し、新しい版で再実行してください";
     await db.transaction(async (tx) => {
-      await tx
+      const [changed] = await tx
         .update(designVersions)
         .set({ status: "failed", error: message, finishedAt: clock.now() })
-        .where(and(eq(designVersions.id, d.id), eq(designVersions.status, "generating")));
+        .where(and(eq(designVersions.id, d.id), eq(designVersions.status, "generating")))
+        .returning({ id: designVersions.id });
+      if (!changed) return;
       await recordEvent(tx, clock, {
         actor,
         action: "design.failed",

@@ -23,6 +23,15 @@ import { createWorkerRuntime, InMemoryQueue } from "../src/runtime.ts";
 import type { SiteBuilder } from "../src/site-builder.ts";
 
 export const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+export function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
 export const COLLECTED_FIXTURE = path.join(REPO_ROOT, "fixtures/audit/collected/kakuu-koumuten.collected.json");
 const EVALUATION_FIXTURE = path.join(REPO_ROOT, "fixtures/audit/evaluations/kakuu-koumuten.evaluation.json");
 

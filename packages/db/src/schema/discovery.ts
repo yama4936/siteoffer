@@ -56,6 +56,7 @@ export const discoverySources = pgTable(
 );
 
 export type IntakePhase = "starting" | "designs" | "images" | "discovery" | "deliveries" | "idle" | "error";
+export type IntakeLane = "dispatch" | "images" | "deliveries";
 export interface WorkerCapabilities {
   version: 1;
   discoveryOnly: boolean;
@@ -63,11 +64,15 @@ export interface WorkerCapabilities {
   generator: "mock" | "codex" | "unknown";
   intakeIntervalMs: number;
 }
-export interface WorkerProgress {
+export interface WorkerLaneProgress {
   phase: IntakePhase;
   since: string;
   completedAt: string | null;
   lastErrorAt: string | null;
+}
+export interface WorkerProgress extends WorkerLaneProgress {
+  /** Absent on older workers, whose intake tasks ran sequentially. */
+  lanes?: Partial<Record<IntakeLane, WorkerLaneProgress>>;
 }
 
 /** Only public capabilities and liveness; never credentials or connection strings. */

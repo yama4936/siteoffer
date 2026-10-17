@@ -68,7 +68,9 @@ it("real collection has no fake search and collection-only mode queues no audit"
 it("heartbeat reports intake progress independently of process liveness", async () => {
   const stop = await startWorkerHeartbeat(e.deps, "demo", 5000);
   try {
-    await stop.report("images");
+    await stop.report("discovery", "dispatch");
+    await stop.report("images", "images");
+    await stop.report("deliveries", "deliveries");
     const [working] = await e.db.select().from(workerRuntimes);
     expect(working?.capabilities).toMatchObject({
       version: 1,
@@ -76,10 +78,16 @@ it("heartbeat reports intake progress independently of process liveness", async 
       generator: "mock",
       intakeIntervalMs: 5000,
     });
-    expect(working?.progress).toMatchObject({ phase: "images", completedAt: null });
-    await stop.report("error");
+    expect(working?.progress).toMatchObject({ phase: "discovery", completedAt: null });
+    await stop.report("idle", "dispatch");
+    expect((await e.db.select().from(workerRuntimes))[0]?.progress).toMatchObject({
+      phase: "images",
+      lanes: { dispatch: { phase: "idle" }, images: { phase: "images" }, deliveries: { phase: "deliveries" } },
+    });
+    await stop.report("error", "images");
     expect((await e.db.select().from(workerRuntimes))[0]?.progress?.lastErrorAt).toBe(e.clock.now().toISOString());
-    await stop.report("idle");
+    await stop.report("idle", "images");
+    await stop.report("idle", "deliveries");
     expect((await e.db.select().from(workerRuntimes))[0]?.progress).toMatchObject({
       phase: "idle",
       completedAt: e.clock.now().toISOString(),
@@ -87,16 +95,18 @@ it("heartbeat reports intake progress independently of process liveness", async 
   } finally {
     await stop();
   }
-  await stop.report("images");
+  await stop.report("images", "images");
   expect(await e.db.select().from(workerRuntimes)).toHaveLength(0);
 });
 it("intake reports actual phases and collection-only failures without advertising production", async () => {
-  const phases: string[] = [];
-  const report = async (phase: string) => {
-    phases.push(phase);
+  const phases: [string, string][] = [];
+  const report = async (phase: string, lane: string) => {
+    phases.push([phase, lane]);
   };
   await runIntakeOnce(e.deps, createIntakeState(), report);
-  expect(phases).toEqual(["designs", "images", "discovery", "deliveries", "idle"]);
+  expect(phases.filter((p) => p[1] === "dispatch").map((p) => p[0])).toEqual(["designs", "discovery", "idle"]);
+  expect(phases.filter((p) => p[1] === "images").map((p) => p[0])).toEqual(["images", "idle"]);
+  expect(phases.filter((p) => p[1] === "deliveries").map((p) => p[0])).toEqual(["deliveries", "idle"]);
   e.deps.discoveryOnly = true;
   const stop = await startWorkerHeartbeat(e.deps, "standard");
   try {
@@ -115,5 +125,30 @@ it("intake reports actual phases and collection-only failures without advertisin
   };
   phases.length = 0;
   await expect(runIntakeOnce(e.deps, createIntakeState(), report)).rejects.toThrow("test queue failure");
-  expect(phases).toEqual(["discovery", "error"]);
+  expect(phases).toEqual([
+    ["discovery", "dispatch"],
+    ["error", "dispatch"],
+  ]);
+});
+
+it("収集の受付可否は画像のエラーと独立し、受付の停止を画像処理中の通知で隠さない", async () => {
+  const stop = await startWorkerHeartbeat(e.deps, "demo");
+  try {
+    await stop.report("idle", "dispatch");
+    await stop.report("error", "images");
+    expect((await discoveryAvailability(e.db, e.clock))[0]?.ready).toBe(true);
+    await stop.report("error", "dispatch");
+    expect((await discoveryAvailability(e.db, e.clock))[0]).toMatchObject({
+      ready: false,
+      reason: expect.stringContaining("受付エラー"),
+    });
+    await stop.report("idle", "dispatch");
+    e.clock.advance(61_000);
+    await stop.report("images", "images");
+    expect((await discoveryAvailability(e.db, e.clock))[0]?.ready).toBe(false);
+    await stop.report("idle", "dispatch");
+    expect((await discoveryAvailability(e.db, e.clock))[0]?.ready).toBe(true);
+  } finally {
+    await stop();
+  }
 });

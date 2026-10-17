@@ -73,8 +73,8 @@ export async function startWorker(env: Record<string, string | undefined> = proc
   const stop = () => {
     stopping ??= (async () => {
       logger.info("ワーカーを停止する（実行中のジョブの完了を待つ）");
-      await stopHeartbeat?.();
       await intake?.stop();
+      await stopHeartbeat?.();
       await boss.stop({ graceful: true, timeout: 60_000 });
       await close();
     })();

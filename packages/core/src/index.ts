@@ -25,3 +25,4 @@ export * from "./sales-activity/index.ts";
 export * from "./sales-offer/change.ts";
 export * from "./sales-offer/offer.ts";
 export * from "./share-link/index.ts";
+export * from "./worker-intake.ts";

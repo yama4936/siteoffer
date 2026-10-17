@@ -11,7 +11,7 @@ import {
   loadDeliveryInputSource,
   renewDeliveryBuild,
 } from "@siteoffer/core";
-import type { IntakePhase } from "@siteoffer/db";
+import type { IntakeLane, IntakePhase } from "@siteoffer/db";
 import { contentEntries, deliveries, deliveryBuilds, discoveryJobs } from "@siteoffer/db";
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
@@ -312,29 +312,64 @@ async function processDelivery(
   };
 }
 
-/** 受付処理を1回実行する（収集 → 納品の順） */
-export async function runIntakeOnce(
-  deps: WorkerDeps,
-  state: IntakeState,
-  report?: (phase: IntakePhase) => Promise<void>,
-) {
+type IntakeReporter = (phase: IntakePhase, lane: IntakeLane) => Promise<void>;
+
+async function runDispatch(deps: WorkerDeps, state: IntakeState, report?: IntakeReporter) {
+  let failed: { reason: unknown } | undefined;
   try {
     if (!deps.discoveryOnly) {
-      await report?.("designs");
+      await report?.("designs", "dispatch");
       await intakeDesignBuilds(deps);
-      await report?.("images");
-      await processDesignJobs(deps);
     }
-    await report?.("discovery");
+  } catch (reason) {
+    failed = { reason };
+  }
+  try {
+    await report?.("discovery", "dispatch");
     const discovery = await intakeDiscoveryJobs(deps, state);
-    if (!deps.discoveryOnly) await report?.("deliveries");
-    const deliveriesResult = deps.discoveryOnly ? [] : await intakeDeliveries(deps, state);
-    await report?.("idle");
-    return { discovery, deliveries: deliveriesResult };
+    if (failed) throw failed.reason;
+    await report?.("idle", "dispatch");
+    return discovery;
   } catch (error) {
-    await report?.("error");
+    await report?.("error", "dispatch");
     throw error;
   }
+}
+
+async function runImages(deps: WorkerDeps, report?: IntakeReporter) {
+  try {
+    await report?.("images", "images");
+    await processDesignJobs(deps);
+    await report?.("idle", "images");
+  } catch (error) {
+    await report?.("error", "images");
+    throw error;
+  }
+}
+
+async function runDeliveries(deps: WorkerDeps, state: IntakeState, report?: IntakeReporter) {
+  try {
+    await report?.("deliveries", "deliveries");
+    const result = await intakeDeliveries(deps, state);
+    await report?.("idle", "deliveries");
+    return result;
+  } catch (error) {
+    await report?.("error", "deliveries");
+    throw error;
+  }
+}
+
+/** 全処理を一度ずつ開始し、全ての結果を待つ。他の処理を一つの失敗で止めない。 */
+export async function runIntakeOnce(deps: WorkerDeps, state: IntakeState, report?: IntakeReporter) {
+  const [dispatch, images, delivery] = await Promise.allSettled([
+    runDispatch(deps, state, report),
+    deps.discoveryOnly ? Promise.resolve() : runImages(deps, report),
+    deps.discoveryOnly ? Promise.resolve([]) : runDeliveries(deps, state, report),
+  ]);
+  if (dispatch.status === "rejected") throw dispatch.reason;
+  if (images.status === "rejected") throw images.reason;
+  if (delivery.status === "rejected") throw delivery.reason;
+  return { discovery: dispatch.value, deliveries: delivery.value };
 }
 
 export interface IntakeLoop {
@@ -342,37 +377,52 @@ export interface IntakeLoop {
 }
 
 /**
- * 受付処理を一定間隔で動かす。前の回が終わってから次の回を予約する（重ならない）。
- * 例外はログに出して次の回へ進む。
+ * 受付・画像生成・納品制作を独立して動かす。各処理は完了後に次回を予約し、同じ処理は重ねない。
+ * 長時間の生成や一つの例外が他の受付を止めない。停止時は全ての実行中処理の完了を待つ。
  */
 export function startIntakeLoop(
   deps: WorkerDeps,
   intervalMs: number,
   state = createIntakeState(),
-  report?: (phase: IntakePhase) => Promise<void>,
+  report?: IntakeReporter,
 ): IntakeLoop {
   let stopped = false;
-  let timer: NodeJS.Timeout | null = null;
-  let current: Promise<void> | null = null;
-  const tick = () => {
-    timer = null;
-    if (stopped) return;
-    current = runIntakeOnce(deps, state, report)
-      .then(
-        () => {},
-        (e: unknown) => deps.logger.error("受付処理に失敗した", { message: (e as Error).message }),
-      )
-      .finally(() => {
-        current = null;
-        if (!stopped) timer = setTimeout(tick, intervalMs);
-      });
-  };
-  timer = setTimeout(tick, 0);
+  const tasks: {
+    lane: IntakeLane;
+    run: () => Promise<unknown>;
+    timer: NodeJS.Timeout | null;
+    current: Promise<void> | null;
+  }[] = [
+    { lane: "dispatch", run: () => runDispatch(deps, state, report), timer: null, current: null },
+    ...(!deps.discoveryOnly
+      ? [
+          { lane: "images" as const, run: () => runImages(deps, report), timer: null, current: null },
+          { lane: "deliveries" as const, run: () => runDeliveries(deps, state, report), timer: null, current: null },
+        ]
+      : []),
+  ];
+  for (const task of tasks) {
+    const tick = () => {
+      task.timer = null;
+      if (stopped) return;
+      task.current = task
+        .run()
+        .then(
+          () => {},
+          (e: unknown) => deps.logger.error("受付処理に失敗した", { lane: task.lane, message: (e as Error).message }),
+        )
+        .finally(() => {
+          task.current = null;
+          if (!stopped) task.timer = setTimeout(tick, intervalMs);
+        });
+    };
+    task.timer = setTimeout(tick, 0);
+  }
   return {
     async stop() {
       stopped = true;
-      if (timer) clearTimeout(timer);
-      await current;
+      for (const task of tasks) if (task.timer) clearTimeout(task.timer);
+      await Promise.all(tasks.map((task) => task.current));
     },
   };
 }

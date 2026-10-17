@@ -39,6 +39,50 @@ function worker(patch: Partial<typeof workerRuntimes.$inferSelect> = {}) {
   };
 }
 describe("processing assessment", () => {
+  function parallel() {
+    const w = worker();
+    return worker({
+      progress: {
+        ...w.progress!,
+        lanes: {
+          dispatch: { ...w.progress! },
+          images: { ...w.progress! },
+          deliveries: { ...w.progress! },
+        },
+      },
+    });
+  }
+  it("処理別のエラーを分け、長い画像生成で受付の更新遅れを隠さない", () => {
+    const w = parallel();
+    w.progress!.phase = "images";
+    w.progress!.lanes!.images!.phase = "images";
+    w.progress!.lanes!.dispatch!.since = new Date(clock.now().getTime() - 61_000).toISOString();
+    let state = assessWorkers([w], clock.now());
+    expect(state.image.status).toBe("ready");
+    expect(state.site.status).toBe("attention");
+    expect(state.workers[0]?.lanes?.find((l) => l.key === "dispatch")?.intakeOverdue).toBe(true);
+    w.progress!.lanes!.dispatch!.since = clock.now().toISOString();
+    w.progress!.phase = "error";
+    w.progress!.lanes!.images!.phase = "error";
+    state = assessWorkers([w], clock.now());
+    expect(state.image.status).toBe("attention");
+    expect(state.site.status).toBe("ready");
+    w.progress!.lanes!.images!.phase = "idle";
+    w.progress!.lanes!.deliveries!.phase = "error";
+    state = assessWorkers([w], clock.now());
+    expect(state.site.status).toBe("attention");
+    expect(state.image.status).toBe("ready");
+  });
+  it("欠けた処理通知、不正な処理と日時は稼働の証拠にしない", () => {
+    const w = parallel();
+    delete w.progress!.lanes!.images;
+    expect(assessWorkers([w], clock.now()).image.status).toBe("attention");
+    expect(assessWorkers([w], clock.now()).site.status).toBe("ready");
+    w.progress!.lanes!.images = { ...w.progress!, phase: "discovery" };
+    expect(assessWorkers([w], clock.now()).image.status).toBe("attention");
+    w.progress!.lanes!.images = { ...w.progress!, phase: "idle", since: "not-a-date" };
+    expect(assessWorkers([w], clock.now()).image.status).toBe("attention");
+  });
   it("detects an intake loop that stopped while its heartbeat timer remains alive", () => {
     const w = worker();
     w.progress!.since = new Date(clock.now().getTime() - 61000).toISOString();

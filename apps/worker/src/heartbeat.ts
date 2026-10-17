@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { type IntakePhase, type WorkerCapabilities, type WorkerProgress, workerRuntimes } from "@siteoffer/db";
+import {
+  type IntakeLane,
+  type IntakePhase,
+  type WorkerCapabilities,
+  type WorkerLaneProgress,
+  type WorkerProgress,
+  workerRuntimes,
+} from "@siteoffer/db";
 import { eq, lt } from "drizzle-orm";
 import type { WorkerDeps } from "./deps.ts";
 
@@ -13,11 +20,18 @@ export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intak
     generator: kind === "mock" || kind === "codex" ? kind : "unknown",
     intakeIntervalMs,
   };
-  let progress: WorkerProgress = {
+  const initial: WorkerLaneProgress = {
     phase: "starting",
     since: deps.clock.now().toISOString(),
     completedAt: null,
     lastErrorAt: null,
+  };
+  let progress: WorkerProgress = {
+    ...initial,
+    lanes: {
+      dispatch: { ...initial },
+      ...(!deps.discoveryOnly ? { images: { ...initial }, deliveries: { ...initial } } : {}),
+    },
   };
   let stopped = false;
   let pending: Promise<void> = Promise.resolve();
@@ -41,15 +55,28 @@ export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intak
     void enqueue();
   }, 10_000);
   timer.unref();
-  const report = async (phase: IntakePhase) => {
+  const report = async (phase: IntakePhase, lane: IntakeLane) => {
     if (stopped) return;
     const now = deps.clock.now().toISOString();
+    const lanes = {
+      ...progress.lanes,
+      [lane]: {
+        ...progress.lanes?.[lane],
+        phase,
+        since: now,
+        completedAt: phase === "idle" ? now : (progress.lanes?.[lane]?.completedAt ?? null),
+        lastErrorAt: phase === "error" ? now : (progress.lanes?.[lane]?.lastErrorAt ?? null),
+      },
+    };
+    const states = Object.values(lanes);
+    const active = states.find((p) => p.phase === "error") ?? states.find((p) => p.phase !== "idle");
     progress = {
       ...progress,
-      phase,
-      since: now,
-      ...(phase === "idle" ? { completedAt: now } : {}),
-      ...(phase === "error" ? { lastErrorAt: now } : {}),
+      lanes,
+      phase: active?.phase ?? "idle",
+      since: active?.since ?? now,
+      completedAt: active ? progress.completedAt : now,
+      lastErrorAt: phase === "error" ? now : progress.lastErrorAt,
     };
     await enqueue();
   };

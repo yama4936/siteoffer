@@ -9,6 +9,7 @@ import {
   reviewDesign,
 } from "@siteoffer/core";
 import {
+  auditEvents,
   companies,
   designVersions,
   generationJobs,
@@ -24,7 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { intakeDesignBuilds, processDesignJobs } from "../src/design.ts";
 import { executeStep } from "../src/execute.ts";
 import { proposalStep } from "../src/pipeline/proposal.ts";
-import { setupEnv, type TestEnv } from "./helpers.ts";
+import { deferred, setupEnv, type TestEnv } from "./helpers.ts";
 
 let env: TestEnv;
 afterEach(async () => {
@@ -240,4 +241,89 @@ it("an image worker without credentials leaves queued work for a configured work
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+it("画像の設定がなくても中断を確定し、待機中と新しい実行を残して履歴を一度だけ記録する", async () => {
+  const s = await seed();
+  const stale = await createDesign(env.db, env.clock, s.actor, {
+    companyId: s.company.id,
+    auditId: s.audit.id,
+    requestKey: "interrupted-image",
+    brief: DEFAULT_DESIGN_BRIEF,
+    source: "openai",
+    model: "configured-image-model",
+  });
+  await env.db
+    .update(designVersions)
+    .set({
+      status: "generating",
+      startedAt: new Date(env.clock.now().getTime() - 11 * 60_000),
+    })
+    .where(eq(designVersions.id, stale.id));
+  const [queued, recent] = await env.db
+    .insert(designVersions)
+    .values([
+      { ...stale, id: undefined, version: 2, requestKey: "still-queued" },
+      {
+        ...stale,
+        id: undefined,
+        version: 3,
+        requestKey: "still-running",
+        status: "generating" as const,
+        startedAt: env.clock.now(),
+      },
+    ])
+    .returning();
+  vi.stubEnv("OPENAI_API_KEY", "");
+  try {
+    await processDesignJobs(env.deps);
+    await processDesignJobs(env.deps);
+    const rows = await env.db.select().from(designVersions);
+    expect(rows.find((r) => r.id === stale.id)).toMatchObject({
+      status: "failed",
+      finishedAt: env.clock.now(),
+      error: expect.stringContaining("API側"),
+    });
+    expect(rows.find((r) => r.id === queued!.id)?.status).toBe("queued");
+    expect(rows.find((r) => r.id === recent!.id)?.status).toBe("generating");
+    const events = await env.db.select().from(auditEvents).where(eq(auditEvents.action, "design.failed"));
+    expect(events).toMatchObject([{ targetId: stale.id }]);
+    expect(events).toHaveLength(1);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it.each(["success", "failure"])("中断確定後に届いた%sは、状態を戻さず失敗履歴も重ねない", async (outcome) => {
+  const s = await seed();
+  const d = await createDesign(env.db, env.clock, s.actor, {
+    companyId: s.company.id,
+    auditId: s.audit.id,
+    requestKey: "late-image-result",
+    brief: DEFAULT_DESIGN_BRIEF,
+    source: "openai",
+    model: "configured-image-model",
+  });
+  const started = deferred();
+  const result = deferred<{ bytes: Buffer; requestId: string; usage: unknown }>();
+  const work = processDesignJobs(env.deps, {
+    generate: async () => {
+      started.resolve();
+      return result.promise;
+    },
+  });
+  await started.promise;
+  try {
+    env.clock.advance(11 * 60_000);
+    vi.stubEnv("OPENAI_API_KEY", "");
+    await processDesignJobs(env.deps);
+  } finally {
+    if (outcome === "success") result.resolve({ bytes: s.image.png, requestId: "late-request-fixture", usage: {} });
+    else result.reject(new Error("private-late-provider-error"));
+    await work;
+    vi.unstubAllEnvs();
+  }
+  const [stored] = await env.db.select().from(designVersions).where(eq(designVersions.id, d.id));
+  expect(stored).toMatchObject({ status: "failed", imageBase64: null, requestId: null });
+  expect(await env.db.select().from(auditEvents).where(eq(auditEvents.action, "design.failed"))).toHaveLength(1);
 });
