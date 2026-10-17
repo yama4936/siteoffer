@@ -1,6 +1,7 @@
 import { ArrowRight, ExternalLink as ExternalLinkIcon } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CompanyQueue } from "@/components/sales/company-directory-parts";
 import { CompanyWorkspace } from "@/components/sales/company-workspace";
 import { ClaimButton } from "@/components/sales/forms";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
@@ -14,6 +15,7 @@ import {
 } from "@/components/sales/views";
 import { DescriptionList, Muted } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
+import { parseDirectoryQuery } from "@/lib/sales/directory-query";
 import { getImprovementAvailability, getImprovementSource } from "@/lib/sales/improvement";
 import { formatDate, formatDateTime } from "@/lib/sales/labels";
 import { getCompanyDetail, listSellableCompanies } from "@/lib/sales/queries";
@@ -21,9 +23,17 @@ import { requireUser } from "@/lib/session";
 import { claimAction, issueShareAction, revokeShareAction } from "../../../actions";
 
 export const metadata = { title: "提案・サイト比較 | SiteOffer" };
-export default async function CompanyDetailPage({ params }: { params: Promise<{ companyId: string }> }) {
+export default async function CompanyDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ companyId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await requireUser("sales");
   const { companyId } = await params;
+  const query = parseDirectoryQuery(await searchParams);
+  if (!query) notFound();
   const db = getDb();
   const r = await getCompanyDetail(db, user.actor, companyId);
   if (!r.ok) notFound();
@@ -31,8 +41,9 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   const c = d.company;
   const [imp, queue] = await Promise.all([
     getImprovementSource(db, user.actor, companyId),
-    listSellableCompanies(db, user.actor),
+    listSellableCompanies(db, user.actor, query),
   ]);
+  if (!queue.ok) notFound();
   const available = await getImprovementAvailability(imp.ok ? imp.value.artifactDir : null);
   const preview = d.proposal?.hasDemo
     ? `/sales/companies/${c.id}/preview/index.html`
@@ -79,7 +90,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         website: d.sites[0]?.url ?? null,
         preview,
       }}
-      queue={queue.ok ? queue.value : []}
+      queue={<CompanyQueue data={queue.value} current={c} />}
       highlights={d.proposal?.proposalText?.measures.map((m) => m.title) ?? []}
       action={action}
       sharing={sharing}

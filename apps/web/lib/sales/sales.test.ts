@@ -35,7 +35,6 @@ import {
 } from "./operations.ts";
 import {
   getCompanyDetail,
-  getCompanyFilterOptions,
   getMyAssignmentDetail,
   getMyEarnings,
   listMyAssignments,
@@ -116,7 +115,7 @@ describe("企業一覧", () => {
     await company({ pipelineStatus: "on_hold" });
     await company({ pipelineStatus: "in_review" });
     const r = await listSellableCompanies(db, me.actor);
-    expect(r.ok && r.value.map((c) => c.id)).toEqual([sellable.id]);
+    expect(r.ok && r.value.items.map((c) => c.id)).toEqual([sellable.id]);
   });
 
   it("都道府県・市区町村・業種で絞り込める", async () => {
@@ -127,13 +126,15 @@ describe("企業一覧", () => {
     const ids = async (f: Parameters<typeof listSellableCompanies>[2]) => {
       const r = await listSellableCompanies(db, me.actor, f);
       if (!r.ok) throw new Error(r.error);
-      return r.value.map((x) => x.id).sort();
+      return r.value.items.map((x) => x.id).sort();
     };
     expect(await ids({ prefecture: "愛知県" })).toEqual([a.id, b.id].sort());
     expect(await ids({ prefecture: "愛知県", city: "豊橋市" })).toEqual([b.id]);
     expect(await ids({ industry: "歯科" })).toEqual([c.id]);
     expect(await ids({ prefecture: " " })).toHaveLength(3);
-    const opts = await getCompanyFilterOptions(db);
+    const directory = await listSellableCompanies(db, me.actor);
+    if (!directory.ok) throw new Error(directory.error);
+    const opts = directory.value.options;
     expect(opts.prefectures).toEqual(expect.arrayContaining(["愛知県", "岐阜県"]));
     expect(opts.industries).toEqual(expect.arrayContaining(["工務店", "歯科"]));
   });
@@ -148,11 +149,11 @@ describe("企業一覧", () => {
     await claim(other.actor, others.id);
     const r = await listSellableCompanies(db, me.actor);
     if (!r.ok) throw new Error(r.error);
-    const byId = new Map(r.value.map((c) => [c.id, c]));
+    const byId = new Map(r.value.items.map((c) => [c.id, c]));
     expect(byId.get(mine.id)).toMatchObject({ assignment: "mine", myAssignmentId: myA.id });
     expect(byId.get(others.id)).toMatchObject({ assignment: "other", myAssignmentId: null });
     expect(byId.get(refused.id)).toMatchObject({ assignment: "none", suppression: "do_not_contact" });
-    expect(JSON.stringify(r.value)).not.toContain(other.id);
+    expect(JSON.stringify(r.value.items)).not.toContain(other.id);
   });
 
   it("最新の評価の総合点で並べ替え、点数のない企業は末尾に置く", async () => {
@@ -194,17 +195,17 @@ describe("企業一覧", () => {
     const ids = async (sort: "region" | "score_asc" | "score_desc") => {
       const r = await listSellableCompanies(db, me.actor, { sort });
       if (!r.ok) throw new Error(r.error);
-      return r.value.map((x) => x.id);
+      return r.value.items.map((x) => x.id);
     };
     expect(await ids("score_asc")).toEqual([low.id, rescored.id, high.id, unevaluable.id, none.id]);
     expect(await ids("score_desc")).toEqual([high.id, rescored.id, low.id, unevaluable.id, none.id]);
     expect(await ids("region")).toEqual([high.id, low.id, rescored.id, unevaluable.id, none.id]);
     // 指定なしは評価点の低い順
     const def = await listSellableCompanies(db, me.actor, {});
-    expect(def.ok && def.value.map((x) => x.id)).toEqual(await ids("score_asc"));
+    expect(def.ok && def.value.items.map((x) => x.id)).toEqual(await ids("score_asc"));
     const r = await listSellableCompanies(db, me.actor, { sort: "score_asc" });
-    expect(r.ok && r.value[1]).toMatchObject({ totalScore: "55" });
-    expect(r.ok && r.value[4]).toMatchObject({ totalScore: null });
+    expect(r.ok && r.value.items[1]).toMatchObject({ totalScore: "55" });
+    expect(r.ok && r.value.items[4]).toMatchObject({ totalScore: null });
   });
 
   it("未ログインは拒否する", async () => {
@@ -423,7 +424,7 @@ describe("サーバー処理", () => {
     );
     expect(r?.status).toBe("ok");
     const list = await listSellableCompanies(db, other.actor);
-    expect(list.ok && list.value.find((x) => x.id === c.id)).toMatchObject({
+    expect(list.ok && list.value.items.find((x) => x.id === c.id)).toMatchObject({
       suppression: "not_now",
       assignment: "none",
     });

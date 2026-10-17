@@ -1,9 +1,7 @@
 "use client";
-import { ArrowRight, CheckCircle2, ChevronRight, ExternalLink, Monitor, Search, Smartphone } from "lucide-react";
-import Link from "next/link";
+import { ArrowRight, CheckCircle2, ExternalLink, Monitor, Smartphone } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { SitePreview } from "@/components/shell/site-preview";
-import type { CompanyListItem } from "@/lib/sales/queries";
 
 type Props = {
   company: {
@@ -19,7 +17,7 @@ type Props = {
     website: string | null;
     preview: string | null;
   };
-  queue: CompanyListItem[];
+  queue: ReactNode;
   highlights: string[];
   action: ReactNode;
   sharing: ReactNode;
@@ -43,60 +41,9 @@ export function CompanyWorkspace({
 }: Props) {
   const [tab, setTab] = useState("compare");
   const [device, setDevice] = useState("desktop");
-  const [filter, setFilter] = useState("all");
-  const [query, setQuery] = useState("");
-  const visible = queue.filter(
-    (q) => (filter === "all" || q.assignment === "mine") && `${q.name} ${q.city}`.includes(query),
-  );
   return (
     <div className="review-layout sales-case">
-      <aside className="review-queue">
-        <div className="queue-heading">
-          <h1>提案を確認</h1>
-          <span>{queue.length}</span>
-        </div>
-        <label className="queue-search">
-          <Search size={15} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="案件を絞り込む"
-            placeholder="企業名で検索"
-          />
-        </label>
-        <div className="queue-filters">
-          <button type="button" className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>
-            すべて
-          </button>
-          <button type="button" className={filter === "mine" ? "active" : ""} onClick={() => setFilter("mine")}>
-            自分の担当
-          </button>
-        </div>
-        <div className="queue-items">
-          {visible.map((q) => (
-            <Link
-              key={q.id}
-              className={`queue-item ${c.id === q.id ? "selected" : ""}`}
-              href={`/sales/companies/${q.id}`}
-              aria-current={c.id === q.id ? "page" : undefined}
-            >
-              <strong>{q.name}</strong>
-              <small>
-                {q.prefecture} / {q.industry ?? "業種未確認"}
-              </small>
-              <span className="queue-status">
-                <i />
-                {q.assignment === "mine" ? "自分が担当中" : q.assignment === "none" ? "担当者なし" : "他の営業が担当中"}
-              </span>
-            </Link>
-          ))}
-          {!visible.length && <p className="queue-empty">該当する案件はありません。</p>}
-        </div>
-        <Link href="/sales/companies" className="queue-all">
-          案件一覧を見る
-          <ChevronRight size={17} />
-        </Link>
-      </aside>
+      <aside className="review-queue">{queue}</aside>
       <section className="review-content">
         <header className="review-header">
           <div>

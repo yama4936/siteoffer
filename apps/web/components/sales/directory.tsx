@@ -1,26 +1,13 @@
-"use client";
 import { ArrowRight, BriefcaseBusiness, Building2, CheckCircle2, Search } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useState } from "react";
-import type { CompanyListItem } from "@/lib/sales/queries";
+import type { ReactNode } from "react";
+import { DIRECTORY_ASSIGNMENTS, directoryHref } from "@/lib/sales/directory-query";
+import type { CompanyDirectoryPage } from "@/lib/sales/queries";
+import { CompanyPagination } from "./company-directory-parts";
 import { SharedStateBadges } from "./views";
 
-export function CompanyDirectory({
-  items,
-  filters,
-  initialQuery,
-}: {
-  items: CompanyListItem[];
-  filters: ReactNode;
-  initialQuery: string;
-}) {
-  const [query, setQuery] = useState(initialQuery);
-  const [tab, setTab] = useState("all");
-  const visible = items.filter(
-    (c) =>
-      (tab === "all" || c.assignment === tab) &&
-      `${c.name} ${c.prefecture} ${c.city} ${c.industry}`.toLowerCase().includes(query.toLowerCase()),
-  );
+export function CompanyDirectory({ data, filters }: { data: CompanyDirectoryPage; filters: ReactNode }) {
+  const { items, counts, total, pageSize, filters: query } = data;
   return (
     <div className="sales-directory">
       <header className="sales-page-heading">
@@ -35,11 +22,11 @@ export function CompanyDirectory({
       </header>
       <div className="sales-metrics">
         {[
-          { label: "営業候補", value: items.length, icon: Building2 },
-          { label: "担当者なし", value: items.filter((c) => c.assignment === "none").length, icon: CheckCircle2 },
+          { label: "営業候補", value: counts.all, icon: Building2 },
+          { label: "担当者なし", value: counts.none, icon: CheckCircle2 },
           {
             label: "自分が担当中",
-            value: items.filter((c) => c.assignment === "mine").length,
+            value: counts.mine,
             icon: BriefcaseBusiness,
           },
         ].map((m) => (
@@ -59,39 +46,32 @@ export function CompanyDirectory({
       </div>
       <div className="sales-directory-surface">
         <div className="sales-list-toolbar">
-          <div className="review-tabs">
-            {[
-              ["all", "すべて"],
-              ["none", "担当者なし"],
-              ["mine", "自分の担当"],
-            ].map(([id, label]) => (
-              <button
+          <nav className="review-tabs sales-directory-tabs" aria-label="担当状況で絞り込む">
+            {Object.entries(DIRECTORY_ASSIGNMENTS).map(([id, label]) => (
+              <Link
                 key={id}
-                type="button"
-                className={tab === id ? "active" : ""}
-                aria-pressed={tab === id}
-                onClick={() => setTab(id!)}
+                prefetch={false}
+                className={query.assignment === id ? "active" : ""}
+                aria-current={query.assignment === id ? "page" : undefined}
+                href={directoryHref("/sales/companies", {
+                  ...query,
+                  assignment: id as typeof query.assignment,
+                  page: 1,
+                })}
               >
-                {label}
-              </button>
+                {label} <span>{counts[id as typeof query.assignment]}</span>
+              </Link>
             ))}
-          </div>
-          <label className="sales-list-search">
-            <Search size={17} />
-            <input
-              aria-label="企業一覧を検索"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="企業名・地域・業種で検索"
-            />
-          </label>
+          </nav>
         </div>
         <div className="sales-filters">{filters}</div>
         <div className="sales-list-caption">
-          <strong>{visible.length} 件の企業</strong>
-          <span>地域・業種・診断結果から確認できます</span>
+          <strong>
+            {total} 件中 {total ? (query.page - 1) * pageSize + 1 : 0}–{Math.min(query.page * pageSize, total)} 件を表示
+          </strong>
+          <span>件数は検索条件に合う全候補の集計です</span>
         </div>
-        {visible.length ? (
+        {items.length ? (
           <div className="sales-company-table">
             <div className="sales-company-table-head">
               <span>企業・所在地</span>
@@ -100,12 +80,14 @@ export function CompanyDirectory({
               <span>担当状況</span>
               <span>提案</span>
             </div>
-            {visible.map((c) => (
+            {items.map((c) => (
               <div className="sales-company-row" key={c.id}>
                 <div className="sales-company-name">
                   <span className="company-monogram">{c.name.replace(/株式会社|有限会社/g, "").slice(0, 1)}</span>
                   <div>
-                    <Link href={`/sales/companies/${c.id}`}>{c.name}</Link>
+                    <Link prefetch={false} href={directoryHref(`/sales/companies/${c.id}`, query)}>
+                      {c.name}
+                    </Link>
                     <small>{[c.prefecture, c.city].filter(Boolean).join(" ") || "所在地未確認"}</small>
                   </div>
                 </div>
@@ -122,7 +104,11 @@ export function CompanyDirectory({
                     </Link>
                   )}
                 </div>
-                <Link href={`/sales/companies/${c.id}`} className="sales-open-proposal">
+                <Link
+                  prefetch={false}
+                  href={directoryHref(`/sales/companies/${c.id}`, query)}
+                  className="sales-open-proposal"
+                >
                   提案を見る
                   <ArrowRight size={16} />
                 </Link>
@@ -136,6 +122,7 @@ export function CompanyDirectory({
             <p>検索語や絞り込み条件を変更してください。</p>
           </div>
         )}
+        <CompanyPagination data={data} base="/sales/companies" />
       </div>
       <p className="sales-candidate-note">
         掲載企業は、運営が調査して用意した営業候補です。企業からの発注や成約を保証するものではありません。

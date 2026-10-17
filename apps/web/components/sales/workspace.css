@@ -638,3 +638,97 @@
   font-size: 12px;
   line-height: 1.7;
 }
+
+/* Search and totals apply to all candidates, independent of the displayed page. */
+.sales-directory .sales-directory-tabs {
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+.sales-directory-tabs a {
+  padding: 14px 0;
+  border-bottom: 3px solid transparent;
+  color: #70809c;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sales-directory-tabs a.active {
+  color: #3157de;
+  border-bottom-color: #3157de;
+  font-weight: 650;
+}
+.sales-directory-tabs a span {
+  font-variant-numeric: tabular-nums;
+}
+.sales-directory-search-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+.sales-directory-search-row .sales-list-search {
+  width: min(100%, 500px);
+  min-width: 0;
+  margin: 0;
+  min-height: 40px;
+}
+.sales-directory-search-row .sales-list-search input {
+  font-size: 13px;
+}
+.sales-directory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 20px 12px;
+  font-size: 12px;
+}
+.sales-directory-pagination a {
+  color: #3157de;
+  border: 1px solid #dce4ef;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: white;
+}
+.sales-directory-pagination a:focus-visible,
+.sales-directory-tabs a:focus-visible,
+.sales-queue-filters a:focus-visible {
+  outline: 2px solid #3157de;
+  outline-offset: 3px;
+}
+.sales-queue-search {
+  padding: 0 18px 12px;
+}
+.sales-queue-search .queue-search {
+  margin: 0 0 8px;
+}
+.sales-case .sales-queue-search button {
+  border: 1px solid #dce4ef;
+  border-radius: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #3157de;
+  width: 100%;
+}
+.sales-queue-filters {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sales-queue-filters a {
+  padding: 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  color: #70809c;
+}
+.sales-queue-filters a.active {
+  background: #edf2ff;
+  color: #3157de;
+  font-weight: 650;
+}
+.sales-queue-current {
+  padding: 10px 18px;
+  background: #f4f7ff;
+  font-size: 11px;
+  color: #586b90;
+  overflow-wrap: anywhere;
+}

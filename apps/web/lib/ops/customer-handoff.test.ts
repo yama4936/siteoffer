@@ -26,7 +26,7 @@ import {
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { getCompanyDetail, getCompanyFilterOptions, listSellableCompanies } from "../sales/queries";
+import { getCompanyDetail, listSellableCompanies } from "../sales/queries";
 import { makeSellable } from "./commands";
 import { getReviewInbox } from "./review-inbox";
 import { seedTerms, seedUser } from "./test-seed";
@@ -79,8 +79,8 @@ it("契約完了後は別の営業の候補と担当確保から除外し、元�
   const s = await setup();
   must(await confirmContract(db, clock, s.ops, { contractId: s.contract.id }));
   expect(await claimAssignment(db, clock, s.other, s.c.id)).toMatchObject({ ok: false, error: "company_contracted" });
-  expect(must(await listSellableCompanies(db, s.other))).toHaveLength(0);
-  expect((await getCompanyFilterOptions(db)).cities).toHaveLength(0);
+  expect(must(await listSellableCompanies(db, s.other)).items).toHaveLength(0);
+  expect(must(await listSellableCompanies(db, s.other)).options.cities).toHaveLength(0);
   expect(await getCompanyDetail(db, s.other, s.c.id)).toMatchObject({ ok: false, error: "not_found" });
   const detail = must(await getCompanyDetail(db, s.sales, s.c.id));
   expect(detail.showClaim).toBe(false);
@@ -98,7 +98,7 @@ it("契約確定と納品の情報確認を一括保存し、再確認しても�
 it("確認中の企業を再公開せず、差し戻し後は担当解除と候補復帰ができる", async () => {
   const s = await setup();
   expect(await makeSellable({ db, clock }, s.ops, s.input)).toMatchObject({ ok: false, error: "company_contracted" });
-  expect(must(await listSellableCompanies(db, s.other))).toHaveLength(0);
+  expect(must(await listSellableCompanies(db, s.other)).items).toHaveLength(0);
   expect(await releaseAssignment(db, clock, s.sales, { assignmentId: s.a.id, reason: "手放す" })).toMatchObject({
     ok: false,
     error: "contract_pending",
@@ -108,7 +108,7 @@ it("確認中の企業を再公開せず、差し戻し後は担当解除と候�
   ).toMatchObject({ ok: false, error: "contract_pending" });
   must(await rejectContract(db, clock, s.ops, { contractId: s.contract.id, reason: "再確認" }));
   must(await releaseAssignment(db, clock, s.sales, { assignmentId: s.a.id, reason: "引き継ぎ" }));
-  expect(must(await listSellableCompanies(db, s.other))).toHaveLength(1);
+  expect(must(await listSellableCompanies(db, s.other)).items).toHaveLength(1);
   expect(must(await claimAssignment(db, clock, s.other, s.c.id)).userId).toBe(s.other.userId);
 });
 it("会社の工程を戻しても契約記録から再営業を防ぐ", async () => {

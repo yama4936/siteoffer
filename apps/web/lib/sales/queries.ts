@@ -35,33 +35,21 @@ import {
   rewards,
   salesOfferChanges,
   siteAudits,
+  users,
   websites,
 } from "@siteoffer/db";
 import { type CallScript, callScriptSchema, type ProposalText, proposalTextSchema } from "@siteoffer/schemas";
-import { and, asc, desc, eq, inArray, not, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, not, or, sql } from "drizzle-orm";
+import { type CompanyListFilter, type DirectoryQuery, normalizeDirectoryFilter } from "./directory-query";
+
+export { COMPANY_SORTS, type CompanyListFilter, type CompanySort, parseCompanySort } from "./directory-query";
 
 type QueryError = "forbidden" | "not_found";
-
-const MAX_LIST = 200;
 
 /** URLから来たIDの形式。形式違いはDBに渡さず「見つからない」にする */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------- 企業一覧 ----------
-
-/** 企業一覧の並び順。score_asc（既定）／score_desc：最新の評価の総合点順、region：地域・企業名順 */
-export const COMPANY_SORTS = ["score_asc", "score_desc", "region"] as const;
-export type CompanySort = (typeof COMPANY_SORTS)[number];
-
-export const parseCompanySort = (v: string | undefined): CompanySort =>
-  (COMPANY_SORTS as readonly string[]).includes(v ?? "") ? (v as CompanySort) : "score_asc";
-
-export interface CompanyListFilter {
-  prefecture?: string | undefined;
-  city?: string | undefined;
-  industry?: string | undefined;
-  sort?: CompanySort | undefined;
-}
 
 /** 担当の共通状態。他人の担当は誰が持っているかを返さない */
 export type SharedAssignmentState = "mine" | "other" | "none";
@@ -81,12 +69,6 @@ export interface CompanyListItem {
   totalScore: string | null;
   scoreConfirmed: boolean | null;
 }
-
-/** 空白だけの値は「指定なし」にする */
-const clean = (v: string | undefined) => {
-  const t = v?.trim();
-  return t ? t : undefined;
-};
 
 /** 有効な担当（企業ごとに最大1件）。担当者のIDは呼び出し側で自分かどうかの判定だけに使う */
 async function activeAssignmentsByCompany(db: DbOrTx, companyIds: string[]) {
@@ -115,89 +97,134 @@ function sharedState(actorUserId: string, a: { id: string; userId: string } | un
 async function primarySiteUrls(db: DbOrTx, companyIds: string[]): Promise<Map<string, string>> {
   if (companyIds.length === 0) return new Map();
   const rows = await db
-    .select({ companyId: websites.companyId, url: websites.url, isPrimary: websites.isPrimary })
+    .selectDistinctOn([websites.companyId], { companyId: websites.companyId, url: websites.url })
     .from(websites)
     .where(and(inArray(websites.companyId, companyIds), eq(websites.kind, "current")))
-    .orderBy(desc(websites.isPrimary), asc(websites.createdAt));
+    .orderBy(websites.companyId, desc(websites.isPrimary), asc(websites.createdAt), asc(websites.id));
   const map = new Map<string, string>();
   for (const r of rows) if (!map.has(r.companyId)) map.set(r.companyId, r.url);
   return map;
 }
 
-/** 営業可能な企業の一覧（地域・業種で絞り込み）。URL登録の入口は持たない（F-05） */
+export const COMPANY_PAGE_SIZE = 20;
+export interface CompanyDirectoryPage {
+  filters: DirectoryQuery;
+  items: CompanyListItem[];
+  counts: Record<DirectoryQuery["assignment"], number>;
+  total: number;
+  pageSize: number;
+  pageCount: number;
+  options: CompanyFilterOptions;
+}
+
+/** Search all eligible candidates before pagination; never return another salesperson's private identifiers. */
 export async function listSellableCompanies(
   db: DbOrTx,
   actor: Actor | null,
-  filter: CompanyListFilter = {},
-): Promise<Result<CompanyListItem[], "forbidden">> {
-  const user = requireUser(actor);
-  if (!user.ok) return user;
-  const prefecture = clean(filter.prefecture);
-  const city = clean(filter.city);
-  const industry = clean(filter.industry);
-  // 企業ごとの最新の評価（企業詳細と同じ条件）。点数順でも上限件数の前に並べるためSQLで結合する
-  const latestAudit = db
-    .selectDistinctOn([siteAudits.companyId], {
-      companyId: siteAudits.companyId,
-      totalScore: siteAudits.totalScore,
-      scoreConfirmed: siteAudits.scoreConfirmed,
-    })
-    .from(siteAudits)
-    .where(inArray(siteAudits.status, ["evaluated", "unevaluable"]))
-    .orderBy(siteAudits.companyId, desc(siteAudits.createdAt))
-    .as("latest_audit");
-  const regionOrder = [asc(companies.prefecture), asc(companies.city), asc(companies.name)];
-  // 点数のない企業（未評価・評価不能）は低評価に置き換えず、どちらの並びでも末尾に置く
-  const sort = filter.sort ?? "score_asc";
-  const order =
-    sort === "score_asc"
-      ? [sql`${latestAudit.totalScore} asc nulls last`, ...regionOrder]
-      : sort === "score_desc"
-        ? [sql`${latestAudit.totalScore} desc nulls last`, ...regionOrder]
-        : regionOrder;
-  const rows = await db
-    .select({
-      id: companies.id,
-      name: companies.name,
-      prefecture: companies.prefecture,
-      city: companies.city,
-      industry: companies.industry,
-      suppression: companies.suppression,
-      totalScore: latestAudit.totalScore,
-      scoreConfirmed: latestAudit.scoreConfirmed,
-    })
-    .from(companies)
-    .leftJoin(latestAudit, eq(latestAudit.companyId, companies.id))
-    .where(
-      and(
+  input: CompanyListFilter = {},
+): Promise<Result<CompanyDirectoryPage, "forbidden" | "invalid_input">> {
+  const auth = requireUser(actor);
+  if (!auth.ok || !UUID_RE.test(auth.value.userId)) return err("forbidden");
+  const filter = normalizeDirectoryFilter(input);
+  if (!filter) return err("invalid_input");
+  return db.transaction(
+    async (tx) => {
+      const viewer = auth.value;
+      const [user] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, viewer.userId), eq(users.role, viewer.kind), eq(users.status, "active")));
+      if (!user) return err("forbidden");
+      const active = and(
+        eq(assignments.companyId, companies.id),
+        inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES]),
+      );
+      const state = sql<SharedAssignmentState>`case when ${assignments.userId} = ${viewer.userId} then 'mine' when ${assignments.id} is not null then 'other' else 'none' end`;
+      const pattern = `%${filter.query.replace(/[\\%_]/g, "\\$&")}%`;
+      const where = and(
         eq(companies.pipelineStatus, "sellable"),
         not(hasSalesContract(companies.id)),
-        prefecture ? eq(companies.prefecture, prefecture) : undefined,
-        city ? eq(companies.city, city) : undefined,
-        industry ? eq(companies.industry, industry) : undefined,
-      ),
-    )
-    .orderBy(...order)
-    .limit(MAX_LIST);
-
-  const ids = rows.map((r) => r.id);
-  const [active, sites] = await Promise.all([activeAssignmentsByCompany(db, ids), primarySiteUrls(db, ids)]);
-  const items: CompanyListItem[] = [];
-  for (const r of rows) {
-    const a = active.get(r.id);
-    // 共通状態（担当中か・営業拒否）は営業に常に見せてよい（read_shared）
-    if (
-      !can(user.value, "read_shared", {
-        type: "company",
-        companyId: r.id,
-        sellable: true,
-        assignedUserId: a?.userId ?? null,
-      })
-    )
-      continue;
-    items.push({ ...r, ...sharedState(user.value.userId, a), siteUrl: sites.get(r.id) ?? null });
-  }
-  return ok(items);
+        filter.prefecture ? eq(companies.prefecture, filter.prefecture) : undefined,
+        filter.city ? eq(companies.city, filter.city) : undefined,
+        filter.industry ? eq(companies.industry, filter.industry) : undefined,
+        filter.query
+          ? or(
+              ilike(companies.name, pattern),
+              ilike(companies.prefecture, pattern),
+              ilike(companies.city, pattern),
+              ilike(companies.industry, pattern),
+            )
+          : undefined,
+      );
+      const [counts] = await tx
+        .select({
+          all: sql<number>`count(*)`.mapWith(Number),
+          none: sql<number>`count(*) filter (where ${assignments.id} is null)`.mapWith(Number),
+          mine: sql<number>`count(*) filter (where ${assignments.userId} = ${viewer.userId})`.mapWith(Number),
+          other: sql<number>`count(*) filter (where ${assignments.userId} <> ${viewer.userId})`.mapWith(Number),
+        })
+        .from(companies)
+        .leftJoin(assignments, active)
+        .where(where);
+      const total = counts![filter.assignment],
+        pageCount = Math.max(1, Math.ceil(total / COMPANY_PAGE_SIZE));
+      const page = Math.min(filter.page, pageCount);
+      const latestAudit = tx
+        .selectDistinctOn([siteAudits.companyId], {
+          companyId: siteAudits.companyId,
+          totalScore: siteAudits.totalScore,
+          scoreConfirmed: siteAudits.scoreConfirmed,
+        })
+        .from(siteAudits)
+        .where(inArray(siteAudits.status, ["evaluated", "unevaluable"]))
+        .orderBy(siteAudits.companyId, desc(siteAudits.createdAt), desc(siteAudits.id))
+        .as("latest_audit");
+      const regionOrder = [asc(companies.prefecture), asc(companies.city), asc(companies.name), asc(companies.id)];
+      const order =
+        filter.sort === "score_asc"
+          ? [sql`${latestAudit.totalScore} asc nulls last`, ...regionOrder]
+          : filter.sort === "score_desc"
+            ? [sql`${latestAudit.totalScore} desc nulls last`, ...regionOrder]
+            : regionOrder;
+      const rows = await tx
+        .select({
+          id: companies.id,
+          name: companies.name,
+          prefecture: companies.prefecture,
+          city: companies.city,
+          industry: companies.industry,
+          suppression: companies.suppression,
+          totalScore: latestAudit.totalScore,
+          scoreConfirmed: latestAudit.scoreConfirmed,
+          assignment: state,
+          myAssignmentId: sql<
+            string | null
+          >`case when ${assignments.userId} = ${viewer.userId} then ${assignments.id} else null end`,
+        })
+        .from(companies)
+        .leftJoin(assignments, active)
+        .leftJoin(latestAudit, eq(latestAudit.companyId, companies.id))
+        .where(and(where, filter.assignment === "all" ? undefined : sql`${state} = ${filter.assignment}`))
+        .orderBy(...order)
+        .limit(COMPANY_PAGE_SIZE)
+        .offset((page - 1) * COMPANY_PAGE_SIZE);
+      const sites = await primarySiteUrls(
+        tx,
+        rows.map((r) => r.id),
+      );
+      const options = await getCompanyFilterOptions(tx);
+      return ok({
+        filters: { ...filter, page },
+        counts: counts!,
+        total,
+        pageCount,
+        pageSize: COMPANY_PAGE_SIZE,
+        items: rows.map((r) => ({ ...r, siteUrl: sites.get(r.id) ?? null })),
+        options,
+      });
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
 
 export interface CompanyFilterOptions {
@@ -207,7 +234,7 @@ export interface CompanyFilterOptions {
 }
 
 /** 絞り込みの選択肢（営業可能な企業にある値だけ） */
-export async function getCompanyFilterOptions(db: DbOrTx): Promise<CompanyFilterOptions> {
+async function getCompanyFilterOptions(db: DbOrTx): Promise<CompanyFilterOptions> {
   const rows = await db
     .selectDistinct({ prefecture: companies.prefecture, city: companies.city, industry: companies.industry })
     .from(companies)
@@ -435,7 +462,7 @@ export async function getCompanyDetail(
     .select()
     .from(siteAudits)
     .where(and(eq(siteAudits.companyId, company.id), inArray(siteAudits.status, ["evaluated", "unevaluable"])))
-    .orderBy(desc(siteAudits.createdAt))
+    .orderBy(desc(siteAudits.createdAt), desc(siteAudits.id))
     .limit(1);
   const findingRows = audit
     ? await db.select().from(findings).where(eq(findings.auditId, audit.id)).orderBy(asc(findings.itemCode))
