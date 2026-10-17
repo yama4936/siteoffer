@@ -1,7 +1,7 @@
 "use client";
 import type { listPublicationMaterials, PublicationMaterialItem } from "@siteoffer/core";
 import Link from "next/link";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   confirmPublicationMaterialAction,
   getPublicationMaterialAction,
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { controlClass, Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { fmtDate } from "@/lib/ops/format";
+import { PublicationMaterialBatch } from "./publication-material-batch";
 
 type Listing = Awaited<ReturnType<typeof listPublicationMaterials>>;
 type Filter = NonNullable<Parameters<typeof listPublicationMaterials>[2]>;
@@ -34,6 +35,9 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     [replacement, setReplacement] = useState(""),
     [url, setUrl] = useState(filter.deploymentId ? (initial.items[0]?.url ?? "") : ""),
     [confirmed, setConfirmed] = useState(false);
+  const [countsStale, setCountsStale] = useState(false);
+  const [batchAnchor, setBatchAnchor] = useState<string | null>(null),
+    [batchNote, setBatchNote] = useState("");
   const gate = useRef(false),
     heading = useRef<HTMLHeadingElement>(null);
   const load = useCallback(() => refreshPublicationMaterialsAction(filter), [filter]);
@@ -41,10 +45,13 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     snapshot: listing,
     load,
     apply: setListing,
-    editing: selected?.deploymentId ?? null,
+    editing: selected?.deploymentId ?? batchAnchor,
     paused: busy || pending !== null,
   });
-  useMaterialNavigationGuard(selected !== null || pending !== null);
+  useEffect(() => {
+    if (updates.checkedAt !== null) setCountsStale(false);
+  }, [updates.checkedAt]);
+  useMaterialNavigationGuard(selected !== null || pending !== null || batchAnchor !== null);
   function reset(item: PublicationMaterialItem | null, keepNote = false) {
     setSelected(item);
     if (!keepNote) setNote("");
@@ -54,7 +61,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     setConfirmed(false);
   }
   function choose(item: PublicationMaterialItem) {
-    if (gate.current || pending) return;
+    if (gate.current || pending || batchAnchor) return;
     if (selected && !window.confirm("入力中の確認内容を破棄して、別の公開記録を開きますか？")) return;
     updates.invalidate();
     reset(item);
@@ -62,7 +69,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
     requestAnimationFrame(() => heading.current?.focus());
   }
   async function refresh() {
-    if (gate.current || pending) return;
+    if (gate.current || pending || batchAnchor) return;
     gate.current = true;
     updates.invalidate();
     setBusy(true);
@@ -79,6 +86,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
       const r = await load();
       if (r.ok) {
         setListing(r.result);
+        setCountsStale(false);
         updates.acknowledge();
         if (!selected) setMessage("一覧を更新しました");
       } else setMessage(r.message);
@@ -144,6 +152,44 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
       setBusy(false);
     }
   }
+  function openBatch(item: PublicationMaterialItem) {
+    if (gate.current || pending || batchAnchor) return;
+    const same = selected?.deploymentId === item.deploymentId;
+    if (selected && !same && note && !window.confirm("入力中のメモを破棄して別の公開先を開きますか？")) return;
+    updates.invalidate();
+    setBatchNote(same ? note : "");
+    reset(null);
+    setBatchAnchor(item.deploymentId);
+    setMessage("");
+  }
+  function batchSaved(items: PublicationMaterialItem[], replayed: boolean) {
+    updates.invalidate();
+    setBusy(true);
+    setBatchAnchor(null);
+    setMessage(
+      `${replayed ? "受付済みの結果を確認しました" : "まとめて確認記録を保存しました"}。対象${items.length}件の現在の状態：確認済み${items.filter((r) => r.state === "resolved").length}件、対応が必要${items.filter((r) => r.state === "pending").length}件。外部サイトの公開・停止はこの操作では行いません。`,
+    );
+    setCountsStale(true);
+    setListing((previous) => {
+      const changed = new Map(items.map((r) => [r.deploymentId, r]));
+      return {
+        ...previous,
+        items: previous.items
+          .map((r) => changed.get(r.deploymentId) ?? r)
+          .filter((r) => filter.mode === "all" || r.state === (filter.mode ?? "pending")),
+      };
+    });
+    void load()
+      .then((r) => {
+        if (r.ok) {
+          setListing(r.result);
+          setCountsStale(false);
+          updates.acknowledge();
+        } else setMessage((v) => `${v} 一覧の再取得はできませんでした。一覧を更新してください。`);
+      })
+      .catch(() => setMessage((v) => `${v} 一覧の再取得はできませんでした。一覧を更新してください。`))
+      .finally(() => setBusy(false));
+  }
   const prefix = `/ops/publication-checks?${filter.companyId ? `company=${filter.companyId}&` : ""}${filter.deliveryId ? `delivery=${filter.deliveryId}&` : ""}`;
   return (
     <div className="space-y-5">
@@ -156,12 +202,17 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
           <div key={label} className="rounded-xl border bg-white px-5 py-4">
             <p className="text-sm text-slate-600">{label}</p>
             <strong className="text-2xl">
-              {count}
-              <span className="ml-1 text-sm font-normal">件</span>
+              {countsStale ? "更新待ち" : count}
+              {!countsStale && <span className="ml-1 text-sm font-normal">件</span>}
             </strong>
           </div>
         ))}
       </section>
+      {countsStale && (
+        <p role="status" className="text-sm text-amber-800">
+          件数は最新の取得待ちです。「一覧を更新」で確認できます。
+        </p>
+      )}
       {filter.deploymentId && (
         <p className="text-sm">
           選択した公開記録を表示しています。
@@ -197,7 +248,11 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
       </nav>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <MaterialUpdatesStatus updates={updates} editing={selected !== null} pending={busy || pending !== null} />
-        <Button variant="outline" disabled={busy || pending !== null} onClick={() => void refresh()}>
+        <Button
+          variant="outline"
+          disabled={busy || pending !== null || batchAnchor !== null}
+          onClick={() => void refresh()}
+        >
           {selected ? "メモを残して最新状態を取得" : "一覧を更新"}
         </Button>
       </div>
@@ -207,6 +262,17 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
         </p>
       )}
       {pending && !busy && <Button onClick={() => void send(pending)}>同じ受付で再試行</Button>}
+      {batchAnchor && (
+        <PublicationMaterialBatch
+          deploymentId={batchAnchor}
+          initialNote={batchNote}
+          onClose={() => {
+            updates.invalidate();
+            setBatchAnchor(null);
+          }}
+          onSaved={batchSaved}
+        />
+      )}
       {selected && (
         <section className="rounded-xl border-2 border-blue-200 bg-white p-5" aria-label="公開後の対応を記録">
           <h2 tabIndex={-1} ref={heading} className="text-lg font-semibold">
@@ -251,7 +317,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
                 });
             }}
           >
-            <fieldset disabled={busy || pending !== null} className="space-y-4">
+            <fieldset disabled={busy || pending !== null || batchAnchor !== null} className="space-y-4">
               {selected.state === "pending" && (
                 <>
                   <label htmlFor="publication-outcome" className="block space-y-2 text-sm">
@@ -429,10 +495,19 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
               {item.state !== "clear" && (
                 <Button
                   variant={item.state === "pending" ? "default" : "outline"}
-                  disabled={busy || pending !== null}
+                  disabled={busy || pending !== null || batchAnchor !== null}
                   onClick={() => choose(item)}
                 >
                   {item.state === "pending" ? "対応を記録" : "確認をやり直す"}
+                </Button>
+              )}
+              {item.state === "pending" && item.url && item.relatedPending > 1 && (
+                <Button
+                  variant="outline"
+                  disabled={busy || pending !== null || batchAnchor !== null}
+                  onClick={() => openBatch(item)}
+                >
+                  同じ公開先をまとめて確認
                 </Button>
               )}
               <Link className="text-sm text-blue-700 underline" href={`/ops/delivery?focus=${item.deliveryId}`}>
@@ -460,7 +535,7 @@ export function PublicationMaterials({ initial, filter }: { initial: Listing; fi
             前の20件
           </Link>
         )}
-        <span>{listing.total}件</span>
+        <span>{countsStale ? "件数は再取得待ち" : `${listing.total}件`}</span>
         {((filter.page ?? 0) + 1) * 20 < listing.total && (
           <Link href={`${prefix}mode=${filter.mode}&page=${(filter.page ?? 0) + 1}`} className="underline">
             次の20件

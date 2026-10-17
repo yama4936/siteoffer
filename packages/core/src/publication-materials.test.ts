@@ -19,8 +19,10 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
 import { seedDeliveryBase } from "./delivery/test-helpers.ts";
 import {
+  confirmPublicationMaterialBatch,
   confirmPublicationMaterialCheck,
   getPublicationMaterial,
+  getPublicationMaterialBatch,
   listPublicationMaterials,
   publicationUrl,
   reopenPublicationMaterialCheck,
@@ -343,4 +345,148 @@ it("URL未記録の旧版は実際の確認先を要求し、置き換えURLと�
       observedUrl: "https://verified.example.test/",
     }),
   ).toMatchObject({ item: { state: "resolved" } });
+});
+
+async function batchFixture() {
+  const s = await setup();
+  await s.withdraw();
+  await s.publish(2);
+  await s.publish(3);
+  const replacement = await s.publish(4, { snapshot: [] });
+  const preview = await getPublicationMaterialBatch(db, s.ops, s.first.dep.id);
+  const input = {
+    deploymentId: preview.deploymentId,
+    scope: preview.scope,
+    items: preview.items.map((r) => ({
+      deploymentId: r.deploymentId,
+      revision: r.revision,
+      fingerprint: r.fingerprint,
+    })),
+    requestId: randomUUID(),
+    outcome: "replaced" as "replaced" | "site_offline",
+    replacementId: replacement.dep.id as string | null,
+    observedUrl: preview.url,
+    note: "元の公開先で新しい承認版への置き換えが反映されたことを確認しました。",
+    confirmed: true,
+  };
+  return { ...s, preview, input };
+}
+it("同じ公開先の旧版を一括で記録し、受付は1件、監査は対象ごとに残す", async () => {
+  const s = await batchFixture(),
+    r = await confirmPublicationMaterialBatch(db, clock, s.ops, s.input);
+  expect(r.replayed).toBe(false);
+  expect(r.items).toHaveLength(3);
+  expect(r.items.every((x) => x.state === "resolved")).toBe(true);
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(1);
+  const audits = await db.select().from(auditEvents);
+  expect(audits).toHaveLength(3);
+  expect(audits.every((a) => (a.after as { batchRequestId: string }).batchRequestId === s.input.requestId)).toBe(true);
+  expect(
+    await confirmPublicationMaterialBatch(db, clock, s.ops, { ...s.input, items: [...s.input.items].reverse() }),
+  ).toMatchObject({ replayed: true });
+  await expect(
+    confirmPublicationMaterialBatch(db, clock, s.ops, {
+      ...s.input,
+      note: "別の確認内容で受付番号を使い直そうとしました。",
+    }),
+  ).rejects.toThrow("同じ受付番号");
+  const item = r.items[0]!;
+  await reopenPublicationMaterialCheck(db, clock, s.ops, {
+    deploymentId: item.deploymentId,
+    revision: item.check!.revision,
+    requestId: randomUUID(),
+    note: "対象の版をもう一度確認する必要があるため再確認へ戻します。",
+    confirmed: true,
+  });
+  const replay = await confirmPublicationMaterialBatch(db, clock, s.ops, s.input);
+  expect(replay.items.find((x) => x.deploymentId === item.deploymentId)!.state).toBe("pending");
+});
+it("選択した一部だけを確認し、選ばなかった旧版は未対応のまま残す", async () => {
+  const s = await batchFixture();
+  const input = { ...s.input, items: s.input.items.slice(0, 2), outcome: "site_offline" as const, replacementId: null };
+  await confirmPublicationMaterialBatch(db, clock, s.ops, input);
+  expect(await s.listing()).toMatchObject({ pending: 1, resolved: 2 });
+  expect(await db.select().from(deployments)).toHaveLength(4);
+});
+it("選択した1件だけが古くなった場合も全体を保存しない", async () => {
+  const s = await batchFixture();
+  const id = s.input.items.at(-1)!.deploymentId;
+  const [dep] = await db.select().from(deployments).where(eq(deployments.id, id));
+  const [version] = await db.select().from(deliveryVersions).where(eq(deliveryVersions.id, dep!.deliveryVersionId));
+  await db.update(deliveryBuilds).set({ imageAssetSnapshot: null }).where(eq(deliveryBuilds.id, version!.buildId!));
+  await expect(confirmPublicationMaterialBatch(db, clock, s.ops, s.input)).rejects.toThrow("変わりました");
+  expect(await db.select().from(publicationMaterialChecks)).toHaveLength(0);
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(0);
+  expect(await db.select().from(auditEvents)).toHaveLength(0);
+});
+it("別URL・環境・納品や、記録のないURLはまとめない", async () => {
+  const s = await batchFixture(),
+    foreign = await setup();
+  await foreign.withdraw();
+  const otherUrl = await s.publish(5, { url: "https://other.example.test/" }),
+    otherEnv = await s.publish(6, { env: "staging" }),
+    noUrl = await s.publish(7, { url: null });
+  const before = await getPublicationMaterialBatch(db, s.ops, s.first.dep.id);
+  expect(before.total).toBe(3);
+  for (const target of [otherUrl.dep, otherEnv.dep, foreign.first.dep, noUrl.dep]) {
+    const item = await getPublicationMaterial(db, s.ops, target.id);
+    await expect(
+      confirmPublicationMaterialBatch(db, clock, s.ops, {
+        ...s.input,
+        items: [s.input.items[0]!, { deploymentId: item.deploymentId, revision: 0, fingerprint: item.fingerprint }],
+      }),
+    ).rejects.toThrow("同じ納品");
+  }
+  await expect(getPublicationMaterialBatch(db, s.ops, noUrl.dep.id)).rejects.toThrow("個別に確認");
+  expect(await db.select().from(publicationMaterialChecks)).toHaveLength(0);
+});
+it("一括確認でも対象数・重複・範囲・確認チェックと権限を要求する", async () => {
+  const s = await batchFixture();
+  for (const patch of [
+    { items: [] },
+    { items: s.input.items.slice(0, 1) },
+    { items: [s.input.items[0]!, s.input.items[0]!] },
+    { items: Array.from({ length: 51 }, () => s.input.items[0]!) },
+    { scope: "0".repeat(64) },
+    { confirmed: false },
+    { observedUrl: "https://different.example.test/" },
+  ])
+    await expect(confirmPublicationMaterialBatch(db, clock, s.ops, { ...s.input, ...patch })).rejects.toThrow();
+  for (const actor of [null, s.sales, { kind: "ops" as const, userId: s.sales.userId }]) {
+    await expect(getPublicationMaterialBatch(db, actor, s.first.dep.id)).rejects.toThrow();
+    await expect(confirmPublicationMaterialBatch(db, clock, actor, s.input)).rejects.toThrow();
+  }
+  await db.update(users).set({ status: "suspended" }).where(eq(users.id, s.ops.userId));
+  await expect(confirmPublicationMaterialBatch(db, clock, s.ops, s.input)).rejects.toThrow("有効な運営");
+});
+it("一括保存の途中で監査が失敗しても、先に保存した確認を含め全件巻き戻す", async () => {
+  const s = await batchFixture();
+  await db.execute(
+    sql`CREATE FUNCTION fail_later_publication_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF (SELECT count(*) FROM audit_events)>0 THEN RAISE EXCEPTION 'audit unavailable'; END IF; RETURN NEW; END $$`,
+  );
+  await db.execute(
+    sql`CREATE TRIGGER fail_later_publication_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fail_later_publication_audit()`,
+  );
+  await expect(confirmPublicationMaterialBatch(db, clock, s.ops, s.input)).rejects.toThrow();
+  expect(await db.select().from(publicationMaterialChecks)).toHaveLength(0);
+  expect(await db.select().from(publicationCheckOperations)).toHaveLength(0);
+  expect(await db.select().from(auditEvents)).toHaveLength(0);
+});
+it("候補の最新承認版の利用許可を取り下げた場合も、一括確認を拒否する", async () => {
+  const s = await batchFixture();
+  await s.publish(5); // The latest target now contains the withdrawn asset.
+  await expect(confirmPublicationMaterialBatch(db, clock, s.ops, s.input)).rejects.toThrow("新しい承認版");
+  expect(await db.select().from(publicationMaterialChecks)).toHaveLength(0);
+});
+it("50件を超える場合は全体件数と表示上限を明示し、指定した旧版も候補に含める", async () => {
+  const s = await setup();
+  await s.withdraw();
+  let last = s.first;
+  for (let v = 2; v <= 52; v++) last = await s.publish(v);
+  const p = await getPublicationMaterialBatch(db, s.ops, last.dep.id);
+  expect(p.total).toBe(52);
+  expect(p.limit).toBe(50);
+  expect(p.items).toHaveLength(50);
+  expect(p.items.some((x) => x.deploymentId === last.dep.id)).toBe(true);
+  expect(new Set(p.items.map((x) => x.deploymentId)).size).toBe(50);
 });

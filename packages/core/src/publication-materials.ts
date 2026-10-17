@@ -195,6 +195,7 @@ function candidates(item: ScanItem, rows: ScanItem[]) {
 function view(item: ScanItem, rows: ScanItem[]) {
   return {
     ...item,
+    relatedPending: item.url ? rows.filter((r) => samePublicationTarget(item, r) && r.state === "pending").length : 0,
     replacements: candidates(item, rows).map((r) => ({
       deploymentId: r.deploymentId,
       version: r.version,
@@ -316,6 +317,71 @@ async function receipt(db: DbOrTx, op: ReturnType<typeof operation>) {
     throw new PublicationMaterialError("同じ受付番号で内容を変更できません");
   return row;
 }
+type ConfirmationSettings = {
+  outcome: "replaced" | "site_offline";
+  replacementId: string | null;
+  url: string;
+  note: string;
+};
+function assertConfirmation(
+  item: ScanItem,
+  rows: ScanItem[],
+  input: { revision: number; fingerprint: string },
+  settings: ConfirmationSettings,
+) {
+  const { url } = settings;
+  if (
+    item.state !== "pending" ||
+    (item.check?.revision ?? 0) !== input.revision ||
+    item.fingerprint !== input.fingerprint
+  )
+    throw new PublicationMaterialError("素材の許可または対応状況が変わりました。最新の一覧を確認してください");
+  if (item.url && item.url !== url) throw new PublicationMaterialError("記録された公開先と確認したURLが一致しません");
+  if (settings.outcome === "replaced") {
+    const replacement = candidates(item, rows).find((r) => r.deploymentId === settings.replacementId && r.url === url);
+    if (!replacement)
+      throw new PublicationMaterialError(
+        "同じ公開先・環境の新しい承認版で、素材の確認が済んだ公開記録を選択してください",
+      );
+  } else if (settings.replacementId !== null)
+    throw new PublicationMaterialError("公開停止の記録に置き換え先は指定できません");
+}
+async function writeConfirmation(
+  tx: DbOrTx,
+  clock: Clock,
+  who: Extract<Actor, { kind: "ops" }>,
+  item: ScanItem,
+  settings: ConfirmationSettings,
+  batchRequestId?: string,
+) {
+  const { url, note } = settings;
+  const values = {
+    deploymentId: item.deploymentId,
+    revision: (item.check?.revision ?? 0) + 1,
+    fingerprint: item.fingerprint,
+    outcome: settings.outcome,
+    replacementId: settings.replacementId,
+    observedUrl: url,
+    note,
+    checkedBy: who.userId,
+    checkedAt: clock.now(),
+    revokedAt: null,
+    revokedBy: null,
+    revocationNote: null,
+  };
+  await tx
+    .insert(publicationMaterialChecks)
+    .values(values)
+    .onConflictDoUpdate({ target: publicationMaterialChecks.deploymentId, set: values });
+  await recordEvent(tx, clock, {
+    actor: who,
+    action: "publication_material.confirm",
+    targetType: "deployment",
+    targetId: item.deploymentId,
+    before: item.check,
+    after: batchRequestId ? { ...values, batchRequestId } : values,
+  });
+}
 export async function confirmPublicationMaterialCheck(
   db: DbOrTx,
   clock: Clock,
@@ -360,50 +426,12 @@ export async function confirmPublicationMaterialCheck(
       item = rows.find((r) => r.deploymentId === input.deploymentId);
     if (!item) throw new PublicationMaterialError("公開記録が見つかりません");
     if (prior) return { item: view(item, rows), replayed: true };
-    if (
-      item.state !== "pending" ||
-      (item.check?.revision ?? 0) !== input.revision ||
-      item.fingerprint !== input.fingerprint
-    )
-      throw new PublicationMaterialError("素材の許可または対応状況が変わりました。最新の一覧を確認してください");
-    if (item.url && item.url !== url) throw new PublicationMaterialError("記録された公開先と確認したURLが一致しません");
-    if (input.outcome === "replaced") {
-      const replacement = candidates(item, rows).find((r) => r.deploymentId === input.replacementId && r.url === url);
-      if (!replacement)
-        throw new PublicationMaterialError(
-          "同じ公開先・環境の新しい承認版で、素材の確認が済んだ公開記録を選択してください",
-        );
-    } else if (input.replacementId !== null)
-      throw new PublicationMaterialError("公開停止の記録に置き換え先は指定できません");
-    const values = {
-      deploymentId: item.deploymentId,
-      revision: input.revision + 1,
-      fingerprint: item.fingerprint,
-      outcome: input.outcome,
-      replacementId: input.replacementId,
-      observedUrl: url,
-      note,
-      checkedBy: target.who.userId,
-      checkedAt: clock.now(),
-      revokedAt: null,
-      revokedBy: null,
-      revocationNote: null,
-    };
-    await tx
-      .insert(publicationMaterialChecks)
-      .values(values)
-      .onConflictDoUpdate({ target: publicationMaterialChecks.deploymentId, set: values });
+    const settings = { outcome: input.outcome, replacementId: input.replacementId, url, note };
+    assertConfirmation(item, rows, input, settings);
+    await writeConfirmation(tx, clock, target.who, item, settings);
     await tx
       .insert(publicationCheckOperations)
       .values({ ...op, deploymentId: item.deploymentId, createdAt: clock.now() });
-    await recordEvent(tx, clock, {
-      actor: target.who,
-      action: "publication_material.confirm",
-      targetType: "deployment",
-      targetId: item.deploymentId,
-      before: item.check,
-      after: values,
-    });
     const fresh = await scan(tx, { deliveryId: target.deliveryId });
     return { item: view(fresh.find((r) => r.deploymentId === item.deploymentId)!, fresh), replayed: false };
   });
@@ -450,5 +478,144 @@ export async function reopenPublicationMaterialCheck(
     });
     const fresh = await scan(tx, { deliveryId: target.deliveryId });
     return { item: view(fresh.find((r) => r.deploymentId === item.deploymentId)!, fresh), replayed: false };
+  });
+}
+
+export const PUBLICATION_BATCH_LIMIT = 50;
+function samePublicationTarget(a: ScanItem, b: ScanItem) {
+  return a.url !== null && a.deliveryId === b.deliveryId && a.environment === b.environment && a.url === b.url;
+}
+function publicationScope(item: ScanItem) {
+  return hash([item.deliveryId, item.environment, item.url]);
+}
+export async function getPublicationMaterialBatch(db: DbOrTx, actor: Actor | null, deploymentId: string) {
+  if (!uuid(deploymentId)) throw new PublicationMaterialError("公開記録を確認してください");
+  return db.transaction(async (tx) => {
+    await activeContentOperator(tx, actor);
+    const [hint] = await tx
+      .select({ deliveryId: deployments.deliveryId })
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+    if (!hint) throw new PublicationMaterialError("公開記録が見つかりません");
+    const rows = await scan(tx, { deliveryId: hint.deliveryId }),
+      anchor = rows.find((r) => r.deploymentId === deploymentId);
+    if (!anchor?.url) throw new PublicationMaterialError("公開URLが記録されていない版は、個別に確認してください");
+    const members = rows
+      .filter((r) => samePublicationTarget(anchor, r) && r.state === "pending")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.deploymentId.localeCompare(b.deploymentId));
+    let shown = members.slice(0, PUBLICATION_BATCH_LIMIT);
+    if (anchor.state === "pending" && !shown.some((r) => r.deploymentId === anchor.deploymentId))
+      shown = [...shown.slice(0, PUBLICATION_BATCH_LIMIT - 1), anchor];
+    return {
+      deploymentId: anchor.deploymentId,
+      deliveryId: anchor.deliveryId,
+      companyName: anchor.companyName,
+      environment: anchor.environment,
+      url: anchor.url,
+      scope: publicationScope(anchor),
+      total: members.length,
+      limit: PUBLICATION_BATCH_LIMIT,
+      items: shown.map((r) => ({
+        deploymentId: r.deploymentId,
+        version: r.version,
+        createdAt: r.createdAt,
+        revision: r.check?.revision ?? 0,
+        fingerprint: r.fingerprint,
+        issues: r.issues,
+        replacements: view(r, rows).replacements,
+      })),
+    };
+  });
+}
+export async function confirmPublicationMaterialBatch(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor | null,
+  input: {
+    deploymentId: string;
+    scope: string;
+    items: { deploymentId: string; revision: number; fingerprint: string }[];
+    requestId: string;
+    outcome: "replaced" | "site_offline";
+    replacementId: string | null;
+    observedUrl: string;
+    note: string;
+    confirmed: boolean;
+  },
+) {
+  const note = validateNote(input?.note),
+    url = publicationUrl(input?.observedUrl);
+  if (
+    !url ||
+    input.confirmed !== true ||
+    !["replaced", "site_offline"].includes(input.outcome) ||
+    !Array.isArray(input.items) ||
+    input.items.length < 2 ||
+    input.items.length > PUBLICATION_BATCH_LIMIT ||
+    typeof input.scope !== "string" ||
+    !/^[0-9a-f]{64}$/.test(input.scope)
+  )
+    throw new PublicationMaterialError("2〜50件の対象、公開先と対応内容、実際の反映を確認してください");
+  if (findSecretInFields({ url })) throw new PublicationMaterialError("公開先に秘密情報を含めないでください");
+  const entries = input.items
+    .map((r) => {
+      if (
+        !r ||
+        !uuid(r.deploymentId) ||
+        !Number.isSafeInteger(r.revision) ||
+        r.revision < 0 ||
+        typeof r.fingerprint !== "string" ||
+        !/^[0-9a-f]{64}$/.test(r.fingerprint)
+      )
+        throw new PublicationMaterialError("対象の公開記録と確認版を確認してください");
+      return { deploymentId: r.deploymentId.toLowerCase(), revision: r.revision, fingerprint: r.fingerprint };
+    })
+    .sort((a, b) => a.deploymentId.localeCompare(b.deploymentId));
+  if (new Set(entries.map((r) => r.deploymentId)).size !== entries.length)
+    throw new PublicationMaterialError("同じ公開記録を複数回選択できません");
+  return db.transaction(async (tx) => {
+    const target = await lockTarget(tx, actor, input.deploymentId),
+      op = operation(target.who.userId, input.requestId, [
+        "confirm_batch",
+        input.deploymentId.toLowerCase(),
+        input.scope,
+        entries,
+        input.outcome,
+        input.replacementId,
+        url,
+        note,
+      ]);
+    const prior = await receipt(tx, op),
+      rows = await scan(tx, { deliveryId: target.deliveryId });
+    const anchor = rows.find((r) => r.deploymentId === input.deploymentId.toLowerCase());
+    if (!anchor) throw new PublicationMaterialError("公開記録が見つかりません");
+    if (prior)
+      return {
+        items: entries
+          .map((e) => rows.find((r) => r.deploymentId === e.deploymentId))
+          .filter((r): r is ScanItem => !!r)
+          .map((r) => view(r, rows)),
+        replayed: true,
+      };
+    if (!anchor.url || publicationScope(anchor) !== input.scope || anchor.url !== url)
+      throw new PublicationMaterialError("公開先・環境が変わりました。対象を再取得してください");
+    const settings = { outcome: input.outcome, replacementId: input.replacementId, url, note };
+    // Validate every row before writing any row; the outer transaction also rolls back audit/receipt failures.
+    const selected = entries.map((entry) => {
+      const item = rows.find((r) => r.deploymentId === entry.deploymentId);
+      if (!item || !samePublicationTarget(anchor, item))
+        throw new PublicationMaterialError("同じ納品・公開先・環境の記録だけをまとめて確認できます");
+      assertConfirmation(item, rows, entry, settings);
+      return item;
+    });
+    for (const item of selected) await writeConfirmation(tx, clock, target.who, item, settings, input.requestId);
+    await tx
+      .insert(publicationCheckOperations)
+      .values({ ...op, deploymentId: anchor.deploymentId, createdAt: clock.now() });
+    const fresh = await scan(tx, { deliveryId: target.deliveryId });
+    return {
+      items: entries.map((e) => view(fresh.find((r) => r.deploymentId === e.deploymentId)!, fresh)),
+      replayed: false,
+    };
   });
 }

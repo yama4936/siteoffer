@@ -1,8 +1,10 @@
 "use server";
 import {
   ContentError,
+  confirmPublicationMaterialBatch,
   confirmPublicationMaterialCheck,
   getPublicationMaterial,
+  getPublicationMaterialBatch,
   listPublicationMaterials,
   PublicationMaterialError,
   reopenPublicationMaterialCheck,
@@ -44,6 +46,26 @@ export async function confirmPublicationMaterialAction(input: Parameters<typeof 
 export async function reopenPublicationMaterialAction(input: Parameters<typeof reopenPublicationMaterialCheck>[3]) {
   try {
     const result = await reopenPublicationMaterialCheck(getDb(), systemClock, await getCurrentActor(), input);
+    revalidatePath("/ops/publication-checks");
+    revalidatePath("/ops");
+    return { ok: true as const, ...result };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+export async function getPublicationMaterialBatchAction(id: string) {
+  try {
+    return { ok: true as const, preview: await getPublicationMaterialBatch(getDb(), await getCurrentActor(), id) };
+  } catch (e) {
+    return failure(e);
+  }
+}
+export async function confirmPublicationMaterialBatchAction(
+  input: Parameters<typeof confirmPublicationMaterialBatch>[3],
+) {
+  try {
+    const result = await confirmPublicationMaterialBatch(getDb(), systemClock, await getCurrentActor(), input);
     revalidatePath("/ops/publication-checks");
     revalidatePath("/ops");
     return { ok: true as const, ...result };
