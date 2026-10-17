@@ -1,5 +1,6 @@
 import { ACTIVE_ASSIGNMENT_STATUSES, assignments, type DbOrTx, domainPreferences } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
+import { lockAssignmentCompany } from "../assignment/shared.ts";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -131,7 +132,9 @@ export async function saveDomainPreference(
   if (currentDomain && !DOMAIN_RE.test(currentDomain)) return err("invalid_input", "currentDomain");
 
   return db.transaction(async (tx) => {
-    // 同じ担当での初回同時保存も直列化し、担当終了と保存の競合を防ぐ。
+    // Parent -> assignment, including the FK write for the first saved preference.
+    if (input.assignmentId && (await lockAssignmentCompany(tx, input.assignmentId)) !== input.companyId)
+      return err("assignment_not_found");
     const [assignment] = input.assignmentId
       ? await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId)).for("update")
       : [];

@@ -18,6 +18,7 @@ import {
   offerChangeIdSchema as uuid,
 } from "@siteoffer/schemas";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { lockAssignmentCompany } from "../assignment/shared.ts";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -60,9 +61,25 @@ export async function proposeSalesOfferChange(db: DbOrTx, clock: Clock, actor: A
   const i = p.data;
   if (findSecretInFields({ reason: i.reason })) return err("secret_like_value", "理由に秘密情報を含めないでください。");
   return db.transaction(async (tx) => {
-    const [a] = await tx.select().from(assignments).where(eq(assignments.id, i.assignmentId)).for("update");
     if (!(await activeUser(tx, actor, true))) return err("forbidden", "有効な運営アカウントで操作してください。");
-    if (!a) return err("not_found", "担当案件が見つかりません。");
+    const [initial] = await tx
+      .select({ companyId: assignments.companyId })
+      .from(assignments)
+      .where(eq(assignments.id, i.assignmentId));
+    if (!initial) return err("not_found", "担当案件が見つかりません。");
+    // Proposal -> company -> assignment, shared with proposal review and suppression.
+    await tx
+      .select({ id: proposals.id })
+      .from(proposals)
+      .where(eq(proposals.companyId, initial.companyId))
+      .for("share");
+    const companyId = await lockAssignmentCompany(tx, i.assignmentId);
+    const [a] = await tx
+      .select()
+      .from(assignments)
+      .where(and(eq(assignments.id, i.assignmentId), eq(assignments.companyId, companyId ?? initial.companyId)))
+      .for("update");
+    if (!a || !companyId) return err("not_found", "担当案件が見つかりません。");
     const [receipt] = await tx.select().from(salesOfferChanges).where(eq(salesOfferChanges.id, i.requestId));
     if (receipt) {
       const offer = await getSalesOffer(tx, a.companyId, receipt.toOfferId);
@@ -87,8 +104,7 @@ export async function proposeSalesOfferChange(db: DbOrTx, clock: Clock, actor: A
       .from(salesOfferChanges)
       .where(and(eq(salesOfferChanges.assignmentId, a.id), eq(salesOfferChanges.status, "pending")));
     if (pending) return err("change_pending", "営業の確認待ちの変更があります。回答を待つか取り下げてください。");
-    await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.companyId, a.companyId)).for("share");
-    const [company] = await tx.select().from(companies).where(eq(companies.id, a.companyId)).for("update");
+    const [company] = await tx.select().from(companies).where(eq(companies.id, a.companyId));
     if (company?.suppression !== "none") return err("company_suppressed", "営業抑止中の企業の条件は変更できません。");
     const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, i.productTermsId)).for("share");
     const [proposal] = await tx
@@ -158,10 +174,26 @@ export async function decideSalesOfferChange(db: DbOrTx, clock: Clock, actor: Ac
   return db.transaction(async (tx) => {
     const [initial] = await tx.select().from(salesOfferChanges).where(eq(salesOfferChanges.id, i.changeId));
     if (!initial) return err("not_found", "変更提案が見つかりません。");
-    const [a] = await tx.select().from(assignments).where(eq(assignments.id, initial.assignmentId)).for("update");
+    if (!(await activeUser(tx, actor, true))) return err("forbidden", "この担当案件の変更は操作できません。");
+    const [candidate] = await tx
+      .select({ companyId: assignments.companyId })
+      .from(assignments)
+      .where(eq(assignments.id, initial.assignmentId));
+    if (!candidate) return err("forbidden", "この担当案件の変更は操作できません。");
+    await tx
+      .select({ id: proposals.id })
+      .from(proposals)
+      .where(eq(proposals.companyId, candidate.companyId))
+      .for("share");
+    const companyId = await lockAssignmentCompany(tx, initial.assignmentId);
+    const [a] = await tx
+      .select()
+      .from(assignments)
+      .where(and(eq(assignments.id, initial.assignmentId), eq(assignments.companyId, companyId ?? candidate.companyId)))
+      .for("update");
     if (
       !a ||
-      !(await activeUser(tx, actor, true)) ||
+      !companyId ||
       (actor.kind === "sales" && (a.userId !== actor.userId || initial.salesUserId !== actor.userId))
     )
       return err("forbidden", "この担当案件の変更は操作できません。");
@@ -189,7 +221,7 @@ export async function decideSalesOfferChange(db: DbOrTx, clock: Clock, actor: Ac
         .from(proposals)
         .where(eq(proposals.id, after.proposal.proposalId))
         .for("share");
-      const [company] = await tx.select().from(companies).where(eq(companies.id, a.companyId)).for("share");
+      const [company] = await tx.select().from(companies).where(eq(companies.id, a.companyId));
       const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, after.terms.id)).for("share");
       const [pv] = await tx
         .select()

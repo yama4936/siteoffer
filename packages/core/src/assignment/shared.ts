@@ -1,4 +1,4 @@
-import { ACTIVE_ASSIGNMENT_STATUSES, assignments, type DbOrTx, users } from "@siteoffer/db";
+import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, type DbOrTx, users } from "@siteoffer/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import { err, ok, type Result } from "../common/result.ts";
@@ -16,6 +16,21 @@ export type AssignmentCheck =
   | { type: "assignment"; action: ActionOf<"assignment"> }
   | { type: "salesActivity"; action: ActionOf<"salesActivity"> };
 
+/** Lock the parent before its assignment. NO KEY UPDATE preserves FK key-share reads. */
+export async function lockAssignmentCompany(tx: DbOrTx, assignmentId: string) {
+  const [candidate] = await tx
+    .select({ companyId: assignments.companyId })
+    .from(assignments)
+    .where(eq(assignments.id, assignmentId));
+  if (!candidate) return null;
+  const [company] = await tx
+    .select({ id: companies.id })
+    .from(companies)
+    .where(eq(companies.id, candidate.companyId))
+    .for("no key update");
+  return company?.id ?? null;
+}
+
 /**
  * 担当を行ロックして読み、操作主体が触れるかを authorizeUser で確かめる。
  * 所有者は読んだ行の userId を渡す。system・customer は拒否（人の操作だけ）。
@@ -28,7 +43,13 @@ export async function loadAssignmentForActor(
 ): Promise<Result<Assignment, "not_found" | "forbidden">> {
   const user = requireUser(actor);
   if (!user.ok) return user;
-  const [row] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update");
+  const companyId = await lockAssignmentCompany(tx, assignmentId);
+  if (!companyId) return err("not_found");
+  const [row] = await tx
+    .select()
+    .from(assignments)
+    .where(and(eq(assignments.id, assignmentId), eq(assignments.companyId, companyId)))
+    .for("update");
   if (!row) return err("not_found");
   const auth =
     check.type === "assignment"
@@ -43,7 +64,8 @@ export async function lockActiveSalesUser(
   tx: DbOrTx,
   userId: string,
 ): Promise<Result<typeof users.$inferSelect, "user_not_found" | "user_not_sales" | "user_suspended">> {
-  const [user] = await tx.select().from(users).where(eq(users.id, userId)).for("update");
+  // Serialize ownership limits and status changes without blocking audit/FK references.
+  const [user] = await tx.select().from(users).where(eq(users.id, userId)).for("no key update");
   if (!user) return err("user_not_found");
   if (user.role !== "sales") return err("user_not_sales");
   if (user.status !== "active") return err("user_suspended");

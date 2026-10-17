@@ -137,7 +137,7 @@ export async function commitActivityDraft(
   if (["lost", "declined"].includes(values.kind) && input.confirmEnd !== true)
     throw new ActivityDraftError("担当が終了することを確認してください");
   return db.transaction(async (tx) => {
-    const a = await authorize(tx, actor, assignmentId, true, values.kind === "declined");
+    const a = await authorize(tx, actor, assignmentId, true, true);
     const requestKey = createHash("sha256")
       .update(JSON.stringify([a.userId, a.id, input.requestKey, values]))
       .digest("hex");

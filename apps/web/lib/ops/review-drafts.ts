@@ -49,6 +49,16 @@ async function authorize(db: DbOrTx, actor: Actor | null, versionId: string, loc
     .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")));
   const [user] = await (lock ? userQuery.for("share") : userQuery);
   if (!user) throw new ReviewDraftError("運営としてログインしてください");
+  if (lock) {
+    // Lock the proposal before a joined version query can retain its child lock.
+    // Autosave and commit share the order used by review and condition changes.
+    const [target] = await db
+      .select({ proposalId: proposalVersions.proposalId })
+      .from(proposalVersions)
+      .where(eq(proposalVersions.id, versionId));
+    if (!target) throw new ReviewDraftError("対象の提案版がありません");
+    await db.select({ id: proposals.id }).from(proposals).where(eq(proposals.id, target.proposalId)).for("update");
+  }
   const query = db
     .select({ id: proposalVersions.id, status: proposalVersions.status })
     .from(proposalVersions)

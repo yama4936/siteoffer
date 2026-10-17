@@ -10,7 +10,7 @@
     "./audit-request-management": "./src/audit-request-management.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.postgres.json",
     "start": "tsx src/index.ts"
   },
   "dependencies": {

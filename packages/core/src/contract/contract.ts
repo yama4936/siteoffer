@@ -10,6 +10,7 @@ import {
   users,
 } from "@siteoffer/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { lockAssignmentCompany } from "../assignment/shared.ts";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -121,7 +122,13 @@ export async function reportContract(
 
   try {
     return await db.transaction(async (tx) => {
-      const [a] = await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId)).for("update");
+      const companyId = await lockAssignmentCompany(tx, input.assignmentId);
+      if (!companyId) return err("assignment_not_found");
+      const [a] = await tx
+        .select()
+        .from(assignments)
+        .where(and(eq(assignments.id, input.assignmentId), eq(assignments.companyId, companyId)))
+        .for("update");
       if (!a) return err("assignment_not_found");
       // 権限：契約の report。所有者は読んだ担当の営業ユーザー
       const auth = authorizeUser(actor, "report", { type: "contract", ownerUserId: a.userId });
@@ -138,7 +145,7 @@ export async function reportContract(
       if (!(REPORTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status)) return err("invalid_state");
 
       // 有効な担当は企業ごとに一件。担当ロックと契約の確認で重複報告を防ぐ。
-      // 条件版は不変なので、企業の更新ロックを重ねない（営業抑止は企業→担当の順でロックする）。
+      // The parent was locked before the assignment, matching suppression and FK writes.
       if (await findSalesContract(tx, a.companyId))
         return err("company_contracted", "この企業には確認中または完了した契約があります");
       const bound = await getSalesOffer(tx, a.companyId, a.salesOfferId);

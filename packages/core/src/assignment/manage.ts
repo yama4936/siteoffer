@@ -105,6 +105,14 @@ export async function reassignAssignment(
   if (!auth.ok) return auth;
   try {
     return await runTx<{ released: Assignment; created: Assignment }, ReassignError>(db, async (tx, fail) => {
+      const [candidate] = await tx
+        .select({ id: assignments.id })
+        .from(assignments)
+        .where(eq(assignments.id, input.assignmentId));
+      if (!candidate) return fail("not_found");
+      // Claims take the destination user before the company; use the same order.
+      const user = await lockActiveSalesUser(tx, input.toUserId);
+      if (!user.ok) return fail(user.error);
       const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
         type: "assignment",
         action: "reassign",
@@ -131,9 +139,7 @@ export async function reassignAssignment(
         );
       if (before.userId === input.toUserId) fail("same_user");
 
-      const user = await lockActiveSalesUser(tx, input.toUserId);
-      if (!user.ok) fail(user.error);
-      const [company] = await tx.select().from(companies).where(eq(companies.id, before.companyId)).for("update");
+      const [company] = await tx.select().from(companies).where(eq(companies.id, before.companyId));
       if (company && company.suppression !== "none") fail("company_suppressed");
 
       const max = await getSetting(tx, "assignment.maxActivePerUser");

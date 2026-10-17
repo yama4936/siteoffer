@@ -538,6 +538,20 @@ export async function reviewProposalVersion(
   const note = input.note?.trim() || null;
   if (input.decision === "rejected" && !note) return err("invalid_input", "差し戻しの理由を入力してください");
   return inTx(db, async (tx, fail) => {
+    const [target] = await tx
+      .select({ proposalId: proposalVersions.proposalId, companyId: proposals.companyId })
+      .from(proposalVersions)
+      .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+      .where(eq(proposalVersions.id, input.proposalVersionId));
+    if (!target) return fail("not_found");
+    // Lock the proposal parent before any version, then its company. A joined FOR UPDATE
+    // can otherwise retain a version lock while waiting for its proposal parent.
+    await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.id, target.proposalId)).for("update");
+    await tx
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.id, target.companyId))
+      .for("no key update");
     const [row] = await tx
       .select({ version: proposalVersions, companyId: proposals.companyId })
       .from(proposalVersions)
