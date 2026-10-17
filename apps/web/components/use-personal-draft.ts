@@ -11,6 +11,7 @@ export function usePersonalDraft<T extends object>(
   initial: DraftSnapshot<T>,
   defaults: T,
   save: (revision: number, values: T | null) => Promise<DraftResult<T>>,
+  preservesNavigation?: (target: HTMLAnchorElement | HTMLFormElement) => boolean,
 ) {
   const [values, setValues] = useState(initial.values ?? defaults);
   const [status, setStatus] = useState(initial.values ? "保存済みの下書きを復元しました" : "入力すると自動保存します");
@@ -28,6 +29,8 @@ export function usePersonalDraft<T extends object>(
   const inFlight = useRef<Promise<boolean> | null>(null),
     timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const navigationPolicy = useRef(preservesNavigation);
+  navigationPolicy.current = preservesNavigation;
   const dirty = useCallback(() => fingerprint(latest.current) !== saved.current, []);
   const cancelPendingSave = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
@@ -58,6 +61,7 @@ export function usePersonalDraft<T extends object>(
         !otherForm
       )
         return;
+      if (navigationPolicy.current?.(link ?? (target as HTMLFormElement))) return;
       if (!window.confirm("まだ保存されていない入力があります。保存完了を待たずに移動しますか？")) {
         event.preventDefault();
         event.stopPropagation();

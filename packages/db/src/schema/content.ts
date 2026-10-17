@@ -46,7 +46,11 @@ export const contentEntries = pgTable(
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull(),
   },
-  (t) => [uniqueIndex("content_company_slug").on(t.companyId, t.slug), index("content_company").on(t.companyId)],
+  (t) => [
+    uniqueIndex("content_company_slug").on(t.companyId, t.slug),
+    index("content_company").on(t.companyId),
+    index("content_company_updated").on(t.companyId, t.updatedAt, t.id),
+  ],
 );
 export const contentRevisions = pgTable(
   "content_revisions",

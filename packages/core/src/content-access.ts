@@ -19,7 +19,13 @@ import {
 } from "./auth/validation.ts";
 import { recordEvent } from "./common/events.ts";
 import type { Actor, Clock } from "./common/index.ts";
-import { activeContentOperator, authorizeContentEditor, ContentError, lockContentCompany } from "./content-auth.ts";
+import {
+  activeContentOperator,
+  authorizeContentEditor,
+  authorizeContentReader,
+  ContentError,
+  lockContentCompany,
+} from "./content-auth.ts";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function validToken(token: string) {
@@ -46,27 +52,34 @@ async function completedContract(db: DbOrTx, companyId: string, contractId: stri
   if (!contract) throw new ContentError("記事更新の対象となる完了契約を確認してください");
 }
 export async function loadContentAccess(db: DbOrTx, actor: Actor | null, companyId: string) {
-  return db.transaction(async (tx) => {
-    if (actor?.kind !== "ops") throw new ContentError("運営権限が必要です");
-    const company = await lockContentCompany(tx, companyId);
-    await activeContentOperator(tx, actor);
-    const rows = await tx
-      .select({ access: contentAccess, accountStatus: users.status })
-      .from(contentAccess)
-      .leftJoin(users, eq(users.id, contentAccess.userId))
-      .where(eq(contentAccess.companyId, companyId))
-      .orderBy(desc(contentAccess.updatedAt));
-    const available = await tx
-      .select({ id: contracts.id, completedAt: contracts.completedAt })
-      .from(contracts)
-      .where(and(eq(contracts.companyId, companyId), eq(contracts.status, "completed")))
-      .orderBy(desc(contracts.completedAt));
-    return {
-      company,
-      access: rows.map((r) => accessView(r.access, r.accountStatus)),
-      contracts: available.map((c) => ({ id: c.id, completedAt: c.completedAt?.toISOString() ?? null })),
-    };
-  });
+  return db.transaction(
+    async (tx) => {
+      if (actor?.kind !== "ops") throw new ContentError("運営権限が必要です");
+      await authorizeContentReader(tx, actor, companyId);
+      const [company] = await tx
+        .select({ id: companies.id, name: companies.name })
+        .from(companies)
+        .where(eq(companies.id, companyId));
+      if (!company) throw new ContentError("この企業の記事管理は利用できません");
+      const rows = await tx
+        .select({ access: contentAccess, accountStatus: users.status })
+        .from(contentAccess)
+        .leftJoin(users, eq(users.id, contentAccess.userId))
+        .where(eq(contentAccess.companyId, companyId))
+        .orderBy(desc(contentAccess.updatedAt));
+      const available = await tx
+        .select({ id: contracts.id, completedAt: contracts.completedAt })
+        .from(contracts)
+        .where(and(eq(contracts.companyId, companyId), eq(contracts.status, "completed")))
+        .orderBy(desc(contracts.completedAt));
+      return {
+        company,
+        access: rows.map((r) => accessView(r.access, r.accountStatus)),
+        contracts: available.map((c) => ({ id: c.id, completedAt: c.completedAt?.toISOString() ?? null })),
+      };
+    },
+    { isolationLevel: "repeatable read" },
+  );
 }
 export type ContentAccessInput = {
   companyId: string;

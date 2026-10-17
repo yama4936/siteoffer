@@ -1,0 +1,1 @@
+CREATE INDEX "content_company_updated" ON "content_entries" USING btree ("company_id","updated_at","id");

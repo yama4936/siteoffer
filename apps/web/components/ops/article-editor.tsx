@@ -1,10 +1,12 @@
 "use client";
 import type { ArticleImageChoice, ArticleOperation, ArticleValues, ArticleWorkspace } from "@siteoffer/core";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { refreshArticleAction, saveArticleCopyAction, submitArticleAction } from "@/app/(ops)/ops/content/actions";
 import { usePersonalDraft } from "@/components/use-personal-draft";
+import { type ContentIndexQuery, contentIndexHref } from "@/lib/content-index-query";
 import { ArticleImages } from "./article-images";
+import { preservesArticleFilter } from "./content-filter-navigation";
 import "./article-editor.css";
 
 const same = (a: ArticleValues, b: ArticleValues) =>
@@ -40,17 +42,24 @@ export function ArticleEditor({
   publicSite,
   audience = "ops",
   imageChoices = [],
+  listContext,
 }: {
   initial: ArticleWorkspace;
   imageChoices?: ArticleImageChoice[];
+  listContext?: ContentIndexQuery;
   publicSite: boolean;
   audience?: "ops" | "customer";
 }) {
   const router = useRouter();
+  const inputId = useId();
   const imageBase = `/article-images/${initial.scope.companyId}`;
   const [workspace, setWorkspace] = useState(initial);
-  const draft = usePersonalDraft(initial.copy, initial.current, (revision, values) =>
-    saveArticleCopyAction(initial.scope, revision, values),
+  const draft = usePersonalDraft(
+    initial.copy,
+    initial.current,
+    (revision, values) => saveArticleCopyAction(initial.scope, revision, values),
+    (target) =>
+      preservesArticleFilter(target, initial.scope, audience === "customer" ? "/customer/content" : "/ops/content"),
   );
   const [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
@@ -120,7 +129,15 @@ export function ArticleEditor({
       if (operation.kind === "save") {
         if (!initial.scope.entryId) {
           router.replace(
-            `${audience === "customer" ? "/customer/content" : "/ops/content"}?company=${initial.scope.companyId}&entry=${result.workspace.scope.entryId}`,
+            contentIndexHref(audience === "customer" ? "/customer/content" : "/ops/content", {
+              ...(listContext ?? {
+                companyId: initial.scope.companyId,
+                filters: { page: 1, query: "", category: "all", publication: "all" },
+                companies: { page: 1, query: "" },
+              }),
+              view: "edit",
+              entryId: result.workspace.scope.entryId,
+            }),
           );
           return;
         }
@@ -301,9 +318,10 @@ export function ArticleEditor({
         }}
       >
         <fieldset disabled={locked} className="min-w-0">
-          <label>
-            記事の種類
+          <div className="my-4">
+            <label htmlFor={`${inputId}-category`}>記事の種類</label>
             <select
+              id={`${inputId}-category`}
               className="mt-2 block"
               aria-label="記事の種類"
               name="category"
@@ -313,10 +331,11 @@ export function ArticleEditor({
               <option value="news">お知らせ</option>
               <option value="blog">ブログ</option>
             </select>
-          </label>
-          <label>
-            見出し
+          </div>
+          <div className="my-4">
+            <label htmlFor={`${inputId}-title`}>見出し</label>
             <input
+              id={`${inputId}-title`}
               className="mt-2 block w-full rounded border p-3"
               name="title"
               required
@@ -324,10 +343,13 @@ export function ArticleEditor({
               value={draft.values.title}
               onChange={(e) => change("title", e.target.value)}
             />
-          </label>
-          <label>
-            {initial.scope.entryId ? "URL名（作成後は固定）" : "URL名（自動入力・変更できます）"}
+          </div>
+          <div className="my-4">
+            <label htmlFor={`${inputId}-slug`}>
+              {initial.scope.entryId ? "URL名（作成後は固定）" : "URL名（自動入力・変更できます）"}
+            </label>
             <input
+              id={`${inputId}-slug`}
               className="mt-2 block w-full rounded border p-3"
               name="slug"
               required
@@ -338,10 +360,12 @@ export function ArticleEditor({
               value={draft.values.slug}
               onChange={(e) => change("slug", e.target.value)}
             />
-          </label>
-          <label>
-            本文
+          </div>
+          <div className="my-4">
+            <label htmlFor={`${inputId}-body`}>本文</label>
             <textarea
+              id={`${inputId}-body`}
+              className="mt-2 block w-full rounded border p-3"
               name="body"
               required
               maxLength={30000}
@@ -349,7 +373,7 @@ export function ArticleEditor({
               value={draft.values.body}
               onChange={(e) => change("body", e.target.value)}
             />
-          </label>
+          </div>
           <p className="design-muted">
             {draft.values.body.length.toLocaleString()} /
             30,000文字。本文はテキストとして表示します。HTMLは実行しません。
