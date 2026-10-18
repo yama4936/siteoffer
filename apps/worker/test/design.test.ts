@@ -5,9 +5,11 @@ import {
   attachImageAssetFile,
   createDesign,
   DEFAULT_DESIGN_BRIEF,
+  loadCompanyProfile,
   requestDesignBuild,
   retryDesignBuild,
   reviewDesign,
+  saveCompanyProfile,
 } from "@siteoffer/core";
 import {
   auditEvents,
@@ -21,11 +23,13 @@ import {
   websites,
 } from "@siteoffer/db";
 import { createOpenAIImageGenerator, normalizeDesignImage } from "@siteoffer/generation/images";
+import { EMPTY_COMPANY_PROFILE } from "@siteoffer/schemas";
 import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { intakeDesignBuilds, processDesignJobs } from "../src/design.ts";
 import { executeStep } from "../src/execute.ts";
+import { defaultGenerationInputBuilder } from "../src/input.ts";
 import { ensureProposalVersion, proposalStep } from "../src/pipeline/proposal.ts";
 import { stepKeys } from "../src/queues.ts";
 import { deferred, setupEnv, type TestEnv } from "./helpers.ts";
@@ -76,6 +80,116 @@ async function seed() {
   return { company: company!, audit: audit!, actor, image };
 }
 describe("画像を先に承認する制作フロー", () => {
+  async function withProfile(key: string) {
+    const s = await seed();
+    const values = { ...EMPTY_COMPANY_PROFILE, email: "contact@fixture-profile.example.test" };
+    await saveCompanyProfile(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      expectedRevision: 0,
+      values,
+      source: "架空の版照合検証",
+      confirmed: true,
+    });
+    const original = env.deps.buildGenerationInput;
+    env.deps.buildGenerationInput = async (...args) => {
+      const input = await original(...args);
+      const profile = await loadCompanyProfile(env.db, s.company.id);
+      return { ...input, context: { ...input.context, companyProfileRevision: profile!.revision } };
+    };
+    const d = await createDesign(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      requestKey: key,
+      brief: DEFAULT_DESIGN_BRIEF,
+      source: "import",
+    });
+    await attachDesignImage(env.db, env.clock, s.actor, d.id, s.image);
+    await reviewDesign(env.db, env.clock, s.actor, {
+      id: d.id,
+      approve: true,
+      note: "架空データの版照合",
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+    });
+    return {
+      ...s,
+      values,
+      payload: { companyId: s.company.id, auditId: s.audit.id, designVersionId: d.id, revision: key },
+    };
+  }
+  it("制作中に確認情報が変わった版を運営確認へ進めない", async () => {
+    const s = await withProfile("profile-mid-build"),
+      build = env.deps.siteBuilder.buildDemo;
+    env.deps.siteBuilder.buildDemo = async (args) => {
+      await saveCompanyProfile(env.db, env.clock, s.actor, {
+        companyId: s.company.id,
+        expectedRevision: 1,
+        values: s.values,
+        source: "制作中に更新した架空の根拠",
+        confirmed: true,
+      });
+      return build(args);
+    };
+    const result = await executeStep(env.deps, proposalStep, s.payload);
+    expect(result.status).toBe("failed");
+    expect(env.generator.calls).toHaveLength(4);
+    const [version] = await env.db.select().from(proposalVersions);
+    expect(version!.status).toBe("failed");
+    expect((version!.content as { failure: string }).failure).toContain("会社情報が変更");
+  });
+  it("再試行で旧確認版の成功した文章を新しい情報へ混在させない", async () => {
+    const s = await withProfile("profile-retry");
+    let builds = 0;
+    const build = env.deps.siteBuilder.buildDemo;
+    env.deps.siteBuilder.buildDemo = async (args) => {
+      if (++builds === 1)
+        return { ok: false, reason: "astro-build-failed", message: "架空の一時的な失敗", retryable: true };
+      return build(args);
+    };
+    expect((await executeStep(env.deps, proposalStep, s.payload)).status).toBe("retry");
+    await saveCompanyProfile(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      expectedRevision: 1,
+      values: s.values,
+      source: "次の試行までに更新した架空の根拠",
+      confirmed: true,
+    });
+    expect((await executeStep(env.deps, proposalStep, s.payload)).status).toBe("failed");
+    expect(env.generator.calls).toHaveLength(4);
+    expect(builds).toBe(1);
+  });
+  it("連絡先が未確認ならモデルを呼ぶ前に止め、確認画面を案内する", async () => {
+    const s = await seed();
+    env.deps.buildGenerationInput = defaultGenerationInputBuilder;
+    const d = await createDesign(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      requestKey: "missing-contact",
+      brief: DEFAULT_DESIGN_BRIEF,
+      source: "import",
+    });
+    await attachDesignImage(env.db, env.clock, s.actor, d.id, s.image);
+    await reviewDesign(env.db, env.clock, s.actor, {
+      id: d.id,
+      approve: true,
+      note: "架空データの検証",
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+    });
+    const result = await executeStep(env.deps, proposalStep, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      designVersionId: d.id,
+      revision: "contact-check",
+    });
+    expect(result.status).toBe("failed");
+    expect(env.generator.calls).toHaveLength(0);
+    expect(await env.db.select().from(generationJobs)).toHaveLength(0);
+    const [version] = await env.db.select().from(proposalVersions);
+    expect((version!.content as { failure: string }).failure).toContain("制作に使う会社情報");
+  });
   it("keeps a legacy generating proposal image-free instead of adopting newly registered materials", async () => {
     const s = await seed();
     const d = await createDesign(env.db, env.clock, s.actor, {

@@ -5,6 +5,7 @@ const ACTIONS: Record<string, string> = {
   "session.created": "ログイン",
   "session.deleted": "ログアウト",
   "company.update_by_ops": "企業情報を更新",
+  "company.profile_verified": "制作に使う会社情報を確認",
   "company.official_site_status": "公式サイトの確認状態を更新",
   "company.website_candidate_saved": "公式サイト候補と確認根拠を保存",
   "company.make_sellable": "営業への公開を開始",

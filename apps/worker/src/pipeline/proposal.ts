@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
 import {
+  assertCompanyProfileCurrent,
   type Clock,
+  CompanyProfileError,
   captureProposalImageAssets,
   createDesign,
   DEFAULT_DESIGN_BRIEF,
@@ -17,6 +19,7 @@ import { emptyProposalContent, type ProposalContent } from "../content.ts";
 import type { JobQueue } from "../deps.ts";
 import { contentSiteUrl, withDesignReference } from "../design.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
+import { siteGenerationInputIssue } from "../input.ts";
 import { applyProposalMaterials, prepareProposalMaterials } from "../proposal-materials.ts";
 import { type ProposalPayload, type ProposalPayloadInput, proposalPayloadSchema, QUEUES, stepKeys } from "../queues.ts";
 import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
@@ -114,12 +117,15 @@ export const proposalStep: StepDefinition<
     await ctx.assertCurrent();
     let material: Awaited<ReturnType<typeof prepareProposalMaterials>>;
     try {
+      const generationInput = await deps.buildGenerationInput(db, { company, audit });
+      const inputIssue = siteGenerationInputIssue(generationInput);
+      if (inputIssue) throw new PermanentError(inputIssue);
       material = await prepareProposalMaterials(
         db,
         company.id,
         (version.content as ProposalContent).demoImageAssets,
         workDir,
-        await deps.buildGenerationInput(db, { company, audit }),
+        generationInput,
       );
     } catch (error) {
       if (error instanceof ImageAssetError) throw new PermanentError(error.message);
@@ -196,6 +202,12 @@ export const proposalStep: StepDefinition<
     }
 
     await ctx.withOwnership(async (tx) => {
+      try {
+        await assertCompanyProfileCurrent(tx, company.id, input.context.companyProfileRevision);
+      } catch (error) {
+        if (error instanceof CompanyProfileError) throw new PermanentError(error.message);
+        throw error;
+      }
       await saveVersion(tx, clock, version.id, {
         status: "in_review",
         content: { ...content, demoCheck: built.check },
@@ -253,7 +265,14 @@ async function generateOnce(
 ): Promise<{ jobId: string; output: unknown }> {
   for (let a = 1; a < req.attempt; a++) {
     const prev = await findGenerationJob(genDeps.db, `${req.key}:${req.purpose}:a${a}`);
-    if (prev?.status === "succeeded" && prev.output) return { jobId: prev.id, output: prev.output };
+    if (prev?.status === "succeeded" && prev.output) {
+      const previousRevision = (prev.inputRef as { companyProfileRevision?: unknown } | null)?.companyProfileRevision;
+      if (previousRevision !== req.input.context.companyProfileRevision)
+        throw new PermanentError(
+          "制作に使う会社情報が変わっています。同じデザインから新しい提案版を制作してください。",
+        );
+      return { jobId: prev.id, output: prev.output };
+    }
   }
   const r = await runGenerationJob(genDeps, {
     idempotencyKey: `${req.key}:${req.purpose}:a${req.attempt}`,

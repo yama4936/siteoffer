@@ -104,8 +104,21 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
           <dd>{formatDateTime(a.nextActionAt)}</dd>
           <dt>担当の期限</dt>
           <dd>{formatDateTime(a.expiresAt)}</dd>
-          <dt>代表電話</dt>
+          <dt>代表電話{d.company.representativePhone && !d.company.contactVerified ? "（未確認の候補）" : ""}</dt>
           <dd className="tabular-nums">{d.company.representativePhone ?? "不明"}</dd>
+          {d.company.contactEmail && (
+            <>
+              <dt>メール（運営確認済み）</dt>
+              <dd className="break-all">
+                <a
+                  className="text-primary underline"
+                  href={`mailto:${encodeURIComponent(d.company.contactEmail).replace(/%40/g, "@")}`}
+                >
+                  {d.company.contactEmail}
+                </a>
+              </dd>
+            </>
+          )}
           <dt>現在のサイト</dt>
           <dd>{firstSite ? <ExternalLink href={firstSite.url} /> : "不明"}</dd>
           {d.company.suppression !== "none" && (

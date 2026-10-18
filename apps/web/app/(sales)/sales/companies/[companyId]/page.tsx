@@ -137,8 +137,21 @@ export default async function CompanyDetailPage({
             <dd>{c.address ?? ([c.prefecture, c.city].filter(Boolean).join(" ") || "不明")}</dd>
             <dt>業種</dt>
             <dd>{c.industry ?? "不明"}</dd>
-            <dt>代表電話</dt>
+            <dt>代表電話{c.representativePhone && !c.contactVerified ? "（未確認の候補）" : ""}</dt>
             <dd>{c.representativePhone ?? "不明"}</dd>
+            {c.contactEmail && (
+              <>
+                <dt>メール（運営確認済み）</dt>
+                <dd className="break-all">
+                  <a
+                    className="text-primary underline"
+                    href={`mailto:${encodeURIComponent(c.contactEmail).replace(/%40/g, "@")}`}
+                  >
+                    {c.contactEmail}
+                  </a>
+                </dd>
+              </>
+            )}
             <dt>現在のサイト</dt>
             <dd>
               {d.sites.length

@@ -3,6 +3,8 @@ import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
 import {
   type Actor,
+  assertCompanyProfileCurrent,
+  CompanyProfileError,
   claimDeliveryBuild,
   completeDeliveryBuild,
   type DeliveryBuildClaim,
@@ -21,6 +23,7 @@ import { applyDeliveryMaterials, prepareDeliveryMaterials } from "./delivery-mat
 import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
 import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
+import { siteGenerationInputIssue } from "./input.ts";
 import { readStepState } from "./ledger.ts";
 import { stopDiscoveryJob } from "./pipeline/discovery.ts";
 import { type DiscoveryPayload, QUEUES, stepKeys } from "./queues.ts";
@@ -157,11 +160,14 @@ export async function intakeDeliveries(deps: WorkerDeps, _state: IntakeState): P
     let r: DeliveryIntakeResult;
     try {
       r = await processDelivery(deps, current, deliveryRoundKey(current), claim, controller.signal);
-    } catch {
+    } catch (error) {
       r = {
         deliveryId: d.id,
         status: "failed",
-        reason: "制作処理を完了できませんでした。ワーカーと設定を確認して再試行してください。",
+        reason:
+          error instanceof CompanyProfileError
+            ? error.message
+            : "制作処理を完了できませんでした。ワーカーと設定を確認して再試行してください。",
       };
     } finally {
       clearInterval(timer);
@@ -225,6 +231,8 @@ async function processDelivery(
       reason: "記事があるため、納品前に SITEOFFER_CONTENT_ORIGIN の設定が必要です",
     };
   let input = await deps.buildGenerationInput(db, { company, audit });
+  const inputIssue = siteGenerationInputIssue(input);
+  if (inputIssue) return { deliveryId: d.id, status: "failed", reason: inputIssue };
   if (source.design)
     input = await withDesignReference(
       input,
@@ -293,9 +301,12 @@ async function processDelivery(
     };
   }
 
-  const added = await completeDeliveryBuild(db, clock, INTAKE_ACTOR, claim, {
-    artifactDir: built.distDir,
-    generationJobId: gen.value.job.id,
+  const added = await db.transaction(async (tx) => {
+    await assertCompanyProfileCurrent(tx, company.id, input.context.companyProfileRevision);
+    return completeDeliveryBuild(tx, clock, INTAKE_ACTOR, claim, {
+      artifactDir: built.distDir,
+      generationJobId: gen.value.job.id,
+    });
   });
   if (!added.ok)
     return added.error === "stale_build"

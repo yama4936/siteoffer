@@ -66,6 +66,9 @@ const SYSTEM_ACTOR: Actor = { kind: "system", job: "generation" };
 function inputRef(input: GenerationInput) {
   return {
     sha256: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    ...(input.context.companyProfileRevision !== undefined
+      ? { companyProfileRevision: input.context.companyProfileRevision }
+      : {}),
     factKeys: input.facts.map((f) => f.key),
     needsReviewFactKeys: input.facts.filter((f) => f.status === "needs_review").map((f) => f.key),
     externalDataIds: input.externalData.map((d) => d.id),

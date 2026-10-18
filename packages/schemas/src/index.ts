@@ -1,3 +1,4 @@
+export * from "./company-profile.ts";
 export * from "./content-import.ts";
 export * from "./delivery-change.ts";
 export * from "./delivery-preparation.ts";

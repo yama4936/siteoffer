@@ -3,6 +3,7 @@ export * from "./activity-draft.ts";
 export * from "./assignment.ts";
 export * from "./audit-request.ts";
 export * from "./companies.ts";
+export * from "./company-profile.ts";
 export * from "./consultation.ts";
 export * from "./content.ts";
 export * from "./content-access.ts";

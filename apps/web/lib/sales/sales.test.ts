@@ -8,6 +8,7 @@ import {
   fixedClock,
   getSalesOffer,
   HOUR,
+  saveCompanyProfile,
   scheduleRewardPayment,
 } from "@siteoffer/core";
 import {
@@ -23,6 +24,7 @@ import {
   websites,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
+import { EMPTY_COMPANY_PROFILE } from "@siteoffer/schemas";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -45,6 +47,47 @@ let db: Db;
 let close: () => Promise<void>;
 let clock: ReturnType<typeof fixedClock>;
 let seq = 0;
+
+it("運営が一度確認した連絡先を営業詳細と担当へ共通表示し、取り下げ後に旧候補を復活させない", async () => {
+  const me = await user("sales"),
+    ops = await user("ops"),
+    other = await user("sales");
+  const c = await company({ representativePhone: "052-000-1111" }),
+    a = await claim(me.actor, c.id);
+  const initial = await getCompanyDetail(db, me.actor, c.id);
+  if (!initial.ok) throw Error(initial.error);
+  expect(initial.value.company.contactVerified).toBe(false);
+  await saveCompanyProfile(db, clock, ops.actor, {
+    companyId: c.id,
+    expectedRevision: 0,
+    values: { ...EMPTY_COMPANY_PROFILE, phone: "052-123-4567", email: "contact@example.test" },
+    source: "営業へは渡さない内部の確認資料名",
+    confirmed: true,
+  });
+  const detail = await getCompanyDetail(db, me.actor, c.id),
+    assignment = await getMyAssignmentDetail(db, me.actor, a.id);
+  if (!detail.ok || !assignment.ok) throw Error("fixture read failed");
+  for (const result of [detail.value, assignment.value]) {
+    expect(result.company).toMatchObject({
+      representativePhone: "052-123-4567",
+      contactEmail: "contact@example.test",
+      contactVerified: true,
+    });
+    expect(JSON.stringify(result)).not.toContain("営業へは渡さない内部の確認資料名");
+  }
+  expect((await getMyAssignmentDetail(db, other.actor, a.id)).ok).toBe(false);
+  await saveCompanyProfile(db, clock, ops.actor, {
+    companyId: c.id,
+    expectedRevision: 1,
+    values: EMPTY_COMPANY_PROFILE,
+    source: "架空の使用取り下げ",
+    confirmed: true,
+  });
+  const withdrawn = await getCompanyDetail(db, me.actor, c.id);
+  if (!withdrawn.ok) throw Error(withdrawn.error);
+  expect(withdrawn.value.company.representativePhone).toBeNull();
+  expect(withdrawn.value.company.contactEmail).toBeNull();
+});
 
 beforeEach(async () => {
   ({ db, close } = await createTestDb());

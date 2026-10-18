@@ -16,6 +16,7 @@ import {
   isTermsReadyForSales,
   listActivities,
   listAssignments,
+  loadCompanyProfile,
   ok,
   parseRewardRule,
   type Result,
@@ -45,6 +46,16 @@ import { type CompanyListFilter, type DirectoryQuery, normalizeDirectoryFilter }
 export { COMPANY_SORTS, type CompanyListFilter, type CompanySort, parseCompanySort } from "./directory-query";
 
 type QueryError = "forbidden" | "not_found";
+
+/** Read only after company/assignment authorization. Internal evidence and reviewer data stay in ops. */
+async function companyContact(db: DbOrTx, company: { id: string; representativePhone: string | null }) {
+  const profile = await loadCompanyProfile(db, company.id);
+  return {
+    representativePhone: profile ? profile.values.phone : company.representativePhone,
+    contactEmail: profile?.values.email ?? null,
+    contactVerified: !!profile,
+  };
+}
 
 /** URLから来たIDの形式。形式違いはDBに渡さず「見つからない」にする */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -340,6 +351,8 @@ export interface CompanyDetail {
     address: string | null;
     industry: string | null;
     representativePhone: string | null;
+    contactEmail?: string | null;
+    contactVerified?: boolean;
     suppression: string;
     recontactAfter: Date | null;
   };
@@ -450,6 +463,7 @@ export async function getCompanyDetail(
   const found = await findReadableCompany(db, actor, companyId);
   if (!found.ok) return found;
   const { user: viewer, company, active, owned, resource } = found.value;
+  const contact = await companyContact(db, company);
   const shared = sharedState(viewer.userId, owned ?? active);
 
   const sites = await db
@@ -481,7 +495,7 @@ export async function getCompanyDetail(
       city: company.city,
       address: company.address,
       industry: company.industry,
-      representativePhone: company.representativePhone,
+      ...contact,
       suppression: company.suppression,
       recontactAfter: company.recontactAfter,
     },
@@ -637,6 +651,8 @@ export interface AssignmentDetail {
     prefecture: string | null;
     city: string | null;
     representativePhone: string | null;
+    contactEmail?: string | null;
+    contactVerified?: boolean;
     suppression: string;
     recontactAfter: Date | null;
   };
@@ -701,6 +717,7 @@ export async function getMyAssignmentDetail(
 
   const [company] = await db.select().from(companies).where(eq(companies.id, a.companyId));
   if (!company) return err("not_found");
+  const contact = await companyContact(db, company);
   const sites = await db
     .select({ url: websites.url, domain: websites.domain })
     .from(websites)
@@ -741,7 +758,7 @@ export async function getMyAssignmentDetail(
       name: company.name,
       prefecture: company.prefecture,
       city: company.city,
-      representativePhone: company.representativePhone,
+      ...contact,
       suppression: company.suppression,
       recontactAfter: company.recontactAfter,
     },

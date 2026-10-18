@@ -18,6 +18,7 @@ import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { generationCompanyProfileCurrent } from "../company-profile.ts";
 import { deliveryVersionSuperseded } from "../delivery/change.ts";
 import { deliveryVersionImagesValid } from "../image-assets.ts";
 import { authorizeUser } from "../permissions/policy.ts";
@@ -84,20 +85,27 @@ async function loadTarget(db: DbOrTx, purpose: SharePurpose, targetId: string): 
         companyId: proposals.companyId,
         status: proposalVersions.status,
         artifactDir: proposalVersions.demoArtifactDir,
+        generationJobId: proposalVersions.generationJobId,
       })
       .from(proposalVersions)
       .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
       .where(eq(proposalVersions.id, targetId));
     if (row && !(await proposalVersionImagesValid(db, targetId))) return null;
+    if (row && !(await generationCompanyProfileCurrent(db, row.companyId, row.generationJobId))) return null;
     return row ? { companyId: row.companyId, approved: row.status === "approved", artifactDir: row.artifactDir } : null;
   }
   const [row] = await db
-    .select({ companyId: contracts.companyId, artifactDir: deliveryVersions.artifactDir })
+    .select({
+      companyId: contracts.companyId,
+      artifactDir: deliveryVersions.artifactDir,
+      generationJobId: deliveryVersions.generationJobId,
+    })
     .from(deliveryVersions)
     .innerJoin(deliveries, eq(deliveries.id, deliveryVersions.deliveryId))
     .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
     .where(eq(deliveryVersions.id, targetId));
   if (row && !(await deliveryVersionImagesValid(db, targetId))) return null;
+  if (row && !(await generationCompanyProfileCurrent(db, row.companyId, row.generationJobId))) return null;
   if (row && (await deliveryVersionSuperseded(db, targetId))) return null;
   return row ? { companyId: row.companyId, approved: true, artifactDir: row.artifactDir } : null;
 }

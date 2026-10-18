@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isTermsReadyForSales, systemClock } from "@siteoffer/core";
+import { isTermsReadyForSales, loadCompanyProfileForOps, systemClock } from "@siteoffer/core";
 import { getCompanyAuditRequest } from "@siteoffer/worker/audit-request";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 import { AuditRequest } from "@/components/ops/audit-request";
 import { AuditView } from "@/components/ops/audit-view";
 import { CompanyJourney } from "@/components/ops/company-journey";
+import { CompanyProfile } from "@/components/ops/company-profile";
 import { GenerationHistory } from "@/components/ops/generation-history";
 import { ImageAssetUpload } from "@/components/ops/image-asset-upload";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
@@ -49,6 +50,7 @@ import { sellableIssues, termsIssueText } from "@/lib/ops/sellable";
 import {
   listSiteSearchCandidates,
   listWebsiteCandidateEvidence,
+  safeWebsiteCandidateUrl,
   websiteReviewFingerprint,
 } from "@/lib/ops/website-candidate";
 import { getCurrentActor } from "@/lib/session";
@@ -101,6 +103,7 @@ export default async function CompanyPage({
   if (!journey.ok) return journey.error === "forbidden" ? <Forbidden /> : notFound();
   const d = r.value;
   const c = d.company;
+  const profile = await loadCompanyProfileForOps(db, actor, c.id);
   const websiteProps = {
     companyId: c.id,
     fingerprint: websiteReviewFingerprint(c),
@@ -139,6 +142,28 @@ export default async function CompanyPage({
       />
       <Flash searchParams={sp} />
       <CompanyJourney data={journey.value} />
+      <CompanyProfile
+        companyId={c.id}
+        revision={profile?.revision ?? 0}
+        initialValues={
+          profile?.values ?? {
+            phone: c.representativePhone,
+            email: null,
+            hours: null,
+            services: null,
+            industry: c.industry,
+            address: c.address ? [c.prefecture, c.city, c.address].filter(Boolean).join(" ") : null,
+          }
+        }
+        source={
+          profile?.source ??
+          safeWebsiteCandidateUrl(d.websites.find((site) => site.kind === "current" && site.isPrimary)?.url)?.url ??
+          ""
+        }
+        confirmedAt={profile?.confirmedAt.toISOString() ?? null}
+        confirmedBy={profile?.confirmedByName ?? null}
+        contactReady={!!(profile?.values.phone || profile?.values.email)}
+      />
 
       <div className="mb-8 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -175,7 +200,11 @@ export default async function CompanyPage({
                 {c.suppressionReason ? `（${c.suppressionReason}）` : ""}
               </dd>
               <dt>代表窓口</dt>
-              <dd>{c.representativePhone ?? "不明"}</dd>
+              <dd className="break-all">
+                {profile
+                  ? (profile.values.phone ?? profile.values.email ?? "制作に使う連絡先なし")
+                  : (c.representativePhone ?? "不明")}
+              </dd>
               <dt>更新</dt>
               <dd className="tabular-nums">{fmtDate(c.updatedAt)}</dd>
             </DescriptionList>
