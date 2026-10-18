@@ -8,6 +8,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm ci --omit=dev --no-audit --no-fund
 COPY packages/generation/src/sandbox /app/packages/generation/src/sandbox
+COPY scripts/runtime-fingerprint.ts /app/scripts/runtime-fingerprint.ts
+COPY Dockerfile.codex /app/Dockerfile.codex
+ARG SITEOFFER_SOURCE_SHA256
+RUN node /app/scripts/runtime-fingerprint.ts codex /app "${SITEOFFER_SOURCE_SHA256}" > /app/siteoffer-runtime.json
+LABEL org.siteoffer.runtime.kind="codex" org.siteoffer.runtime.source-sha256="${SITEOFFER_SOURCE_SHA256}"
 RUN mkdir -p /home/codex/.codex /work \
     && chmod 755 /home/codex /home/codex/.codex /work
 ENV HOME=/home/codex CODEX_HOME=/home/codex/.codex

@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { resolveWorkerConfig } from "../apps/worker/src/config.ts";
 import { DEFAULT_SITE_BUILD_IMAGE } from "../apps/worker/src/site-builder-docker.ts";
+import { runtimeLabelsMatch, runtimeSourceFingerprint } from "../scripts/runtime-fingerprint.ts";
 
 export interface PreflightCheck {
   name: string;
@@ -99,18 +100,22 @@ export async function generationPreflight(
     "LinuxコンテナのDockerへ接続可能",
     "Docker DesktopとLinuxコンテナの接続先を確認してください。",
   );
-  for (const [name, image] of [
-    ["生成イメージ", env.SITEOFFER_CODEX_IMAGE?.trim() || ""],
-    ["ビルドイメージ", env.SITEOFFER_SITE_BUILD_IMAGE?.trim() || DEFAULT_SITE_BUILD_IMAGE],
-  ])
+  for (const [kind, name, image] of [
+    ["codex", "生成イメージ", env.SITEOFFER_CODEX_IMAGE?.trim() || ""],
+    ["site", "ビルドイメージ", env.SITEOFFER_SITE_BUILD_IMAGE?.trim() || DEFAULT_SITE_BUILD_IMAGE],
+  ] as const)
     await check(
-      name!,
-      async () =>
-        !!image &&
-        /^[a-z0-9][a-z0-9./_:@-]{0,254}$/i.test(image) &&
-        !!(await deps.command("docker", ["image", "inspect", "--format", "{{.Id}}", image])),
-      "設定されたイメージが存在（ソースとの一致・実行品質は未検証）",
-      "設定したイメージを事前にビルドしてください。自動取得はしません。",
+      name,
+      async () => {
+        if (!image || !/^[a-z0-9][a-z0-9./_:@-]{0,254}$/i.test(image)) return false;
+        const fingerprint = await runtimeSourceFingerprint(kind);
+        const labels = JSON.parse(
+          await deps.command("docker", ["image", "inspect", "--format", "{{json .Config.Labels}}", image]),
+        );
+        return runtimeLabelsMatch(labels, kind, fingerprint);
+      },
+      "イメージと現在の制作ソースが一致（実行品質は未検証）",
+      `未作成または現在のソースと一致しません。pnpm ${kind === "codex" ? "codex:build" : "site:build"}で再ビルドしてください。自動取得・設定変更はしません。`,
     );
   const network = env.SITEOFFER_CODEX_NETWORK?.trim() || "";
   await check(
