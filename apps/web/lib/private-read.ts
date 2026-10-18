@@ -16,7 +16,7 @@ const headers = {
 };
 export class ReadInputError extends Error {}
 /** Read callbacks retain the domain's live user/company authorization. Never mutate here. */
-export async function privateRead<T>(roles: ("ops" | "customer_user")[], read: (actor: Actor) => Promise<T>) {
+export async function privateRead<T>(roles: ("ops" | "sales" | "customer_user")[], read: (actor: Actor) => Promise<T>) {
   try {
     const actor = await getCurrentActor();
     if (!actor) return Response.json({ ok: false, message: "ログインし直してください。" }, { status: 401, headers });

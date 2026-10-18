@@ -3,8 +3,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { readConsultationAction, unreadConsultationCountAction } from "@/app/consultation-actions";
 import { Button } from "@/components/ui/button";
-
-const READ_EVENT = "siteoffer-consultation-read";
+import { CONSULTATION_READ_EVENT } from "@/lib/client/consultation-events";
 
 /** バッジはこの利用者の件数だけ。別画面の回答も、画面が見えている間に更新する。 */
 export function ConsultationUnreadBadge({ initialCount }: { initialCount: number | null }) {
@@ -35,13 +34,13 @@ export function ConsultationUnreadBadge({ initialCount }: { initialCount: number
     const timer = setInterval(() => void update(), 30_000);
     document.addEventListener("visibilitychange", update);
     window.addEventListener("focus", update);
-    window.addEventListener(READ_EVENT, update);
+    window.addEventListener(CONSULTATION_READ_EVENT, update);
     return () => {
       disposed = true;
       clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
       window.removeEventListener("focus", update);
-      window.removeEventListener(READ_EVENT, update);
+      window.removeEventListener(CONSULTATION_READ_EVENT, update);
     };
   }, []);
   if (failed)
@@ -86,7 +85,7 @@ export function ConsultationReadMarker({ activityId, revision }: { activityId: s
       }
       completed.current = true;
       setState("saved");
-      window.dispatchEvent(new Event(READ_EVENT));
+      window.dispatchEvent(new Event(CONSULTATION_READ_EVENT));
       router.refresh();
     } catch {
       setState("error");

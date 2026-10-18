@@ -3,6 +3,7 @@
 import { ChevronRight, Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useEffect, useRef } from "react";
+import { WorkspaceAttention } from "@/components/shell/attention";
 
 const titles: Record<string, string> = {
   discovery: "企業・案件",
@@ -85,6 +86,7 @@ export function OpsFrame({
             <input name="q" aria-label="企業・案件を検索" placeholder="企業名・案件を検索" />
             <button type="submit">検索</button>
           </form>
+          <WorkspaceAttention role={workspaceRole} />
           <div className="ops-top-user">
             <span className="ops-avatar">{userName.slice(0, 1)}</span>
             <span>{userName}</span>
