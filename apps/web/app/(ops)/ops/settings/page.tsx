@@ -38,6 +38,11 @@ export default async function SettingsPage({
       <PageHeader title="設定・操作履歴" description="運用ルールと変更の履歴を確認します。" />
       <Flash searchParams={sp} />
       <p className="mb-4 text-sm">
+        <Link href="/ops/backups" className="text-primary underline">
+          バックアップの作成・復元確認・ダウンロード
+        </Link>
+      </p>
+      <p className="mb-4 text-sm">
         <Link href="/ops/account-recovery" className="text-primary underline">
           ログインの復旧依頼を確認
         </Link>

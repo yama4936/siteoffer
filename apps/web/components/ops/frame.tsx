@@ -18,6 +18,7 @@ const titles: Record<string, string> = {
   "publication-checks": "公開後の素材確認",
   processing: "処理の状況",
   settings: "設定・操作履歴",
+  backups: "バックアップ・復元確認",
   "account-recovery": "ログインの復旧",
 };
 

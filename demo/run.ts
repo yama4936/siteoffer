@@ -15,8 +15,10 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { assertPlainDirectory } from "./backup/bundle.ts";
+import { alive, readOwner } from "./backup/owner.ts";
 import { DEMO_DATABASE_URL, DEMO_PATHS, DEMO_PORTS, REPO_ROOT } from "./paths.ts";
-
+import { pnpmCommand } from "./pnpm-command.ts";
 import { demoShareKey } from "./share-key.ts";
 
 const realDiscovery = process.argv.includes("--real-discovery");
@@ -53,6 +55,7 @@ function baseEnv(): NodeJS.ProcessEnv {
     "SITEOFFER_CODEX_IMAGE",
     "SITEOFFER_CODEX_NETWORK",
     "SITEOFFER_CODEX_MODEL",
+    "SITEOFFER_BACKUP_PASSPHRASE",
   ]) {
     // An empty value also prevents Next.js from reloading a real key from the root .env.
     env[k] = "";
@@ -61,17 +64,19 @@ function baseEnv(): NodeJS.ProcessEnv {
   env.SITEOFFER_DEMO_MODE = realDiscovery ? "false" : "true";
   env.SITEOFFER_DISCOVERY_ONLY = realDiscovery ? "true" : "false";
   env.DATABASE_URL = DEMO_DATABASE_URL;
+  env.SITEOFFER_BACKUP_DATA_ROOT = DEMO_PATHS.data;
+  env.SITEOFFER_BACKUP_ROOT = DEMO_PATHS.backups;
   return env;
 }
 
 function start(name: string, cmd: string, args: string[], env: NodeJS.ProcessEnv): Proc {
   // 子プロセスはそれぞれ別のプロセスグループにする（pnpm・next の孫プロセスまでまとめて止めるため）
-  // Windowsではpnpm.cmdを直接spawnできないため、起動元のpnpm CLIをNodeで実行する。
-  const pnpmCli = cmd === "pnpm" ? process.env.npm_execpath : undefined;
-  const child = spawn(pnpmCli ? process.execPath : cmd, pnpmCli ? [pnpmCli, ...args] : args, {
+  // JS版のpnpmだけNodeへ渡し、スタンドアロン版のpnpm.exeは直接起動する。
+  const invocation = cmd === "pnpm" ? pnpmCommand(args) : { command: cmd, args };
+  const child = spawn(invocation.command, invocation.args, {
     cwd: REPO_ROOT,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: name === "db" ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
     windowsHide: true,
   });
@@ -89,6 +94,11 @@ function start(name: string, cmd: string, args: string[], env: NodeJS.ProcessEnv
   });
   const p = { name, child, exited };
   procs.push(p);
+  if (name === "db")
+    child.on("message", (message) => {
+      if (message && typeof message === "object" && "type" in message && message.type === "siteoffer.stop.requested")
+        void shutdown(0);
+    });
   exited.then((code) => {
     if (!shuttingDown) {
       log(`${name} が終了した（終了コード ${code}）。全部止める`);
@@ -117,7 +127,8 @@ function signalGroup(p: Proc, sig: NodeJS.Signals) {
 
 async function stopProc(p: Proc, timeoutMs = 20_000) {
   if (p.child.pid === undefined || p.child.exitCode !== null || p.child.signalCode !== null) return;
-  signalGroup(p, "SIGTERM");
+  if (p.name === "db" && p.child.connected) p.child.send({ type: "siteoffer.stop" });
+  else signalGroup(p, "SIGTERM");
   const timer = setTimeout(() => {
     log(`${p.name} が ${timeoutMs / 1000} 秒で止まらないため強制終了する`);
     signalGroup(p, "SIGKILL");
@@ -182,7 +193,16 @@ async function main() {
       );
     }
   }
-  if (reset) {
+  if (reset && process.env.DEMO_RESTORE_DIR)
+    throw new Error("復元プロファイルはリセットしません。通常のデモで実行してください。");
+  if (reset && existsSync(DEMO_PATHS.data)) {
+    await assertPlainDirectory(DEMO_PATHS.data);
+    try {
+      const owner = await readOwner(DEMO_PATHS.data);
+      if (alive(owner.pid)) throw new Error("このデータは稼働中です。正常停止してからリセットしてください。");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
     log(`デモのデータ（${DEMO_PATHS.data}）を消して作り直す`);
     await rm(DEMO_PATHS.data, { recursive: true, force: true });
   }

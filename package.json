@@ -31,6 +31,11 @@
     "dev:web": "pnpm --filter @siteoffer/web dev --hostname 127.0.0.1",
     "dev:web:exec": "pnpm --filter @siteoffer/web dev --hostname 127.0.0.1",
     "demo": "node --import tsx demo/run.ts",
+    "demo:backup": "node --import tsx demo/backup.ts create",
+    "demo:restore": "node --import tsx demo/backup.ts restore",
+    "demo:restored": "node --import tsx demo/restored.ts",
+    "demo:stop": "node --import tsx demo/backup.ts stop",
+    "demo:unlock": "node --import tsx demo/backup.ts unlock",
     "demo:reset": "node --import tsx demo/run.ts --reset",
     "demo:users": "node --import tsx demo/seed.ts --show",
     "demo:promote-imported": "node --import tsx apps/web/scripts/demo-promote-imported.ts"

@@ -22,3 +22,5 @@ next-env.d.ts
 
 # Isolated production verification build
 .next-quality/
+.next-backup-build/
+.next-backup-qa/

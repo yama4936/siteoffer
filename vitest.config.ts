@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["{apps,packages,templates,tests}/**/*.test.ts"],
+    include: ["{apps,packages,templates,tests,demo}/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/.next/**", "**/dist/**"],
     testTimeout: 30_000,
     // この環境のシェルはメモリ上限4GBの枠で動き、PGliteを使うテストを多数並列にすると強制終了される。
