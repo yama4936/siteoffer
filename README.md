@@ -75,14 +75,20 @@ pnpm check           # 型検査・Lint・自動テスト（外部APIはモッ�
 通常のComposeワーカーはモックです。実Codexへ切り替える場合は次の順で実行します。
 
 ```sh
+pnpm dev:setup       # .envがない場合だけ、アプリのローカル設定を用意
 pnpm codex:setup      # .envへ認証ファイルの参照・実行UIDを設定し、生成用イメージを作る
+pnpm codex:sandbox-check # ダミー認証・ネットワークなしでWindowsのパスや隔離・結果の受け渡しを検査
 pnpm codex:check      # 使い捨てコンテナ内のSDKで短い実応答を確認（Codex利用枠を消費）
-pnpm codex:worker     # Composeのモックワーカーを停止し、Mac上の実ワーカーを起動
+pnpm codex:worker     # Composeのモックワーカーを停止し、ホスト側の実ワーカーを起動
 ```
 
 ワーカーの制御プロセスはホスト側で動かし、Codex SDKはジョブごとのDockerコンテナ内で実行します。
 これにより、通常のアプリコンテナへDockerソケットやCodex認証を渡す必要がありません。
-生成用イメージは `siteoffer-local` を基にするため、先に通常の `pnpm dev` を実行してください。
+生成用イメージはNode.js 24と固定したSDKから単独でビルドできます。アプリ用イメージの事前ビルドは不要です。
+WindowsではDocker Desktopを起動してください。空白・日本語を含むドライブの絶対パスに対応し、認証ファイルの参照先は `.env` にスラッシュ区切りで保存します。
+既存デモの稼働確認だけなら、`.env` の作成や実ワーカーへの切替は不要です。上記手順は実Codexを使う通常環境の設定です。
+認証を設定せず隔離処理だけ確認する場合は、`docker build -f Dockerfile.codex -t siteoffer-codex:local .` と `pnpm codex:sandbox-check` を使えます。
+各実行に固有のIDを割り当て、現在のIDと一致した結果だけを受け取ります。古い生成イメージはIDを返さないため、ランナー更新後は生成用イメージも再ビルドしてください。
 ホスト側ワーカーはターミナルのCtrl+Cで停止します。モックに戻す場合は、ホスト側を停止してから `pnpm dev` を実行します。
 両方のワーカーを同時に動かさないでください。
 

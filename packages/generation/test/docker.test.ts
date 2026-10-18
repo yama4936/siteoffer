@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildDockerClientEnv,
@@ -80,6 +81,34 @@ describe("DockerSandboxRunner の引数", () => {
   it("dockerクライアントにもアプリの秘密値を渡さない", () => {
     const env = buildDockerClientEnv(SECRET_ENV);
     expect(env).toEqual({ PATH: "/usr/bin", DOCKER_HOST: "unix:///var/run/docker.sock" });
+  });
+  it("native absolute paths with spaces and Japanese characters remain a single --mount value", () => {
+    const workDir = path.resolve("temporary work", "制作確認"),
+      authFile = path.resolve("temporary auth", "auth.json");
+    const args = buildDockerRunArgs({ ...config, codexAuthFile: authFile }, { ...spec, workDir });
+    expect(flagValues(args, "--mount")).toEqual([
+      `type=bind,source=${workDir},target=/work`,
+      `type=bind,source=${authFile},target=/run/siteoffer-auth.json,readonly`,
+    ]);
+    for (const source of [path.resolve("bad,name"), path.resolve('bad"name'), path.resolve("bad\nname")])
+      expect(() => buildDockerRunArgs(config, { ...spec, workDir: source })).toThrow();
+  });
+  it("forwards Windows Docker client directories without forwarding app credentials into either environment", () => {
+    const env = buildDockerClientEnv({
+      ...SECRET_ENV,
+      USERPROFILE: "C:\\Users\\test",
+      SystemRoot: "C:\\Windows",
+      APPDATA: "C:\\Users\\test\\AppData\\Roaming",
+      TEMP: "C:\\Temp",
+    });
+    expect(env).toMatchObject({ USERPROFILE: "C:\\Users\\test", SystemRoot: "C:\\Windows", TEMP: "C:\\Temp" });
+    expect(env).not.toHaveProperty("DATABASE_URL");
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
+    expect(
+      flagValues(buildDockerRunArgs(config, spec), "--env").some(
+        (value) => value.startsWith("USERPROFILE=") || value.startsWith("APPDATA="),
+      ),
+    ).toBe(false);
   });
 
   it("host ネットワーク・相対パス・区切り文字を含むパス・不正なジョブIDを拒否する", () => {

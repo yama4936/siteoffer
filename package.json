@@ -23,6 +23,7 @@
     "dev:check": "node --env-file-if-exists=.env --import tsx scripts/check-local.ts",
     "codex:setup": "node scripts/setup-codex.mjs && docker build -f Dockerfile.codex -t siteoffer-codex:local .",
     "codex:check": "node --env-file-if-exists=.env --import tsx scripts/check-codex.ts",
+    "codex:sandbox-check": "node --env-file-if-exists=.env --import tsx scripts/check-codex-sandbox.ts",
     "codex:worker": "docker compose stop worker && pnpm dev:worker",
     "dev:worker": "node --env-file-if-exists=.env --import tsx apps/worker/src/index.ts",
     "dev": "pnpm dev:setup && docker compose up --build --detach --wait",

@@ -5,6 +5,8 @@ import { z } from "zod";
  * パスはすべて作業ディレクトリからの相対パス。秘密値を入れない。
  */
 export const sandboxRequestSchema = z.strictObject({
+  /** Host-generated receipt identity, not model input. */
+  executionId: z.string().uuid().optional(),
   prompt: z.string().min(1),
   /** 構造化出力のJSON Schema。サイトのファイル生成など構造化しない場合はnull */
   outputSchema: z.record(z.string(), z.unknown()).nullable(),
@@ -24,6 +26,7 @@ export type SandboxRequest = z.infer<typeof sandboxRequestSchema>;
 
 /** コンテナから取り出す結果（作業ディレクトリの out/result.json） */
 export const sandboxResultSchema = z.strictObject({
+  executionId: z.string().uuid().optional(),
   ok: z.boolean(),
   threadId: z.string().nullable(),
   finalResponse: z.string().nullable(),

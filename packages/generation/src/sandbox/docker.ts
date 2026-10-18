@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -45,12 +46,7 @@ export const DEFAULT_DOCKER_SANDBOX_CONFIG: Omit<DockerSandboxConfig, "image" | 
   memoryMb: 2048,
   pidsLimit: 256,
   tmpfsMb: 256,
-  entryCommand: [
-    "node",
-    "--import",
-    "/app/node_modules/tsx/dist/loader.mjs",
-    "/app/packages/generation/src/sandbox/container-entry.ts",
-  ],
+  entryCommand: ["node", "/app/packages/generation/src/sandbox/container-entry.ts"],
   user: "1000:1000",
 };
 
@@ -61,6 +57,12 @@ const CONTAINER_CODEX_HOME = `${CONTAINER_HOME}/.codex`;
 const DOCKER_CLIENT_ENV_ALLOWLIST = [
   "PATH",
   "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "TEMP",
+  "TMP",
   "DOCKER_HOST",
   "DOCKER_CONTEXT",
   "DOCKER_CONFIG",
@@ -83,8 +85,15 @@ export function buildDockerRunArgs(
   if (!path.isAbsolute(spec.workDir)) throw new Error("作業ディレクトリは絶対パスで指定する");
   if (!path.isAbsolute(config.codexAuthFile)) throw new Error("Codex認証ファイルは絶対パスで指定する");
   for (const p of [spec.workDir, config.codexAuthFile]) {
-    // -v の区切り文字を含むパスは別のマウント指定として解釈されうるため拒否する
-    if (p.includes(":") || p.includes(",")) throw new Error(`マウントに使えないパス: ${p}`);
+    // --mount uses comma-separated options. A Windows drive colon belongs to the source path.
+    const drivePath = /^[a-z]:[\\/][^:]*$/i.test(p);
+    if (
+      (p.includes(":") && !drivePath) ||
+      p.includes(",") ||
+      p.includes('"') ||
+      Array.from(p).some((char) => char.charCodeAt(0) < 32)
+    )
+      throw new Error("マウント先のパスに使えない文字があります");
   }
   const tmpfs = `rw,noexec,nosuid,size=${config.tmpfsMb}m`;
   const [uid, gid] = config.user.split(":");
@@ -214,36 +223,37 @@ export class DockerSandboxRunner implements SandboxRunner {
 
   async run(spec: SandboxRunSpec): Promise<SandboxRunOutcome> {
     if (spec.signal?.aborted) return { ok: false, error: "aborted", message: "中断された", result: null };
-    await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify(spec.request));
     const args = buildDockerRunArgs(this.config, spec);
+    const executionId = randomUUID();
+    await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify({ ...spec.request, executionId }));
     const name = containerName(spec.jobId);
     const kill = () => {
       // 時間切れ・中断時はコンテナを確実に止める（docker run の終了だけではコンテナが残りうる）
       spawn(this.config.dockerPath, ["rm", "--force", name], { env: this.env, stdio: "ignore" }).on("error", () => {});
     };
     const r = await runProcess(this.config.dockerPath, args, this.env, spec.timeoutMs, spec.signal, kill);
-    const result = await this.readResult(spec.workDir);
+    const result = await this.readResult(spec.workDir, executionId);
     if (r.timedOut) return { ok: false, error: "timeout", message: `${spec.timeoutMs}msで打ち切った`, result };
     if (r.aborted) return { ok: false, error: "aborted", message: "中断された", result };
     if (result === null) {
       return {
         ok: false,
         error: "sandbox_error",
-        message: `結果ファイルがない（終了コード ${r.code}）: ${r.stderr.slice(0, 1000)}`,
+        message: `現在の実行と一致する結果ファイルがない（終了コード ${r.code}）: ${r.stderr.slice(0, 1000)}`,
         result,
       };
     }
-    if (!result.ok)
+    if (!result.ok || r.code !== 0)
       return { ok: false, error: "sandbox_error", message: result.error ?? `終了コード ${r.code}`, result };
     return { ok: true, result };
   }
 
-  private async readResult(workDir: string): Promise<SandboxResult | null> {
+  private async readResult(workDir: string, executionId: string): Promise<SandboxResult | null> {
     try {
       const parsed = sandboxResultSchema.safeParse(
         JSON.parse(await readFile(path.join(workDir, SANDBOX_RESULT_FILE), "utf8")),
       );
-      return parsed.success ? parsed.data : null;
+      return parsed.success && parsed.data.executionId === executionId ? parsed.data : null;
     } catch {
       return null;
     }

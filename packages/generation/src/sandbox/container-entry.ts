@@ -38,11 +38,19 @@ async function main(): Promise<number> {
   mkdirSync(path.dirname(resultPath), { recursive: true });
 
   const { sdkVersion, cliVersion } = readCodexVersions();
-  const write = (r: SandboxResult) => writeFileSync(resultPath, JSON.stringify(r));
+  const rawRequest: unknown = JSON.parse(readFileSync(path.join(workDir, SANDBOX_REQUEST_FILE), "utf8"));
+  const executionId =
+    rawRequest && typeof rawRequest === "object" ? (rawRequest as { executionId?: unknown }).executionId : undefined;
+  const write = (r: SandboxResult) =>
+    writeFileSync(
+      resultPath,
+      JSON.stringify({
+        ...r,
+        ...(typeof executionId === "string" && /^[a-f0-9-]{36}$/i.test(executionId) ? { executionId } : {}),
+      }),
+    );
 
-  const parsed = sandboxRequestSchema.safeParse(
-    JSON.parse(readFileSync(path.join(workDir, SANDBOX_REQUEST_FILE), "utf8")),
-  );
+  const parsed = sandboxRequestSchema.safeParse(rawRequest);
   if (!parsed.success) {
     write({
       ok: false,

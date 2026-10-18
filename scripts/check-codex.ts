@@ -50,5 +50,11 @@ try {
     }),
   );
 } finally {
-  await rm(workDir, { recursive: true, force: true });
+  const resolved = path.resolve(workDir);
+  assert(
+    resolved.startsWith(path.resolve(tmpdir()) + path.sep) &&
+      path.basename(resolved).startsWith("siteoffer-auth-check-"),
+    "Unexpected authentication check directory",
+  );
+  await rm(resolved, { recursive: true, force: true });
 }
