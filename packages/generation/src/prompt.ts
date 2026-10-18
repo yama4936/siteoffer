@@ -12,9 +12,9 @@ export const PROMPT_FILES = {
   proposal_text: "proposal_text.v1.md",
   call_script: "call_script.v1.md",
   faq: "faq.v1.md",
-  // v3：会社ごとのアートディレクションを追加し、内部の確認注記を営業用本文から分離
-  demo_site: "demo_site.v3.md",
-  delivery_site: "delivery_site.v5.md",
+  // 承認画像から書体・配色・余白・構成を個別に指定。旧版は実行記録のため保持する。
+  demo_site: "demo_site.v4.md",
+  delivery_site: "delivery_site.v6.md",
 } as const satisfies Record<GenerationPurpose | "common", string>;
 
 const cache = new Map<string, string>();

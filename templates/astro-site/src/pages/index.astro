@@ -7,6 +7,7 @@ import "../styles/site.css";
 import { loadResolvedSite } from "../../lib/load.ts";
 import { hasMarker } from "../../lib/markers.ts";
 import { demoNoticeText, textColorOn, visibleSections } from "../../lib/resolve.ts";
+import { visualDesignStyle } from "../../lib/visual-design.ts";
 import ContactLinks from "../components/ContactLinks.astro";
 import Img from "../components/Img.astro";
 import T from "../components/T.astro";
@@ -26,7 +27,8 @@ const sections = visibleSections(input).filter((section) => {
   return true;
 });
 const { brand, accent } = input.theme;
-const themeStyle = `--brand:${brand};--brand-text:${textColorOn(brand)};--accent:${accent};--accent-text:${textColorOn(accent)};`;
+const themeStyle = `--brand:${brand};--brand-text:${textColorOn(brand)};--accent:${accent};--accent-text:${textColorOn(accent)};${visualDesignStyle(input.theme)}`;
+const visual = input.theme.visual;
 const year = new Date().getFullYear();
 const copyright = input.footer?.copyright ?? input.company.name;
 ---
@@ -38,6 +40,10 @@ const copyright = input.footer?.copyright ?? input.company.name;
   data-style={input.theme.style}
   data-hero-layout={input.theme.heroLayout}
   data-section-rhythm={input.theme.sectionRhythm}
+  data-visual-profile={visual ? "specified" : undefined}
+  data-hero-frame={visual?.heroFrame}
+  data-mobile-hero-order={visual?.mobileHeroOrder}
+  data-service-layout={visual?.serviceLayout}
 >
   <head>
     <meta charset="utf-8" />

@@ -1,6 +1,8 @@
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withReferencePalette } from "./design-palette.ts";
+import { referencePalette, requireReferenceVisualSchema, requiresReferenceVisual } from "./design-reference.ts";
 import { toCodexOutputSchema } from "./json-schema.ts";
 import { buildPrompt, promptVersion } from "./prompt.ts";
 import type { SandboxRequest, SandboxRunner, SandboxRunSpec } from "./sandbox/types.ts";
@@ -45,27 +47,40 @@ export class CodexGenerator implements Generator {
   }
 
   async generate<T>(req: GenerateRequest<T>): Promise<GeneratorResult<T>> {
-    const prompt = buildPrompt(req.purpose, req.input);
     const record: ExecutionRecord = {
       generator: this.kind,
       requestedModel: this.requestedModel,
       responseModel: null,
       sdkVersion: null,
       cliVersion: null,
-      promptVersion: prompt.version,
+      promptVersion: this.promptVersion(req.purpose),
       threadId: null,
       requestId: null,
       usage: null,
     };
+    if (req.signal?.aborted) return { ok: false, error: "aborted", message: "中断された", record };
+    let input: GenerationInput;
+    try {
+      input = await withReferencePalette(req.purpose, req.input);
+    } catch {
+      return {
+        ok: false,
+        error: "schema_violation",
+        message: "承認済みのデザイン画像を確認できません。画像の変更・形式・大きさを確認してください。",
+        record,
+      };
+    }
+    const prompt = buildPrompt(req.purpose, input);
+    record.promptVersion = prompt.version;
 
     const workDir = await this.createWorkDir(req.jobId, req.attempt);
     try {
-      await writeInputFiles(workDir, req.input);
+      await writeInputFiles(workDir, input);
 
       const spec: SandboxRunSpec = {
         jobId: req.jobId,
         workDir,
-        request: this.buildRequest(prompt.text, req),
+        request: this.buildRequest(prompt.text, { ...req, input }),
         timeoutMs: req.timeoutMs,
       };
       if (req.signal) spec.signal = req.signal;
@@ -80,7 +95,7 @@ export class CodexGenerator implements Generator {
       }
       if (!outcome.ok) return { ok: false, error: outcome.error, message: outcome.message, record };
 
-      const v = validateRawOutput(req.purpose, req.input, req.outputSchema, outcome.result.finalResponse);
+      const v = validateRawOutput(req.purpose, input, req.outputSchema, outcome.result.finalResponse);
       if (!v.ok) return { ok: false, error: v.error, message: v.message, record };
       return { ok: true, output: v.output, record };
     } finally {
@@ -89,9 +104,12 @@ export class CodexGenerator implements Generator {
   }
 
   private buildRequest<T>(promptText: string, req: GenerateRequest<T>): SandboxRequest {
+    const outputSchema = toCodexOutputSchema(req.outputSchema);
+    if (requiresReferenceVisual(req.purpose, req.input))
+      requireReferenceVisualSchema(outputSchema, referencePalette(req.input));
     return {
       prompt: promptText,
-      outputSchema: toCodexOutputSchema(req.outputSchema),
+      outputSchema,
       model: this.requestedModel,
       images: req.input.attachments.filter((a) => a.kind === "image").map((a) => `input/files/${a.name}`),
       thread: {

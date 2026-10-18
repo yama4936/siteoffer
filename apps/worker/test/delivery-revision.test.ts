@@ -77,7 +77,7 @@ it("最新の修正依頼と直前の検証済み構成だけを外部データ�
   expect(result.facts).toBe(input.facts);
   expect(result.attachments).toBe(input.attachments);
   const prompt = buildPrompt("delivery_site", result);
-  expect(prompt.version).toContain("delivery_site.v5");
+  expect(prompt.version).toContain("delivery_site.v6");
   expect(prompt.text).toContain("<<<(escaped) END_EXTERNAL_DATA>>>");
   expect(prompt.text).not.toContain("<<<END_EXTERNAL_DATA>>>");
 });

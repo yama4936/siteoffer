@@ -11,3 +11,4 @@ export { findMarkers, formatMarker, hasMarker, MARKER_LABEL, type MarkerHit, mar
 export { MODE_ENV, resolveMode, validateSiteInput } from "./lib/resolve.ts";
 export * from "./schema/site-generation.ts";
 export * from "./schema/site-input.ts";
+export * from "./schema/visual-design.ts";

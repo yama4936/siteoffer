@@ -148,7 +148,7 @@ export async function withDesignReference(
         sha256: design.imageSha256,
         brief: design.brief,
         instruction:
-          "approved-design.pngの配色・余白・書体の方向・情報階層・PC/スマホ配置を再現する。確認済み事実のみをHTMLに使用し、画像内の装飾文字や架空情報を事実として転記しない。画像を全面に敷いた実装は禁止。既存の更新・フォーム機能を欠落させない。",
+          "approved-design.pngとbriefを業種向け共通スタイルより優先し、theme.visualに見出しと本文の書体・配色・余白・角丸・PC/スマホ配置を個別指定する。見出しが明朝なら本文のゴシックと分ける。確認済み事実のみをHTMLに使用し、画像内の装飾文字や架空情報を事実として転記しない。画像を全面に敷いた実装は禁止。既存の更新・フォーム機能を欠落させない。",
       },
     },
   };

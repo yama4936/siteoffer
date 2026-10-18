@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { referenceVisualValid, requiresReferenceVisual } from "./design-reference.ts";
 import { checkFacts } from "./facts.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 import type { GeneratorErrorCode } from "./types.ts";
@@ -42,6 +43,12 @@ export function validateOutput<T>(
       .join("; ");
     return { ok: false, error: "schema_violation", message: issues };
   }
+  if (requiresReferenceVisual(purpose, input) && !referenceVisualValid(parsed.data, input))
+    return {
+      ok: false,
+      error: "schema_violation",
+      message: "承認画像に基づく書体・配色・余白・構成が未指定、または参照画像の配色候補と一致しません",
+    };
   const violations = checkFacts(purpose, input, parsed.data);
   if (violations.length > 0) {
     const msg = violations

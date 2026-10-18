@@ -2,7 +2,8 @@
  * 生成（Codex。用途 demo_site / delivery_site）が出力するサイト構成JSONの形と、テンプレート入力（SiteInput）との変換。
  *
  * - 正は schema/site-input.ts の SiteInputSchema。ここではその同じ形（同じフィールド名・入れ子）から、
- *   Codexの構造化出力に渡せる形を作る：オブジェクトはすべて strict、省略可能な項目は作らず、不明な値は null。
+ *   Codexの構造化出力に渡せる形を作る：オブジェクトはすべて strict、不明な値は null。
+ *   visual の省略だけは保存済み旧版の読み取りに残す。新しいSDK応答ではJSON Schemaで必須化する。
  * - 生成に任せないもの（mode・lang・画像・デモの宛名・著作権表記）は含めない。画像は素材の確認後に運営が足す。
  * - 会社情報の行と実績には、根拠にした確認済み事実のキー（factRef）を必須にする（生成側の事実検査で照合する）。
  * - 検証（superRefine）でテンプレート入力に変換して SiteInputSchema でも確かめるので、
@@ -22,9 +23,12 @@ import {
   type SiteMode,
   VisualStyleSchema,
 } from "./site-input.ts";
+import { VisualDesignSchema } from "./visual-design.ts";
 
 const text = z.string().min(1);
 const nullableText = text.nullable();
+
+export { type VisualDesign, VisualDesignSchema } from "./visual-design.ts";
 
 const SiteGenerationShape = z.strictObject({
   schemaVersion: z.literal(1),
@@ -42,6 +46,8 @@ const SiteGenerationShape = z.strictObject({
     style: VisualStyleSchema,
     heroLayout: HeroLayoutSchema,
     sectionRhythm: SectionRhythmSchema,
+    /** Optional only for stored legacy results. New structured responses explicitly return it. */
+    visual: VisualDesignSchema.nullable().optional(),
   }),
   hero: z.strictObject({
     catchcopy: text,
@@ -126,6 +132,7 @@ export function siteGenerationToSiteInput(out: SiteGenerationOutput, options: To
       style: out.theme.style,
       heroLayout: out.theme.heroLayout,
       sectionRhythm: out.theme.sectionRhythm,
+      ...(out.theme.visual ? { visual: out.theme.visual } : {}),
     },
     hero: { catchcopy: out.hero.catchcopy, lead: opt(out.hero.lead) },
     sections: out.sections.map((s) => ({ type: s.type, visible: s.visible, heading: opt(s.heading) })),
@@ -192,6 +199,7 @@ export function siteInputToSiteGeneration(raw: unknown): ToGenerationResult {
       style: v.theme.style,
       heroLayout: v.theme.heroLayout,
       sectionRhythm: v.theme.sectionRhythm,
+      ...(v.theme.visual ? { visual: v.theme.visual } : {}),
     },
     hero: { catchcopy: v.hero.catchcopy, lead: v.hero.lead ?? null },
     sections: v.sections.map((s) => ({ type: s.type, visible: s.visible, heading: s.heading ?? null })),

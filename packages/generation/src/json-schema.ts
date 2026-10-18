@@ -18,6 +18,9 @@ function replaceOneOf(v: unknown): unknown {
   if (v && typeof v === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, child] of Object.entries(v)) out[k === "oneOf" ? "anyOf" : k] = replaceOneOf(child);
+    // Parsers accept absent additive fields in saved legacy records; strict model responses explicitly return every key.
+    if (out.type === "object" && out.properties && typeof out.properties === "object")
+      out.required = Object.keys(out.properties);
     return out;
   }
   return v;
