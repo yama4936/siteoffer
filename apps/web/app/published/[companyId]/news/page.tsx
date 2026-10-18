@@ -1,32 +1,44 @@
-import { hasPublishedSite, publishedSiteHomeUrl } from "@siteoffer/core";
-import { companies } from "@siteoffer/db";
-import { eq } from "drizzle-orm";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import { Articles } from "@/components/shell/articles";
-import { loadArticleView } from "@/lib/article-view";
+import { parseArticleQuery } from "@/lib/article-view";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
+import { publishedArticleMetadata, readPublishedArticlePage } from "@/lib/published-article-page";
 export const dynamic = "force-dynamic";
-export default async function Page({
-  params,
-  searchParams,
-}: {
+type Props = {
   params: Promise<{ companyId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const { companyId } = await params,
-    sp = await searchParams;
-  if (!isUuid(companyId)) notFound();
-  const result = await getDb().transaction(
-    async (tx) => {
-      if (!(await hasPublishedSite(tx, companyId))) return null;
-      const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId));
-      if (!company) return null;
-      const view = await loadArticleView(tx, companyId, sp);
-      return view ? { name: company.name, view, homeUrl: await publishedSiteHomeUrl(tx, companyId) } : null;
-    },
-    { isolationLevel: "repeatable read" },
+};
+// React's request-scoped cache shares the public snapshot between metadata and the body.
+const loadPage = cache((companyId: string, search: string) =>
+  readPublishedArticlePage(getDb(), companyId, JSON.parse(search)),
+);
+async function pageData({ params, searchParams }: Props) {
+  const [{ companyId }, search] = await Promise.all([params, searchParams]);
+  const parsed = parseArticleQuery(search);
+  if (!isUuid(companyId) || !parsed) notFound();
+  const result = await loadPage(
+    companyId,
+    JSON.stringify({
+      page: String(parsed.filters.page),
+      q: parsed.filters.query,
+      category: parsed.filters.category,
+      ...(parsed.slug ? { article: parsed.slug } : {}),
+    }),
   );
   if (!result) notFound();
-  return <Articles companyId={companyId} {...result} basePath={`/published/${companyId}/news`} />;
+  return result;
+}
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const result = await pageData(props);
+  return publishedArticleMetadata(result, {
+    origin: process.env.SITEOFFER_CONTENT_ORIGIN?.trim() || process.env.WEB_BASE_URL,
+    demo: process.env.SITEOFFER_DEMO_MODE === "true" || !!process.env.DEMO_RESTORE_DIR,
+  });
+}
+export default async function Page(props: Props) {
+  const result = await pageData(props);
+  return <Articles {...result} basePath={`/published/${result.companyId}/news`} />;
 }
