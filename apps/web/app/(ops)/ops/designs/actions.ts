@@ -79,12 +79,11 @@ export async function createDesignAction(
     const actor = await getCurrentActor();
     if (actor?.kind !== "ops") throw new DesignDraftError("運営としてログインしてください");
     const model = process.env.SITEOFFER_IMAGE_MODEL?.trim();
-    if (input.source === "openai" && (!model || !process.env.OPENAI_API_KEY))
-      throw new DesignError(
-        "画像APIが未設定です。管理者がAPIキーと画像モデルを設定するか、imagegenで作った画像を取り込んでください",
-      );
     const id = await createDesignFromDraft(getDb(), systemClock, actor, scope, {
-      ...input,
+      revision: input.revision,
+      brief: input.brief,
+      requestKey: input.requestKey,
+      source: input.source,
       ...(model ? { model } : {}),
     });
     revalidatePath("/ops", "layout");

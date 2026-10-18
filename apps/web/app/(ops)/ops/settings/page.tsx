@@ -1,7 +1,9 @@
+import { systemClock } from "@siteoffer/core";
 import { Filter } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { HistoryList } from "@/components/ops/history-list";
+import { ProductionSettings } from "@/components/ops/production-status";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
 import { inlineFormClass } from "@/components/ops/ui-parts-1";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +15,7 @@ import { getDb } from "@/lib/db";
 import { fmtDate } from "@/lib/ops/format";
 import { readAuditHistory } from "@/lib/ops/history";
 import { historyHref, parseHistoryQuery } from "@/lib/ops/history-query";
+import { getProductionStatusForOps, imageRequestReadiness } from "@/lib/ops/production-status";
 import { getSettingsForOps, listUsersForOps } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
 import { reactivateUserAction, suspendUserAction, updateSettingAction } from "../actions";
@@ -35,12 +38,13 @@ export default async function SettingsPage({
     view: filter.actionPrefix?.startsWith("session.") ? "all" : undefined,
   });
   if (!historyQuery) notFound();
-  const [settings, users, events] = await Promise.all([
+  const [settings, users, events, production] = await Promise.all([
     getSettingsForOps(db, actor),
     listUsersForOps(db, actor),
     readAuditHistory(db, actor, historyQuery),
+    getProductionStatusForOps(db, systemClock, actor),
   ]);
-  if (!settings.ok || !users.ok || !events.ok) return <Forbidden />;
+  if (!settings.ok || !users.ok || !events.ok || !production.ok) return <Forbidden />;
   const here = "/ops/settings";
 
   return (
@@ -62,6 +66,11 @@ export default async function SettingsPage({
           処理の状況・ワーカーの通知を確認
         </Link>
       </p>
+
+      <ProductionSettings
+        status={production.value}
+        imageRequest={imageRequestReadiness(process.env.SITEOFFER_IMAGE_MODEL, production.value.image)}
+      />
 
       <Section
         title="運営設定"

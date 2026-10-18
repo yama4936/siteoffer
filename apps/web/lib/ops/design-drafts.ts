@@ -4,6 +4,7 @@ import { companies, type DbOrTx, designBriefDrafts, designVersions, siteAudits, 
 import { and, eq, sql } from "drizzle-orm";
 import { DESIGN_BRIEF_FIELDS, type DesignDraftScope, type DesignDraftSnapshot } from "./design-draft-types";
 import { isUuid } from "./form";
+import { getProductionStatusForOps, imageRequestReadiness } from "./production-status";
 
 export class DesignDraftError extends Error {}
 export class DesignDraftConflict extends DesignDraftError {
@@ -147,6 +148,12 @@ export async function createDesignFromDraft(
     if (existing) return existing.id;
     const current = await read(tx, id);
     checkRevision(input.revision, current);
+    if (input.source === "openai") {
+      const status = await getProductionStatusForOps(tx, clock, actor);
+      if (!status.ok) throw new DesignDraftError("運営としてログインしてください");
+      const readiness = imageRequestReadiness(input.model, status.value.image);
+      if (!readiness.ready) throw new DesignDraftError(readiness.message);
+    }
     const row = await createDesign(tx, clock, actor, {
       companyId: scope.companyId,
       auditId: scope.auditId!,

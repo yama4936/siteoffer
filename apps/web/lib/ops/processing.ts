@@ -62,6 +62,12 @@ export function assessWorkers(rows: Runtime[], now: Date, stoppedGenerators: str
                 ? "画像生成の設定がある制作ワーカーが必要です。用意した画像の取り込みは利用できます。"
                 : "収集専用のワーカーではサイトを制作できません。制作を有効にしたワーカーが必要です。",
           };
+    if (kind === "site" && capable.some((w) => w.generator === "unknown"))
+      return {
+        status: "unknown",
+        label: "生成方式を確認できません",
+        detail: "制作ワーカーの生成方式が未通知または不正です。管理者が設定とワーカーの更新状況を確認してください。",
+      };
     if (capable.every((w) => (kind === "image" ? w.imageAttention : w.dispatchAttention || w.deliveryAttention)))
       return {
         status: "attention",
@@ -86,7 +92,7 @@ export function assessWorkers(rows: Runtime[], now: Date, stoppedGenerators: str
     const mock = kind === "site" && capable.every((w) => w.generator === "mock");
     return {
       status: "ready",
-      label: mock ? "動作確認用の制作が稼働中" : "対応するワーカーが稼働中",
+      label: kind === "image" ? "画像生成の受付が稼働中" : mock ? "動作確認用の制作が稼働中" : "実AIによる制作が稼働中",
       detail: mock
         ? "架空データを使うモック制作です。実AIによる制作ではありません。"
         : "稼働通知と対応設定を確認しました。個別のAPI接続・処理の成功は実行結果で確認します。",

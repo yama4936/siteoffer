@@ -2,10 +2,12 @@ import { systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ProductionModeNotice } from "@/components/ops/production-status";
 import { Flash, Forbidden } from "@/components/ops/ui";
 import { WorkQueue } from "@/components/ops/work-queue";
 import { PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
+import { getProductionStatusForOps, imageRequestReadiness } from "@/lib/ops/production-status";
 import { parseWorkFilters } from "@/lib/ops/work-filters";
 import { getOpsWorkPage } from "@/lib/ops/work-page";
 import { getCurrentActor } from "@/lib/session";
@@ -25,12 +27,15 @@ export default async function OpsHome({
   }
   const filters = parseWorkFilters(params);
   if (!filters) notFound();
-  const r = await getOpsWorkPage(db, await getCurrentActor(), filters);
+  const actor = await getCurrentActor();
+  const r = await getOpsWorkPage(db, actor, filters);
   if (!r.ok) return <Forbidden />;
   const capabilities = await discoveryAvailability(db, systemClock);
   const live = capabilities.some((p) => p.ready);
   const nta = capabilities.find((p) => p.provider === "nta-corporate-number")?.ready;
-  const images = !!(process.env.OPENAI_API_KEY && process.env.SITEOFFER_IMAGE_MODEL);
+  const production = await getProductionStatusForOps(db, systemClock, actor);
+  if (!production.ok) return <Forbidden />;
+  const images = imageRequestReadiness(process.env.SITEOFFER_IMAGE_MODEL, production.value.image);
   return (
     <>
       <PageHeader
@@ -38,6 +43,7 @@ export default async function OpsHome({
         description="探す時間を減らして、案件を一歩先へ。確認が必要な仕事をまとめています。"
       />
       <Flash searchParams={sp} />
+      <ProductionModeNotice status={production.value} />
       <WorkQueue key={JSON.stringify(filters)} page={r.value} updatedAt={systemClock.now().toISOString()} />
       <p className="my-4 text-sm">
         <Link href="/ops/processing" className="text-primary underline">
@@ -58,12 +64,8 @@ export default async function OpsHome({
         </Link>
         <Link href="/ops/designs">
           <span>デザイン画像</span>
-          <strong>{images ? "画像APIの設定あり" : "画像の取り込みで進められます"}</strong>
-          <p>
-            {images
-              ? "APIの接続・生成結果は実行時に確認します。"
-              : "制作条件を保存し、用意した画像を取り込んで承認・制作へ進めます。"}
-          </p>
+          <strong>{images.ready ? "画像生成を依頼できます" : "画像の取り込みで進められます"}</strong>
+          <p>{images.message}</p>
         </Link>
         <Link href="/ops/content">
           <span>公開後の更新</span>

@@ -13,6 +13,7 @@ export function DesignBriefForm({
   initial,
   defaults,
   configured,
+  generationNotice,
   canCreate,
   requestKey,
   reviewNote,
@@ -21,6 +22,7 @@ export function DesignBriefForm({
   initial: DesignDraftSnapshot;
   defaults: DesignBrief;
   configured: boolean;
+  generationNotice: string;
   canCreate: boolean;
   requestKey: string;
   reviewNote?: string | null;
@@ -303,6 +305,7 @@ export function DesignBriefForm({
             type="submit"
             value="openai"
             disabled={!canCreate || !configured || !!conflict}
+            aria-describedby="design-generation-notice"
           >
             <Sparkles size={16} />
             {busy ? "保存中…" : "画像を生成"}
@@ -330,11 +333,9 @@ export function DesignBriefForm({
         </div>
       )}
       <p className="design-muted">変更・再生成は新しい版として保存します。承認済みの画像は変更されません。</p>
-      {!configured && (
-        <p className="design-note">
-          画像APIは未設定です。imagegenで生成した画像を取り込めます。APIを設定すると、この画面から生成できます。
-        </p>
-      )}
+      <p id="design-generation-notice" className="design-note">
+        {generationNotice}
+      </p>
       {!scope.auditId && (
         <p className="design-note">
           改善提案の対象と判定された診断が必要です。
