@@ -14,6 +14,7 @@
     "test:postgres:audits": "node --import tsx apps/worker/test/postgres-audits.ts",
     "test:postgres:sales": "node --import tsx apps/worker/test/postgres-sales.ts",
     "test:postgres:pipeline": "node --import tsx apps/worker/test/postgres-pipeline.ts",
+    "test:postgres:recovery": "node --import tsx apps/worker/test/postgres-pipeline.ts --recovery",
     "check": "scripts/check.sh",
     "db:generate": "pnpm --filter @siteoffer/db generate",
     "db:migrate": "node --env-file-if-exists=.env --import tsx packages/db/src/migrate.ts",

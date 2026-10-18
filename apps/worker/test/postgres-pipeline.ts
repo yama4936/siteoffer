@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { type ChildProcess, execFile, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { type AddressInfo, createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -31,18 +32,26 @@ const exec = promisify(execFile),
   runId = randomUUID();
 const name = `siteoffer-pipeline-qa-${runId.slice(0, 8)}`,
   password = randomUUID() + randomUUID();
-const evidenceRoot = path.join(repo, ".data/local-run/postgres-pipeline");
+const recovery = process.argv.includes("--recovery");
+const evidenceRoot = path.join(
+  repo,
+  recovery ? ".data/local-run/postgres-pipeline-recovery" : ".data/local-run/postgres-pipeline",
+);
 const artifactRoot = path.join(evidenceRoot, runId);
 const report: Record<string, unknown> = {
   status: "running",
   runId,
   startedAt: new Date().toISOString(),
   realModelCalls: 0,
+  recovery,
 };
 const checks: string[] = [],
-  events: { type: string; worker: string; queue?: string; status?: string; pid?: number }[] = [];
+  events: { type: string; worker: string; queue?: string; status?: string; pid?: number; jobId?: string }[] = [];
 const children: ChildProcess[] = [],
   producers: PgBoss[] = [];
+const expectedStops = new Set<ChildProcess>();
+const volumeName = `${name}-data`;
+let volumeCreated = false;
 let container: string | undefined, pool: pg.Pool | undefined;
 async function docker(args: string[], env = process.env) {
   return (
@@ -52,9 +61,9 @@ async function docker(args: string[], env = process.env) {
 async function eventually(test: () => Promise<boolean>, label: string, timeout = 90_000) {
   const end = Date.now() + timeout;
   do {
-    assert(!events.some((e) => e.type === "fatal" || e.type === "error"), "QA worker reported an error");
+    assert(!events.some((e) => e.type === "fatal" || (!recovery && e.type === "error")), "QA worker reported an error");
     assert(
-      children.every((c) => c.exitCode === null && c.signalCode === null),
+      children.every((c) => expectedStops.has(c) || (c.exitCode === null && c.signalCode === null)),
       "QA worker exited unexpectedly",
     );
     if (await test()) return;
@@ -62,7 +71,21 @@ async function eventually(test: () => Promise<boolean>, label: string, timeout =
   } while (Date.now() < end);
   throw Error(`Timed out: ${label}`);
 }
+async function loopbackPort() {
+  const reservation = createServer();
+  return new Promise<number>((resolve, reject) => {
+    reservation.once("error", reject);
+    reservation.listen(0, "127.0.0.1", () => {
+      const port = (reservation.address() as AddressInfo).port;
+      reservation.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
 async function main() {
+  if (recovery) {
+    await docker(["volume", "create", "--label", `siteoffer.qa.run=${runId}`, volumeName]);
+    volumeCreated = true;
+  }
   container = await docker(
     [
       "run",
@@ -76,10 +99,11 @@ async function main() {
       "2",
       "--memory",
       "1g",
-      "--tmpfs",
-      "/var/lib/postgresql/data:rw,size=768m",
+      ...(recovery
+        ? ["--mount", `type=volume,source=${volumeName},target=/var/lib/postgresql/data`]
+        : ["--tmpfs", "/var/lib/postgresql/data:rw,size=768m"]),
       "--publish",
-      "127.0.0.1::5432",
+      recovery ? `127.0.0.1:${await loopbackPort()}:5432` : "127.0.0.1::5432",
       "--env",
       "POSTGRES_PASSWORD",
       "--env",
@@ -105,12 +129,16 @@ async function main() {
   const binding = await docker(["port", container, "5432/tcp"]),
     match = binding.match(/^127\.0\.0\.1:(\d+)$/);
   assert(match);
+  report.boundPort = Number(match[1]);
   const connectionString = `postgres://postgres:${encodeURIComponent(password)}@127.0.0.1:${match[1]}/siteoffer_qa`;
   pool = new pg.Pool({
     connectionString,
     max: 6,
     connectionTimeoutMillis: 5000,
     options: "-c statement_timeout=30000",
+  });
+  pool.on("error", () => {
+    if (!recovery) events.push({ type: "error", worker: "admin" });
   });
   const db = drizzle(pool) as unknown as Db;
   await migrate(drizzle(pool), { migrationsFolder: path.join(repo, "packages/db/drizzle") });
@@ -158,7 +186,7 @@ async function main() {
       events.push(event);
       if (["ready", "finish", "fatal", "error"].includes(event.type)) console.log(JSON.stringify(event));
     });
-    child.send({ connectionString, artifactRoot, worker });
+    child.send({ connectionString, artifactRoot, worker, pauseEvaluation: recovery });
     await eventually(
       async () => events.some((e) => e.type === "ready" && e.worker === worker),
       `worker ${worker} ready`,
@@ -201,6 +229,40 @@ async function main() {
     { discoveryJobId: jobs[1]! },
     { singletonKey: stepKeys.discovery({ discoveryJobId: jobs[1]! }) },
   );
+  if (recovery) {
+    await eventually(
+      async () => events.filter((e) => e.type === "generation_paused").length === 2,
+      "both evaluation calls paused before DB restart",
+    );
+    const before = await db.select().from(generationJobs);
+    assert.equal(before.length, 2);
+    assert(before.every((j) => j.status === "running" && j.output === null));
+    await docker(["restart", "--time", "5", container!]);
+    assert.equal(
+      await docker(["port", container!, "5432/tcp"]),
+      binding,
+      "DB endpoint must remain fixed during restart",
+    );
+    await eventually(
+      async () => {
+        try {
+          await pool!.query("select 1");
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      "PostgreSQL reconnect after restart",
+      30_000,
+    );
+    const persisted = await db.select().from(generationJobs);
+    assert.deepEqual(persisted.map((j) => j.id).sort(), before.map((j) => j.id).sort());
+    assert(children.every((c) => c.exitCode === null && c.signalCode === null));
+    for (const child of children) child.send("release_generations");
+    checks.push(
+      "PostgreSQL restarts while two evaluations are pending; committed jobs persist and the same two worker processes reconnect",
+    );
+  }
   checks.push("Twelve simultaneous sends create one pending/active discovery job while its business row is locked");
   await eventually(async () => (await db.select().from(designVersions)).length === 2, "both image-first design drafts");
   const designs = await db.select().from(designVersions);
@@ -250,7 +312,74 @@ async function main() {
   checks.push(
     "After explicit image approval, both workers produce reviewable proposals and real Astro HTML for the pinned images",
   );
-  for (const design of designs) {
+  if (recovery) {
+    for (const child of children) child.send("pause_generations");
+    const gateCount = events.filter((e) => e.type === "generation_paused").length;
+    const third = await createDiscoveryJob(db, systemClock, {
+      provider: "fixture",
+      criteria: { keywords: ["こもれび"] },
+    });
+    assert(third.ok);
+    jobs.push(third.value.jobId);
+    const thirdPayload = { discoveryJobId: third.value.jobId };
+    await producers[0]!.send(QUEUES.discovery, thirdPayload, { singletonKey: stepKeys.discovery(thirdPayload) });
+    await eventually(
+      async () => events.filter((e) => e.type === "generation_paused").length > gateCount,
+      "third evaluation claimed before worker crash",
+    );
+    const paused = events.filter((e) => e.type === "generation_paused").at(-1)!;
+    assert(paused.jobId);
+    const owner = children[paused.worker === "A" ? 0 : 1]!;
+    expectedStops.add(owner);
+    const exited = new Promise<void>((resolve) => owner.once("exit", () => resolve()));
+    assert(owner.kill("SIGKILL"), "only the owned worker holding this evaluation is killed");
+    await exited;
+    assert(owner.exitCode !== null || owner.signalCode !== null);
+    for (const child of children) if (!expectedStops.has(child)) child.send("release_generations");
+    const [interrupted] = await db.select().from(generationJobs).where(eq(generationJobs.id, paused.jobId));
+    assert.equal(interrupted?.output, null);
+    report.crashedWorkerPid = owner.pid;
+    console.log(
+      JSON.stringify({ phase: "awaiting-production-queue-expiry", crashedWorkerPid: owner.pid, jobId: paused.jobId }),
+    );
+    await eventually(
+      async () => (await db.select().from(designVersions)).length === 3,
+      "remaining worker recovers expired queue claim",
+      420_000,
+    );
+    const [recovered] = await db.select().from(generationJobs).where(eq(generationJobs.id, paused.jobId));
+    assert.equal(recovered?.status, "failed");
+    assert.equal(recovered?.output, null);
+    assert.equal(recovered?.errorCode, "interrupted");
+    const pending = (await db.select().from(designVersions)).find((d) => !designs.some((old) => old.id === d.id))!;
+    assert.equal(pending.status, "draft");
+    await attachDesignImage(db, systemClock, actor, pending.id, image);
+    await reviewDesign(db, systemClock, actor, {
+      id: pending.id,
+      approve: true,
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+      note: "架空の障害復旧検証。実生成の停止証明ではありません。",
+    });
+    await requestDesignBuild(db, systemClock, actor, pending.id);
+    await eventually(
+      async () => {
+        const vs = await db.select().from(proposalVersions);
+        return vs.length === 3 && vs.every((v) => v.status === "in_review");
+      },
+      "third proposal after crash recovery",
+      150_000,
+    );
+    checks.push(
+      "An actual worker crash leaves no accepted output; production queue expiry and retries let the remaining OS worker recover the mock evaluation",
+    );
+    checks.push(
+      "The interrupted generation stays failed and immutable while a new diagnosis, image approval and proposal reach review",
+    );
+  }
+  const allDesigns = await db.select().from(designVersions);
+  for (const design of allDesigns) {
     const payload = {
       companyId: design.companyId,
       auditId: design.auditId,
@@ -273,15 +402,15 @@ async function main() {
       ).rows[0].n === 0,
     "duplicate receipts drained",
   );
-  assert.equal((await db.select().from(proposalVersions)).length, 2);
-  assert.equal((await db.select().from(generationJobs)).length, 10);
+  assert.equal((await db.select().from(proposalVersions)).length, recovery ? 3 : 2);
+  assert.equal((await db.select().from(generationJobs)).length, recovery ? 16 : 10);
   assert(
     (
       await db
         .select()
         .from(discoveryJobs)
         .where(and(eq(discoveryJobs.status, "succeeded"), eq(discoveryJobs.provider, "fixture")))
-    ).length === 2,
+    ).length === (recovery ? 3 : 2),
   );
   assert.equal(
     new Set(events.filter((e) => e.type === "finish" && e.queue?.startsWith("pipeline.")).map((e) => e.worker)).size,
@@ -303,7 +432,13 @@ try {
   await Promise.allSettled(producers.map((b) => b.stop({ graceful: true, timeout: 10_000 })));
   await Promise.all(
     children.map(async (child) => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        if (!expectedStops.has(child) && child.exitCode !== 0) {
+          report.status = "failed";
+          process.exitCode = 1;
+        }
+        return;
+      }
       const ended = new Promise<void>((resolve) => child.once("exit", () => resolve()));
       if (child.connected) child.send("stop");
       const timer = setTimeout(() => {
@@ -329,6 +464,20 @@ try {
       );
       await docker(["rm", "--force", container]);
       report.containerRemoved = true;
+    } catch {
+      report.status = "failed";
+      report.cleanupFailed = true;
+      process.exitCode = 1;
+    }
+  }
+  if (volumeCreated && (!container || report.containerRemoved)) {
+    try {
+      assert.equal(
+        await docker(["volume", "inspect", "--format", '{{index .Labels "siteoffer.qa.run"}}', volumeName]),
+        runId,
+      );
+      await docker(["volume", "rm", volumeName]);
+      report.volumeRemoved = true;
     } catch {
       report.status = "failed";
       report.cleanupFailed = true;

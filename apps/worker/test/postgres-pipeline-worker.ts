@@ -1,6 +1,7 @@
 /** Dedicated child of postgres-pipeline.ts. Credentials arrive only over this process's IPC channel. */
 import { systemClock } from "@siteoffer/core";
 import { createDb } from "@siteoffer/db";
+import type { GenerateRequest } from "@siteoffer/generation";
 import { PgBoss } from "pg-boss";
 import { createBossQueue, registerQueues } from "../src/boss.ts";
 import { buildWorkerDeps, resolveWorkerConfig } from "../src/config.ts";
@@ -10,8 +11,10 @@ import { startIntakeLoop } from "../src/intake.ts";
 import { createWorkerRuntime, type WorkerRuntime } from "../src/runtime.ts";
 
 if (!process.send || !process.env.SITEOFFER_PG_PIPELINE_CHILD) throw Error("QA parent IPC is required");
-type Setup = { connectionString: string; artifactRoot: string; worker: string };
+type Setup = { connectionString: string; artifactRoot: string; worker: string; pauseEvaluation?: boolean };
 let stop: (() => Promise<void>) | undefined;
+let pauseEvaluation = false;
+const gates = new Set<() => void>();
 const notify = (message: unknown) => process.send?.(message);
 process.once("message", async (raw) => {
   const setup = raw as Setup;
@@ -43,6 +46,24 @@ process.once("message", async (raw) => {
       },
     };
     const deps = buildWorkerDeps(config.value, { db, clock: systemClock, queue: createBossQueue(boss), logger });
+    pauseEvaluation = !!setup.pauseEvaluation;
+    const generate = deps.generation.generator.generate.bind(deps.generation.generator);
+    deps.generation.generator.generate = async <T>(request: GenerateRequest<T>) => {
+      if (pauseEvaluation && request.purpose === "evaluation") {
+        await new Promise<void>((resolve) => {
+          const release = () => {
+            gates.delete(release);
+            request.signal?.removeEventListener("abort", release);
+            resolve();
+          };
+          gates.add(release);
+          if (request.signal?.aborted) release();
+          else request.signal?.addEventListener("abort", release, { once: true });
+          notify({ type: "generation_paused", worker: setup.worker, jobId: request.jobId });
+        });
+      }
+      return generate(request);
+    };
     const runtime = createWorkerRuntime(deps);
     const traced: WorkerRuntime = {
       run: async (name, data, options) => {
@@ -68,6 +89,15 @@ process.once("message", async (raw) => {
   }
 });
 process.on("message", (message) => {
+  if (message === "pause_generations") {
+    pauseEvaluation = true;
+    return;
+  }
+  if (message === "release_generations") {
+    pauseEvaluation = false;
+    for (const release of gates) release();
+    return;
+  }
   if (message !== "stop") return;
   Promise.resolve(stop?.()).then(
     () => process.exit(0),
