@@ -2,6 +2,7 @@
 import type { ManagedArticlePage } from "@siteoffer/core";
 import Link from "next/link";
 import { useState } from "react";
+import { articlePublicationLabel } from "@/lib/article-publication-status";
 import { type ContentIndexQuery, contentIndexHref } from "@/lib/content-index-query";
 import { ContentFilterForm, ContentFilterLink } from "./content-filter-navigation";
 import { ContentIndexFields } from "./content-index-fields";
@@ -17,11 +18,13 @@ export function ContentArticleFinder({
   query,
   base,
   audience,
+  publicSite,
 }: {
   data: ManagedArticlePage;
   query: ContentIndexQuery;
   base: string;
   audience: "ops" | "customer";
+  publicSite: boolean;
 }) {
   const [open, setOpen] = useState(false),
     full = query.view === "list";
@@ -89,8 +92,8 @@ export function ContentArticleFinder({
             >
               <option value="all">すべて</option>
               <option value="unpublished">未掲載・掲載停止</option>
-              <option value="published">掲載中</option>
-              <option value="changes">掲載中・変更あり</option>
+              <option value="published">{publicSite ? "掲載中" : "掲載準備済み"}</option>
+              <option value="changes">{publicSite ? "掲載中・変更あり" : "掲載準備済み・変更あり"}</option>
             </select>
           </div>
           <button className="design-button secondary self-end" type="submit">
@@ -141,17 +144,12 @@ export function ContentArticleFinder({
             >
               <span className="block font-semibold text-slate-900">{row.title}</span>
               {row.publishedTitle && row.publishedTitle !== row.title && (
-                <span className="mt-1 block text-xs text-slate-500">掲載中：{row.publishedTitle}</span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  {publicSite ? "掲載中" : "掲載予定"}：{row.publishedTitle}
+                </span>
               )}
               <span className="mt-2 block text-xs text-slate-500">
-                {row.category === "blog" ? "ブログ" : "お知らせ"}・
-                {row.publishedRevision === null
-                  ? row.publicationRevision > 0
-                    ? "掲載停止"
-                    : "未掲載"
-                  : row.publishedRevision !== row.currentRevision
-                    ? "掲載中・変更あり"
-                    : "掲載中"}
+                {row.category === "blog" ? "ブログ" : "お知らせ"}・{articlePublicationLabel({ ...row, publicSite })}
                 ・第{row.currentRevision}版
               </span>
               <span className="mt-1 block break-all text-xs text-slate-400">

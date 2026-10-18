@@ -131,6 +131,7 @@ export async function ContentWorkspacePage({
             query={query}
             base={base}
             audience={audience}
+            publicSite={publicSite}
           />
           {workspace && (
             <section className="design-card min-w-0 scroll-mt-6 p-5 sm:p-6" id="article-editor">

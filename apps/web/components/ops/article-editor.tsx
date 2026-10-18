@@ -7,6 +7,7 @@ import { usePersonalDraft } from "@/components/use-personal-draft";
 import { type ContentIndexQuery, contentIndexHref } from "@/lib/content-index-query";
 import { ArticleHistoryControls, useArticleHistory } from "./article-history";
 import { ArticleImages } from "./article-images";
+import { ArticlePublication } from "./article-publication";
 import { preservesArticleFilter } from "./content-filter-navigation";
 import "./article-editor.css";
 
@@ -151,7 +152,9 @@ export function ArticleEditor({
         setMessage(
           result.replayed
             ? "受付済みの掲載操作を確認しました。現在の掲載状態を表示しています。"
-            : "掲載設定を反映しました。",
+            : result.workspace.publishedRevision === null
+              ? "掲載を停止しました。保存した版は残っています。"
+              : `第${result.workspace.publishedRevision}版を掲載する設定にしました。`,
         );
       }
     } catch {
@@ -218,6 +221,17 @@ export function ArticleEditor({
           作業コピー：{draft.status}
         </p>
       </div>
+      {workspace.scope.entryId && (
+        <ArticlePublication
+          companyId={workspace.scope.companyId}
+          slug={workspace.current.slug}
+          publishedRevision={workspace.publishedRevision}
+          publicationRevision={workspace.publicationRevision}
+          currentRevision={Number(workspace.current.baseRevision)}
+          publicSite={publicSite}
+          audience={audience}
+        />
+      )}
       {(error || draft.error) && (
         <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm">
           {error || draft.error}
@@ -433,7 +447,7 @@ export function ArticleEditor({
         <section className="space-y-4 border-t pt-6" aria-label="掲載設定">
           <h3>掲載する内容を確認</h3>
           <p className="text-sm">
-            現在：{workspace.publishedRevision ? `第${workspace.publishedRevision}版を掲載` : "未掲載"} ／
+            現在の設定：{workspace.publishedRevision ? `第${workspace.publishedRevision}版` : "掲載なし"} ／
             共有下書き：第{workspace.current.baseRevision}版
           </p>
           <p className="design-muted">
