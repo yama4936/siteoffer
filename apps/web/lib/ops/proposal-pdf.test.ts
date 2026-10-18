@@ -80,6 +80,10 @@ it("PDFを保存し、キャッシュ後も権限・承認・版の整合性を�
   expect(first.status).toBe(200);
   const bytes = Buffer.from(await first.arrayBuffer());
   expect(bytes.subarray(0, 4).toString()).toBe("%PDF");
+  expect(first.headers.get("content-disposition")).toContain("-v7.pdf");
+  expect((await PDFDocument.load(bytes)).getSubject()).toBe("SiteOffer 提案資料形式 v7");
+  expect((await PDFDocument.load(bytes)).getKeywords()).toContain(`design-id=${d!.id}`);
+  expect((await PDFDocument.load(bytes)).getKeywords()).toContain(`design-sha256=${d!.imageSha256}`);
   expect((await PDFDocument.load(bytes)).getPageCount()).toBeGreaterThanOrEqual(4);
   await db.update(companies).set({ pipelineStatus: "sellable" }).where(eq(companies.id, c.company.id));
   const terms = await seedTerms(db, {
@@ -104,6 +108,8 @@ it("PDFを保存し、キャッシュ後も権限・承認・版の整合性を�
     strengths: proposalText.strengths,
     measures: [{ problem: proposalText.measures[0]!.problem, priority: "high" }],
   });
+  expect((documents[0]!.snapshot as ProposalPdfSnapshot).limitations).toContain(proposalText.limitations[0]);
+  expect((documents[0]!.snapshot as ProposalPdfSnapshot).limitations).toHaveLength(2);
   expect((documents[0]!.snapshot as { status: string }).status).toContain("架空デモ");
   for (const reader of [
     { kind: "ops" as const, userId: "invalid" },
@@ -128,62 +134,84 @@ it("PDFを保存し、キャッシュ後も権限・承認・版の整合性を�
   await db.update(proposalVersions).set({ status: "rejected" }).where(eq(proposalVersions.id, c.version!.id));
   expect((await serveProposalPdf(db, sales, "proposal", c.version!.id)).status).toBe(404);
 });
-it("keeps the original export date, contents and bytes when adding a new PDF format", async () => {
-  const { actor } = await seedUser(db, "ops");
-  const c = await seedCandidate(db, { versionStatus: "approved" });
-  const [design] = await db
-    .insert(designVersions)
-    .values({
-      companyId: c.company.id,
-      auditId: c.audit.id,
-      version: 1,
-      requestKey: "legacy-pdf",
-      status: "approved",
-      brief: DEFAULT_DESIGN_BRIEF,
-      companySnapshot: { name: c.company.name, url: c.website.url },
-      prompt: "fixture",
-      source: "import",
-      imageBase64: png.toString("base64"),
-      imageSha256: createHash("sha256").update(png).digest("hex"),
-    })
-    .returning();
-  await db
-    .update(proposalVersions)
-    .set({ content: { designVersionId: design!.id, designSha256: design!.imageSha256, proposalText } })
-    .where(eq(proposalVersions.id, c.version!.id));
-  const first = await serveProposalPdf(db, actor, "proposal", c.version!.id);
-  expect(first.status).toBe(200);
-  const [saved] = await db.select().from(proposalDocuments);
-  const legacy = { ...(saved!.snapshot as ProposalPdfSnapshot), date: "2026-10-16T00:00:00Z" };
-  delete legacy.strengths;
-  for (const measure of legacy.measures) {
-    delete measure.problem;
-    delete measure.priority;
-  }
-  const legacyBytes = await renderProposalPdf(legacy, png);
-  await db
-    .update(proposalDocuments)
-    .set({
-      documentKey: `pdf-v5:proposal:${c.version!.id}:approved`,
-      snapshot: legacy,
-      pdfBase64: legacyBytes.toString("base64"),
-      sha256: createHash("sha256").update(legacyBytes).digest("hex"),
-    })
-    .where(eq(proposalDocuments.id, saved!.id));
-  expect((await serveProposalPdf(db, actor, "proposal", c.version!.id)).status).toBe(200);
-  const documents = await db.select().from(proposalDocuments);
-  expect(documents).toHaveLength(2);
-  const old = documents.find((document) => document.id === saved!.id)!;
-  expect(old.snapshot).toEqual(legacy);
-  expect(Buffer.from(old.pdfBase64, "base64")).toEqual(legacyBytes);
-  const updated = documents.find((document) => document.id !== saved!.id)!;
-  expect(updated.snapshot).toMatchObject({
-    date: legacy.date,
-    name: legacy.name,
-    strengths: proposalText.strengths,
-    measures: [{ title: legacy.measures[0]!.title, problem: proposalText.measures[0]!.problem, priority: "high" }],
-  });
-});
+it.each(["pdf-v5", "pdf-v6"])(
+  "keeps the %s export date, contents and bytes when adding a new PDF format",
+  async (previousFormat) => {
+    const { actor } = await seedUser(db, "ops");
+    const c = await seedCandidate(db, { versionStatus: "approved" });
+    const [design] = await db
+      .insert(designVersions)
+      .values({
+        companyId: c.company.id,
+        auditId: c.audit.id,
+        version: 1,
+        requestKey: "legacy-pdf",
+        status: "approved",
+        brief: DEFAULT_DESIGN_BRIEF,
+        companySnapshot: { name: c.company.name, url: c.website.url },
+        prompt: "fixture",
+        source: "import",
+        imageBase64: png.toString("base64"),
+        imageSha256: createHash("sha256").update(png).digest("hex"),
+      })
+      .returning();
+    await db
+      .update(proposalVersions)
+      .set({ content: { designVersionId: design!.id, designSha256: design!.imageSha256, proposalText } })
+      .where(eq(proposalVersions.id, c.version!.id));
+    const first = await serveProposalPdf(db, actor, "proposal", c.version!.id);
+    expect(first.status).toBe(200);
+    const [saved] = await db.select().from(proposalDocuments);
+    const legacy = { ...(saved!.snapshot as ProposalPdfSnapshot), date: "2026-10-16T00:00:00Z" };
+    legacy.limitations = [legacy.limitations[0]!];
+    if (previousFormat === "pdf-v5") {
+      delete legacy.strengths;
+      for (const measure of legacy.measures) {
+        delete measure.problem;
+        delete measure.priority;
+      }
+    }
+    const legacyBytes = await renderProposalPdf(legacy, png);
+    await db
+      .update(proposalDocuments)
+      .set({
+        documentKey: `${previousFormat}:proposal:${c.version!.id}:approved`,
+        snapshot: legacy,
+        pdfBase64: legacyBytes.toString("base64"),
+        sha256: createHash("sha256").update(legacyBytes).digest("hex"),
+      })
+      .where(eq(proposalDocuments.id, saved!.id));
+    expect((await serveProposalPdf(db, actor, "proposal", c.version!.id)).status).toBe(200);
+    const documents = await db.select().from(proposalDocuments);
+    expect(documents).toHaveLength(2);
+    const old = documents.find((document) => document.id === saved!.id)!;
+    expect(old.snapshot).toEqual(legacy);
+    expect(Buffer.from(old.pdfBase64, "base64")).toEqual(legacyBytes);
+    const updated = documents.find((document) => document.id !== saved!.id)!;
+    expect(updated.snapshot).toMatchObject({
+      date: legacy.date,
+      name: legacy.name,
+      strengths: proposalText.strengths,
+      limitations: [legacy.limitations[0], ...proposalText.limitations],
+      measures: [{ title: legacy.measures[0]!.title, problem: proposalText.measures[0]!.problem, priority: "high" }],
+    });
+    await db.delete(proposalDocuments).where(eq(proposalDocuments.id, updated.id));
+    if (previousFormat === "pdf-v6") {
+      await db.insert(proposalDocuments).values({
+        documentKey: `pdf-v5:proposal:${c.version!.id}:approved`,
+        designVersionId: old.designVersionId,
+        snapshot: legacy,
+        pdfBase64: legacyBytes.toString("base64"),
+        sha256: createHash("sha256").update(legacyBytes).digest("hex"),
+      });
+    }
+    await db
+      .update(proposalDocuments)
+      .set({ sha256: "0".repeat(64) })
+      .where(eq(proposalDocuments.id, old.id));
+    expect((await serveProposalPdf(db, actor, "proposal", c.version!.id)).status).toBe(503);
+  },
+);
 it("supplements missing fields only from the same unchanged proposal content", () => {
   const snapshot: ProposalPdfSnapshot = {
     name: "架空",
@@ -214,6 +242,12 @@ it("supplements missing fields only from the same unchanged proposal content", (
     supplementSnapshot(snapshot, { ...proposalText, measures: [{ ...proposalText.measures[0]!, current: "変更後" }] }),
   ).toBe(snapshot);
   expect(supplementSnapshot(snapshot, null)).toBe(snapshot);
+  const complete = supplementSnapshot(snapshot, proposalText);
+  expect(supplementSnapshot(complete, { ...proposalText, strengths: ["変更後の良い点"] })).toBe(complete);
+  for (const patch of [{ problem: "変更後の課題" }, { priority: "low" as const }])
+    expect(
+      supplementSnapshot(complete, { ...proposalText, measures: [{ ...proposalText.measures[0]!, ...patch }] }),
+    ).toBe(complete);
 });
 it("長い日本語はページを増やして欠落させず、フォントを埋め込む", async () => {
   const bytes = await renderProposalPdf(

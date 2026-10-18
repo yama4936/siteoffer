@@ -23,7 +23,7 @@ import { isUuid } from "./form";
 import { compactPdfHeader, wrapPdfText } from "./proposal-pdf-layout";
 
 let fontBytes: Promise<Buffer> | undefined;
-export const PROPOSAL_PDF_CACHE_VERSION = "pdf-v6";
+export const PROPOSAL_PDF_CACHE_VERSION = "pdf-v7";
 const MOCK_PDF_LIMITATION =
   "固定データによる動作検証です。診断結果・改善内容は実企業について確認した事実ではありません。";
 const navy = rgb(0.08, 0.15, 0.26),
@@ -63,7 +63,14 @@ export async function renderProposalPdf(snapshot: ProposalPdfSnapshot, png: Buff
   const font = await pdf.embedFont(await fontBytes, { subset: false, features: { liga: false, kern: false } });
   pdf.setTitle(`${snapshot.name} ウェブサイト改善提案`);
   pdf.setAuthor("SiteOffer");
-  pdf.setSubject("SiteOffer 提案資料形式 v6");
+  pdf.setSubject(`SiteOffer 提案資料形式 ${PROPOSAL_PDF_CACHE_VERSION.slice(4)}`);
+  pdf.setKeywords([
+    "SiteOffer",
+    `design-version=${snapshot.designVersion}`,
+    `design-id=${snapshot.designId}`,
+    `design-sha256=${snapshot.designSha256}`,
+    ...(snapshot.proposalVersion ? [`proposal-version=${snapshot.proposalVersion}`] : []),
+  ]);
   pdf.setCreationDate(new Date(snapshot.date));
   pdf.setModificationDate(new Date(snapshot.date));
   const image = await pdf.embedPng(png);
@@ -93,7 +100,7 @@ export async function renderProposalPdf(snapshot: ProposalPdfSnapshot, png: Buff
       font,
       color: muted,
     });
-    page.drawText("資料形式 v6", { x: 690, y: 22, size: 8, font, color: muted });
+    page.drawText(`資料形式 ${PROPOSAL_PDF_CACHE_VERSION.slice(4)}`, { x: 690, y: 22, size: 8, font, color: muted });
     const number = String(pdf.getPageCount()).padStart(2, "0");
     page.drawText(number, { x: 800 - measure(9)(number), y: 22, size: 9, font, color: muted });
   }
@@ -186,7 +193,6 @@ export async function renderProposalPdf(snapshot: ProposalPdfSnapshot, png: Buff
   if (snapshot.limitations.length) section("確認できた範囲・制約", snapshot.limitations.join("\n"));
   section("参照したサイト", snapshot.url);
   section("デザインの出典", snapshot.source);
-  section("版の識別", `デザインID：${snapshot.designId}\n画像 SHA-256：${snapshot.designSha256}`);
   return Buffer.from(await pdf.save());
 }
 
@@ -297,16 +303,17 @@ export async function serveProposalPdf(db: DbOrTx, actor: Actor | null, kind: "d
         })),
       strengths: text?.strengths ?? [],
       limitations: mock
-        ? [MOCK_PDF_LIMITATION]
+        ? [...new Set([MOCK_PDF_LIMITATION, ...(text?.limitations ?? [])])]
         : (text?.limitations ?? [
             "診断時点で取得できたページの観測に基づきます。サイト全体・実運用のすべてを保証する調査ではありません。",
           ]),
     };
-    const [legacy] = await db
-      .select()
-      .from(proposalDocuments)
-      .where(eq(proposalDocuments.documentKey, `pdf-v5:${kind}:${id}:${d.status}`));
-    if (legacy) {
+    for (const previousFormat of ["pdf-v6", "pdf-v5"]) {
+      const [legacy] = await db
+        .select()
+        .from(proposalDocuments)
+        .where(eq(proposalDocuments.documentKey, `${previousFormat}:${kind}:${id}:${d.status}`));
+      if (!legacy) continue;
       if (!documentMatches(legacy, d, proposal?.version ?? null))
         return new Response("Artifact integrity error", {
           status: 503,
@@ -315,6 +322,7 @@ export async function serveProposalPdf(db: DbOrTx, actor: Actor | null, kind: "d
       // Keep the first export's date and approved content. Only supplement fields from the same,
       // unchanged proposal JSON that the old PDF format did not include.
       snapshot = supplementSnapshot(legacy.snapshot as ProposalPdfSnapshot, text);
+      break;
     }
     const bytes = await renderProposalPdf(snapshot, png);
     await db.transaction(async (tx) => {
@@ -349,7 +357,7 @@ export async function serveProposalPdf(db: DbOrTx, actor: Actor | null, kind: "d
   return new Response(bytes, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="siteoffer-${kind}-${id}-v6.pdf"`,
+      "Content-Disposition": `attachment; filename="siteoffer-${kind}-${id}-${PROPOSAL_PDF_CACHE_VERSION.slice(4)}.pdf"`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
       "X-Robots-Tag": "noindex, nofollow",
@@ -415,11 +423,15 @@ export function supplementSnapshot(snapshot: ProposalPdfSnapshot, text: Proposal
     snapshot.status.startsWith("架空デモ") &&
     snapshot.limitations.length === 1 &&
     snapshot.limitations[0] === MOCK_PDF_LIMITATION;
+  if (!text) return snapshot;
+  const limitations = snapshot.status.startsWith("架空デモ")
+    ? [...new Set([MOCK_PDF_LIMITATION, ...text.limitations])]
+    : text.limitations;
   if (
-    !text ||
     snapshot.summary !== text.summary ||
     snapshot.measures.length !== text.measures.length ||
-    (!originalMockLimitation && JSON.stringify(snapshot.limitations) !== JSON.stringify(text.limitations))
+    (snapshot.strengths !== undefined && JSON.stringify(snapshot.strengths) !== JSON.stringify(text.strengths)) ||
+    (!originalMockLimitation && JSON.stringify(snapshot.limitations) !== JSON.stringify(limitations))
   )
     return snapshot;
   const unchanged = snapshot.measures.every((old, index) => {
@@ -428,12 +440,15 @@ export function supplementSnapshot(snapshot: ProposalPdfSnapshot, text: Proposal
       old.title === item.title &&
       old.current === item.current &&
       old.improvement === item.improvement &&
+      (old.problem === undefined || old.problem === item.problem) &&
+      (old.priority === undefined || old.priority === item.priority) &&
       old.evidence === `${item.target.url} / ${item.target.location} / ${item.evidenceRefs.join(", ")}`
     );
   });
   if (!unchanged) return snapshot;
   return {
     ...snapshot,
+    limitations,
     strengths: snapshot.strengths ?? text.strengths,
     measures: snapshot.measures.map((old, index) => ({
       ...old,
