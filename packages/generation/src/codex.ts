@@ -74,7 +74,7 @@ export class CodexGenerator implements Generator {
         record,
       };
     }
-    const prompt = buildPrompt(req.purpose, input);
+    const prompt = buildPrompt(req.purpose, input, req.retryFeedback);
     record.promptVersion = prompt.version;
 
     const workDir = await this.createWorkDir(req.jobId, req.attempt);
@@ -115,7 +115,7 @@ export class CodexGenerator implements Generator {
       if (!outcome.ok) return { ok: false, error: outcome.error, message: outcome.message, record, ...reference };
 
       const v = validateRawOutput(req.purpose, input, req.outputSchema, outcome.result.finalResponse);
-      if (!v.ok) return { ok: false, error: v.error, message: v.message, record, ...reference };
+      if (!v.ok) return { ok: false, error: v.error, message: v.message, feedback: v.feedback, record, ...reference };
       return { ok: true, output: v.output, record, ...reference };
     } catch {
       return {

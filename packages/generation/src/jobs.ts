@@ -6,6 +6,7 @@ import type { z } from "zod";
 import { attemptOnce } from "./attempt.ts";
 import { type GenerationLimits, resolveLimits } from "./config.ts";
 import { saveGenerationStopReference } from "./execution-reference.ts";
+import { type GenerationFeedback, sanitizeFeedback } from "./feedback.ts";
 import {
   GENERATION_HEARTBEAT_MS,
   GENERATION_INTERRUPTED_MESSAGE,
@@ -214,6 +215,7 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
       .run(async () => {
         let job = created;
         let last: Extract<GeneratorResult<T>, { ok: false }> | null = null;
+        let retryFeedback: GenerationFeedback | undefined;
 
         for (let attempt = 1; attempt <= limits.maxAttempts; attempt++) {
           // Check after waiting for a slot and before every retry. A blocked request is not another orphan.
@@ -249,7 +251,7 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
               action: "generation.attempt_started",
               targetType: "generation_job",
               targetId: job.id,
-              after: { attempt },
+              after: { attempt, ...(retryFeedback ? { retryFeedback } : {}) },
             });
             return row;
           });
@@ -265,6 +267,7 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
             limits.stopTimeoutMs,
             signal,
             (reference) => saveGenerationStopReference(db, clock, job.id, attempt, reference),
+            retryFeedback,
           );
           const r = attempted.result;
           if (r.stopReference?.stopped)
@@ -295,6 +298,8 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
           }
 
           last = r;
+          const feedback = sanitizeFeedback(r.feedback);
+          if (feedback?.error === r.error) retryFeedback = feedback;
           const final = attempt >= limits.maxAttempts || NON_RETRYABLE.includes(r.error);
           job = await db.transaction(async (tx) => {
             const row = await updateJob(tx, clock, job.id, {

@@ -1,4 +1,8 @@
 import type { z } from "zod";
+import type { GenerationFeedback } from "./feedback.ts";
+
+export type { GenerationFeedback } from "./feedback.ts";
+
 import type { SandboxStopReference } from "./sandbox/types.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 
@@ -32,6 +36,8 @@ export interface GenerateRequest<T> {
   /** 1回の試行のタイムアウト（GenerationLimits.timeoutMs）。実行場所（コンテナ）の打ち切りに使う */
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Application-authored validation summary for a bounded retry; never previous output text. */
+  retryFeedback?: GenerationFeedback;
   /** Host-only lifecycle record. It must settle before a sandbox may start. */
   saveStopReference?: (reference: SandboxStopReference) => Promise<void>;
 }
@@ -53,6 +59,7 @@ export type GeneratorResult<T> =
       ok: false;
       error: GeneratorErrorCode;
       message: string;
+      feedback?: GenerationFeedback;
       record: ExecutionRecord;
       stopReference?: SandboxStopReference;
     };

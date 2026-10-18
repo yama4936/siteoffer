@@ -75,7 +75,7 @@ export class MockGenerator implements Generator {
       };
     }
     const v = validateOutput(req.purpose, req.input, req.outputSchema, raw);
-    if (!v.ok) return { ok: false, error: v.error, message: v.message, record };
+    if (!v.ok) return { ok: false, error: v.error, message: v.message, feedback: v.feedback, record };
     return { ok: true, output: v.output, record };
   }
 }

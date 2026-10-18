@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { GenerationFeedback } from "./feedback.ts";
 import type { SandboxStopReference } from "./sandbox/types.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 import type { ExecutionRecord, Generator, GeneratorResult } from "./types.ts";
@@ -29,6 +30,7 @@ export async function attemptOnce<T>(
   stopTimeoutMs: number,
   signal?: AbortSignal,
   saveStopReference?: (reference: SandboxStopReference) => Promise<void>,
+  retryFeedback?: GenerationFeedback,
 ): Promise<{ result: GeneratorResult<T>; late?: Promise<GeneratorResult<T>> }> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -75,6 +77,7 @@ export async function attemptOnce<T>(
           timeoutMs,
           signal: controller.signal,
           ...(saveStopReference ? { saveStopReference } : {}),
+          ...(retryFeedback ? { retryFeedback } : {}),
         }),
       )
       .catch(() => failure("sandbox_stop_unconfirmed"));
