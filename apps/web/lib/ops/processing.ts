@@ -15,12 +15,13 @@ import {
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { currentDeliveryBuild, deliveryNeedsAttention, deliveryProcessingState } from "./delivery-processing";
 import { isUuid } from "./form";
+import { generationStopNextStep, loadGenerationStops } from "./generation-stops";
 
 export const PROCESSING_LIMIT = 20;
 export { WORKER_FRESH_MS } from "@siteoffer/core";
 export const PHASE_LABELS = INTAKE_PHASE_LABELS;
 type Runtime = typeof workerRuntimes.$inferSelect;
-export function assessWorkers(rows: Runtime[], now: Date) {
+export function assessWorkers(rows: Runtime[], now: Date, stoppedGenerators: string[] = []) {
   const workers = rows.map((w) => {
     const intake = assessWorkerIntake(w, now);
     const { known } = intake;
@@ -32,6 +33,7 @@ export function assessWorkers(rows: Runtime[], now: Date) {
       image: !!known && !c!.discoveryOnly && c!.imageConfigured,
       site: !!known && !c!.discoveryOnly,
       generator: known && ["mock", "codex"].includes(c!.generator) ? c!.generator : "unknown",
+      stopRecovery: !!known && c!.generationStopRecovery === 1,
       mode: w.mode === "demo" ? "demo" : "standard",
     };
   });
@@ -74,6 +76,13 @@ export function assessWorkers(rows: Runtime[], now: Date) {
         detail:
           "実生成と動作確認用など、制作ワーカーの設定が揃っていません。依頼を処理する方式を管理者が確認してください。",
       };
+    if (kind === "site" && capable.some((w) => stoppedGenerators.includes(w.generator)))
+      return {
+        status: "attention",
+        label: "生成の停止確認待ち",
+        detail:
+          "停止を確認できていない生成があります。同じ生成方式の新しい制作を止めています。停止確認待ちの一覧で対象と次の確認を見てください。",
+      };
     const mock = kind === "site" && capable.every((w) => w.generator === "mock");
     return {
       status: "ready",
@@ -90,7 +99,7 @@ export async function getProcessingOverview(
   clock: Clock,
   actor: Actor | null,
   companyId?: string,
-  requestedPages: Partial<Record<"discovery" | "images" | "sites" | "deliveries" | "handoffs", number>> = {},
+  requestedPages: Partial<Record<"discovery" | "images" | "sites" | "deliveries" | "handoffs" | "stops", number>> = {},
   deliveryState: "all" | "stopped" = "all",
 ) {
   if (actor?.kind !== "ops" || !isUuid(actor.userId)) return err("forbidden");
@@ -256,8 +265,30 @@ export async function getProcessingOverview(
       .offset((paging.handoffs.page - 1) * PROCESSING_LIMIT),
   ]);
   if (companyId && !company.length) return err("not_found");
+  const stops = await loadGenerationStops(db, requestedPages.stops);
+  const assessed = assessWorkers(
+    runtime,
+    now,
+    stops.counts.map((r) => r.generator),
+  );
   return ok({
-    ...assessWorkers(runtime, now),
+    ...assessed,
+    generationStops: {
+      total: stops.total,
+      page: stops.page,
+      pages: stops.pages,
+      items: stops.rows.map(({ reference: outputRef, ...row }) => ({
+        ...row,
+        next: generationStopNextStep(
+          {
+            id: row.id,
+            generator: row.generator,
+            reference: (outputRef as { stopReference?: unknown } | null)?.stopReference,
+          },
+          assessed.workers,
+        ),
+      })),
+    },
     discovery,
     handoffs,
     images,

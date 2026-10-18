@@ -47,6 +47,43 @@ it("heartbeat advertises real capabilities and is removed on shutdown", async ()
   }
   expect(await e.db.select().from(workerRuntimes)).toHaveLength(0);
 });
+it("advertises stop recovery only for a capable production worker, without calling the recovery method", async () => {
+  const original = e.deps.generation.generator;
+  let calls = 0;
+  e.deps.generation.generator = {
+    kind: "codex",
+    requestedModel: null,
+    promptVersion: (purpose) => original.promptVersion(purpose),
+    generate: (req) => original.generate(req),
+    recoverStop: async () => {
+      calls++;
+      return false;
+    },
+  };
+  const stop = await startWorkerHeartbeat(e.deps, "standard");
+  try {
+    expect((await e.db.select().from(workerRuntimes))[0]?.capabilities).toMatchObject({ generationStopRecovery: 1 });
+    expect(calls).toBe(0);
+  } finally {
+    await stop();
+  }
+  e.deps.discoveryOnly = true;
+  const collectOnly = await startWorkerHeartbeat(e.deps, "standard");
+  try {
+    expect((await e.db.select().from(workerRuntimes))[0]?.capabilities?.generationStopRecovery).toBeUndefined();
+    expect(calls).toBe(0);
+  } finally {
+    await collectOnly();
+  }
+  e.deps.discoveryOnly = false;
+  e.deps.generation.generator = original;
+  const mock = await startWorkerHeartbeat(e.deps, "demo");
+  try {
+    expect((await e.db.select().from(workerRuntimes))[0]?.capabilities?.generationStopRecovery).toBeUndefined();
+  } finally {
+    await mock();
+  }
+});
 it("search capabilities distinguish configured, disabled, legacy and inconsistent workers without a connectivity claim", async () => {
   e.deps.discovery.search = { name: "tavily", findOfficialSite: async () => ({ ok: true, value: [] }) };
   e.deps.discovery.searchLimit = 2;

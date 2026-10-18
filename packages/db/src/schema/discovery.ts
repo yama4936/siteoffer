@@ -63,6 +63,8 @@ export interface WorkerCapabilities {
   imageConfigured: boolean;
   generator: "mock" | "codex" | "unknown";
   intakeIntervalMs: number;
+  /** Absent on old workers and generators that cannot inspect isolated execution termination. */
+  generationStopRecovery?: 1;
   /** Absent on older workers. Search connectivity is not proved by configuration. */
   siteSearch?: { provider: "fixture" | "none" | "tavily" | "unknown"; maxPerRun: number };
 }

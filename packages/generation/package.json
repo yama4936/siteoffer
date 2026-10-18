@@ -6,6 +6,7 @@
     ".": "./src/index.ts",
     "./images": "./src/images.ts",
     "./lease": "./src/lease.ts",
+    "./stop-reference": "./src/sandbox/types.ts",
     "./docker-process": "./src/sandbox/docker-process.ts"
   },
   "scripts": {

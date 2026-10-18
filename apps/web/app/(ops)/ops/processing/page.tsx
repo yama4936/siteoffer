@@ -10,6 +10,7 @@ import { AuditRecovery } from "@/components/ops/audit-recovery";
 import { AuditRequests } from "@/components/ops/audit-requests";
 import { DiscoveryRefresh } from "@/components/ops/discovery-refresh";
 import { DiscoveryStatus } from "@/components/ops/discovery-status";
+import { GenerationStops } from "@/components/ops/generation-stops";
 import { PageHeader } from "@/components/ui/page";
 import { getDb } from "@/lib/db";
 import { fmtDate } from "@/lib/ops/format";
@@ -39,6 +40,7 @@ export default async function ProcessingPage({
       sites: Number(sp.sitesPage),
       deliveries: Number(sp.deliveriesPage),
       handoffs: Number(sp.handoffsPage),
+      stops: Number(sp.stopsPage),
     },
     deliveryState,
   );
@@ -150,9 +152,10 @@ export default async function ProcessingPage({
     if (requested.query) q.set("requestQuery", requested.query);
 
     q.set("auditPage", String(kind === "audit" ? page : recoverable.page));
+    q.set("stopsPage", String(kind === "stops" ? page : d.generationStops.page));
     if (deliveryState === "stopped") q.set("deliveryState", "stopped");
     for (const [key, value] of Object.entries(d.paging)) q.set(`${key}Page`, String(key === kind ? page : value.page));
-    return `/ops/processing?${q}#${kind === "preparation" ? "audit-preparation" : kind === "audit" ? "audit-recovery" : kind === "requests" ? "audit-requests" : `processing-${kind}`}`;
+    return `/ops/processing?${q}#${kind === "stops" ? "generation-stops" : kind === "preparation" ? "audit-preparation" : kind === "audit" ? "audit-recovery" : kind === "requests" ? "audit-requests" : `processing-${kind}`}`;
   }
   const preparationSearchFields = Array.from(
     new URL(pageHref("preparation", 1), "http://local.invalid").searchParams.entries(),
@@ -222,6 +225,12 @@ export default async function ProcessingPage({
           </Link>
         </p>
       )}
+      <GenerationStops
+        data={d.generationStops}
+        companyId={company}
+        previousHref={pageHref("stops", d.generationStops.page - 1)}
+        nextHref={pageHref("stops", d.generationStops.page + 1)}
+      />
       <AuditPreparation
         key={`${company ?? "all"}:${prepared.query}`}
         data={prepared}
