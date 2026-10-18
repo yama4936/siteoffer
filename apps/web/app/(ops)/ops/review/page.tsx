@@ -5,6 +5,7 @@ import { Flash, Forbidden, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
 import { getCompanyDetail } from "@/lib/ops/queries";
+import { readReviewDesign } from "@/lib/ops/review-design";
 import { EMPTY_REVIEW_DRAFT } from "@/lib/ops/review-draft-types";
 import { loadReviewDraft } from "@/lib/ops/review-drafts";
 import { getReviewInbox } from "@/lib/ops/review-inbox";
@@ -38,6 +39,7 @@ export default async function ReviewPage({
   if (selectedVersion && !d?.proposalVersions.some((v) => v.id === selectedVersion)) notFound();
   const version = selectedVersion ? d?.proposalVersions.find((v) => v.id === selectedVersion) : d?.proposalVersions[0];
   const initialDraft = version ? await loadReviewDraft(db, actor, version.id) : EMPTY_REVIEW_DRAFT;
+  const design = version ? await readReviewDesign(db, actor, version.id) : null;
   const context = new URLSearchParams({ reviewView: inbox.value.view, reviewPage: String(inbox.value.page) });
   if (inbox.value.query) context.set("reviewQuery", inbox.value.query);
   function listHref(view: string, page: number) {
@@ -102,6 +104,7 @@ export default async function ReviewPage({
                       content: version.content,
                       hasDemo: !!version.demoArtifactDir,
                       note: version.reviewNote,
+                      design,
                     }
                   : null,
               }

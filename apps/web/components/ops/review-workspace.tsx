@@ -8,6 +8,7 @@ import { commitReviewDraftAction, loadReviewDraftAction, saveReviewDraftAction }
 import { SitePreview } from "@/components/shell/site-preview";
 import { usePersonalDraft } from "@/components/use-personal-draft";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
+import type { ReviewDesign } from "@/lib/ops/review-design";
 import {
   EMPTY_REVIEW,
   REVIEW_CHECKS,
@@ -15,6 +16,7 @@ import {
   type ReviewDraftSnapshot,
   type ReviewValues,
 } from "@/lib/ops/review-draft-types";
+import { ReviewDesignPreview } from "./review-design-preview";
 
 type Item = {
   id: string;
@@ -61,6 +63,7 @@ type Selected = {
     content: unknown;
     hasDemo: boolean;
     note: string | null;
+    design: ReviewDesign | null;
   } | null;
 };
 function record(value: unknown): Record<string, unknown> {
@@ -318,8 +321,8 @@ export function ReviewWorkspace({
                   提案プレビュー
                 </a>
               )}
-              <Link className="review-outline" href={`/ops/designs?company=${c.id}`}>
-                デザイン・提案PDF
+              <Link className="review-outline" href={version?.design?.studioHref ?? `/ops/designs?company=${c.id}`}>
+                {version?.design ? "制作元の画像・PDF" : "デザイン一覧"}
               </Link>
               {version?.status === "approved" && !!content.designVersionId && (
                 <a className="review-outline" href={`/ops/proposals/${version.id}/pdf`}>
@@ -345,6 +348,7 @@ export function ReviewWorkspace({
               <div className="review-tabs">
                 {[
                   ["compare", "サイト比較"],
+                  ["design", "画像案と比較"],
                   ["proposal", "提案内容"],
                   ["assets", "企業情報・素材"],
                   ["history", "履歴"],
@@ -360,7 +364,7 @@ export function ReviewWorkspace({
                   </button>
                 ))}
               </div>
-              {tab === "compare" && (
+              {(tab === "compare" || tab === "design") && (
                 <div className="device-switch">
                   <button
                     aria-label="PC表示"
@@ -386,6 +390,27 @@ export function ReviewWorkspace({
               )}
             </div>
             <div className="review-panel">
+              {tab === "design" && (
+                <>
+                  <div className="review-design-intro">
+                    <h3>承認した方向性を、制作サイトで確認</h3>
+                    <p>
+                      {version?.design
+                        ? `提案 第${version.version}版の制作元を表示しています。文字・余白・配色・写真・問い合わせ導線を見比べ、違いは確認メモに残してください。`
+                        : "この提案の制作元画像を確認できないため、画像との比較はできません。デザイン一覧で制作元を確認してください。"}
+                    </p>
+                  </div>
+                  <div className={`site-comparison ${device === "mobile" ? "mobile" : ""}`}>
+                    <ReviewDesignPreview design={version?.design ?? null} />
+                    <SitePreview
+                      key={`${version?.id}:${device}:design`}
+                      title="制作サイト"
+                      url={preview}
+                      device={device}
+                    />
+                  </div>
+                </>
+              )}
               {tab === "compare" && (
                 <>
                   <div className={`site-comparison ${device === "mobile" ? "mobile" : ""}`}>

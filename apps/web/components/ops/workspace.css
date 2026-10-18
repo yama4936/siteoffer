@@ -453,6 +453,7 @@
 .review-tabs {
   display: flex;
   gap: 14px;
+  flex-wrap: wrap;
 }
 .review-tabs button {
   white-space: nowrap;
@@ -494,6 +495,70 @@
 }
 .site-column {
   min-width: 0;
+}
+.review-design-intro {
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--ops-line);
+  border-radius: 8px;
+  background: #f7f9ff;
+}
+.review-design-intro h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.review-design-intro p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #697890;
+}
+.review-image-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 33px;
+  padding: 4px 8px;
+  border: 1px solid #d4deed;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: #e9edf4;
+  margin: 0;
+  min-width: 0;
+}
+.review-image-tools button {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.review-image-tools button[aria-pressed="true"] {
+  color: var(--ops-blue);
+  background: white;
+  font-weight: 700;
+}
+.review-image-tools a {
+  margin-left: auto;
+}
+.review-image-viewport {
+  height: 445px;
+  overflow: auto;
+  border: 1px solid #d4deed;
+  border-radius: 0 0 7px 7px;
+  background: #f3f5f9;
+}
+.review-image-viewport img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.review-image-viewport img.enlarged {
+  width: auto;
+  max-width: none;
+}
+.review-design-column > .review-outline {
+  display: inline-flex;
+  margin-top: 10px;
 }
 .site-label {
   display: flex;
@@ -595,6 +660,10 @@
   font-size: 11px;
   line-height: 1.9;
   max-width: 210px;
+}
+.review-image-viewport .preview-unavailable {
+  min-height: 100%;
+  height: auto;
 }
 .preview-caption {
   font-size: 9px;
@@ -1199,6 +1268,16 @@
   .review-tabs button {
     font-size: 11px;
   }
+  .review-layout .review-tabs {
+    max-width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 7px;
+  }
+  .review-layout .review-tabs button {
+    padding-inline: 2px;
+    flex-shrink: 0;
+  }
   .review-toolbar {
     gap: 10px;
   }
@@ -1244,6 +1323,13 @@
   }
   .site-comparison.mobile .browser-frame {
     max-width: 330px;
+  }
+  .review-image-viewport {
+    height: 400px;
+  }
+  .review-image-viewport:has(img:not(.enlarged)) {
+    height: auto;
+    max-height: 400px;
   }
   .review-highlights li {
     font-size: 12px;
