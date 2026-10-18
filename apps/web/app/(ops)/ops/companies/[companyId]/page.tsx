@@ -14,7 +14,6 @@ import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
 import {
   detailsClass,
   EmptyRow,
-  inlineFormClass,
   StatusBadge,
   SubHeading,
   stackFormClass,
@@ -45,6 +44,7 @@ import {
   SUPPRESSION_LABEL,
   yen,
 } from "@/lib/ops/format";
+import { readGenerationRetries } from "@/lib/ops/generation-retries";
 import { getCompanyDetail, listAuditEventsForOps, listProductTerms } from "@/lib/ops/queries";
 import { sellableIssues, termsIssueText } from "@/lib/ops/sellable";
 import {
@@ -58,7 +58,6 @@ import {
   createImageAssetAction,
   excludeCandidateAction,
   makeSellableAction,
-  reviewProposalAction,
   updateCandidateAction,
   updateImageAssetPolicyAction,
   withdrawSellableAction,
@@ -103,6 +102,13 @@ export default async function CompanyPage({
   if (!journey.ok) return journey.error === "forbidden" ? <Forbidden /> : notFound();
   const d = r.value;
   const c = d.company;
+  const retries = await readGenerationRetries(
+    db,
+    actor,
+    c.id,
+    d.generationJobs.map((job) => job.id),
+  );
+  if (!retries.ok) return <Forbidden />;
   const profile = await loadCompanyProfileForOps(db, actor, c.id);
   const websiteProps = {
     companyId: c.id,
@@ -599,7 +605,7 @@ export default async function CompanyPage({
               <TableHead>版</TableHead>
               <TableHead>状態</TableHead>
               <TableHead>内容</TableHead>
-              <TableHead>デモ</TableHead>
+              <TableHead>サイト</TableHead>
               <TableHead>レビュー</TableHead>
               <TableHead>操作</TableHead>
             </TableRow>
@@ -620,46 +626,38 @@ export default async function CompanyPage({
                   </details>
                 </TableCell>
                 <TableCell>
-                  {v.demoArtifactDir ? <code className="break-all text-xs">{v.demoArtifactDir}</code> : "—"}
+                  {v.demoArtifactDir ? (
+                    <a
+                      className="text-primary underline whitespace-nowrap"
+                      href={`/ops/review/preview/${v.id}/index.html`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`提案第${v.version}版のサイトを別タブで確認`}
+                    >
+                      サイトを見る
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">サイトは未作成です</span>
+                  )}
                 </TableCell>
                 <TableCell>
                   <span className="whitespace-nowrap tabular-nums">{fmtDate(v.reviewedAt)}</span>
-                  {v.reviewNote ? <div className="text-muted-foreground text-xs">{v.reviewNote}</div> : null}
+                  {v.reviewNote ? (
+                    <details className="mt-1 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">確認メモを表示</summary>
+                      <p className="mt-2 max-w-md whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                        {v.reviewNote}
+                      </p>
+                    </details>
+                  ) : null}
                 </TableCell>
                 <TableCell>
-                  {v.status === "in_review" ? (
-                    <div className="grid min-w-64 gap-2">
-                      <form action={reviewProposalAction} className={inlineFormClass}>
-                        <ReturnTo path={here} />
-                        <input type="hidden" name="proposalVersionId" value={v.id} />
-                        <input type="hidden" name="decision" value="approved" />
-                        <Input
-                          name="note"
-                          placeholder="確認メモ（任意）"
-                          aria-label="確認メモ"
-                          className="h-8 flex-1"
-                        />
-                        <Button type="submit" size="sm" variant="success">
-                          承認
-                        </Button>
-                      </form>
-                      <form action={reviewProposalAction} className={inlineFormClass}>
-                        <ReturnTo path={here} />
-                        <input type="hidden" name="proposalVersionId" value={v.id} />
-                        <input type="hidden" name="decision" value="rejected" />
-                        <Input
-                          name="note"
-                          placeholder="差し戻しの理由（必須）"
-                          required
-                          aria-label="差し戻しの理由"
-                          className="h-8 flex-1"
-                        />
-                        <Button type="submit" size="sm" variant="outline">
-                          差し戻し
-                        </Button>
-                      </form>
-                    </div>
-                  ) : null}
+                  <Link
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                    href={`/ops/review?${new URLSearchParams({ company: c.id, version: v.id })}`}
+                  >
+                    {v.status === "in_review" ? "確認してレビュー" : "この版を確認"}
+                  </Link>
                 </TableCell>
               </TableRow>
             ))}
@@ -667,7 +665,7 @@ export default async function CompanyPage({
           </TableBody>
         </Table>
 
-        <GenerationHistory jobs={d.generationJobs} companyId={c.id} now={new Date()} />
+        <GenerationHistory jobs={d.generationJobs} retries={retries.value} companyId={c.id} now={new Date()} />
       </Section>
 
       <Section
