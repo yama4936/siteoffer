@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:postgres:audits": "node --import tsx apps/worker/test/postgres-audits.ts",
     "test:postgres:sales": "node --import tsx apps/worker/test/postgres-sales.ts",
+    "test:postgres:content": "node --import tsx apps/worker/test/postgres-content.ts",
     "test:postgres:pipeline": "node --import tsx apps/worker/test/postgres-pipeline.ts",
     "test:postgres:recovery": "node --import tsx apps/worker/test/postgres-pipeline.ts --recovery",
     "check": "scripts/check.sh",

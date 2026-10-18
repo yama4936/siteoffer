@@ -4,5 +4,5 @@
     "module": "ESNext",
     "moduleResolution": "Bundler"
   },
-  "include": ["test/postgres-sales.ts"]
+  "include": ["test/postgres-sales.ts", "test/postgres-content.ts"]
 }

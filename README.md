@@ -171,11 +171,14 @@ Dockerと事前準備した`postgres:17.10-alpine`を使い、専用コンテナ
 ```sh
 pnpm test:postgres:audits   # 診断受付・取り消し・一覧
 pnpm test:postgres:sales    # 担当・契約・報酬・抑止と同時操作
+pnpm test:postgres:content  # 記事の同時保存・掲載・権限と写真の取り消し
 pnpm test:postgres:pipeline # 実pg-boss・2プロセスで画像承認後の制作と重複防止
 pnpm test:postgres:recovery # 処理中のDB再起動・ワーカー強制終了からの回復
 ```
 
 パイプラインの取得・生成は架空フィクスチャとモック、HTMLは実際のAstroビルドです。最新の結果は`.data/local-run/postgres-pipeline/latest-result.json`、実行ごとの成果物は同フォルダー内に保存します。実API、画像の品質、公開・契約の受入を証明するものではありません。ローカルの並行ビルドも、ビルドごとに作業ディレクトリを分けて中間ファイルの競合を防ぎます。
+
+記事の検証はローカルDockerの専用DBと独立した4接続を使います。同じ依頼の重複、二人の同時編集、掲載と掲載停止、顧客権限と写真の利用許可の取り消し、別会社への影響を確認します。DBのロック待ちを実際に観測してから処理を進め、入力の保持・掲載版・再送時の権限も照合します。モデルやWebサーバーは起動せず、検証専用のDBとトリガーだけを使い、終了時は所有ラベルを確認してDBを除去します。最新結果の場所は`.data/local-run/postgres-content-latest.json`、実行ごとの記録は`.data/local-run/postgres-content/<実行ID>/result.json`です。実際の顧客・公開先・画像の許諾、ブラウザー操作、全障害や本番負荷の受入を証明するものではありません。
 
 回復検証は専用の永続ボリュームと固定のループバックDBポートを使い、診断中にDBを再起動します。続いて診断を取得したワーカーだけを強制終了し、残ったワーカーが通常の生存確認期限・再試行間隔で引き継ぎ、画像承認後に提案まで完成することを確認します。時刻や期限を書き換えずに待つため、数分かかります。結果は`.data/local-run/postgres-pipeline-recovery/latest-result.json`に保存し、終了時は所有ラベルを照合した検証用コンテナ・ボリュームを除去します。実SDK・画像APIの停止確認、複数ホストやすべての障害を検証するものではありません。
 
