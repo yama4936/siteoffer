@@ -31,6 +31,52 @@
 .design-heading label {
   font-size: 11px;
 }
+.design-index-picker {
+  width: min(100%, 440px);
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dae1ed;
+  border-radius: 10px;
+  background: #fff;
+}
+.design-index-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+.design-index-search label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 120px;
+  font-size: 12px;
+}
+.design-index-search input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dae1ed;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+}
+.design-index-picker select {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+.design-index-pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #3156e9;
+}
+.design-history-finder {
+  padding: 16px;
+  border-block: 1px solid #e1e6ef;
+}
 .design-inline {
   display: flex;
   gap: 8px;

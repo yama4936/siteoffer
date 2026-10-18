@@ -1,17 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_DESIGN_BRIEF, DESIGN_LABELS, type DesignBrief } from "@siteoffer/core";
-import { companies, designBriefDrafts, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
-import { and, desc, eq, getTableColumns, isNotNull, sql } from "drizzle-orm";
+import { designBriefDrafts, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { ArrowRight, Palette } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { DesignBriefForm } from "@/components/ops/design-brief-form";
 import { DesignRefresh, DesignSubmit } from "@/components/ops/design-controls";
+import { DesignCompanyPicker, DesignHistory } from "@/components/ops/design-index";
 import { DesignJourney } from "@/components/ops/design-journey";
 import { Flash, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { loadDesignDraft } from "@/lib/ops/design-drafts";
+import { readDesignIndex } from "@/lib/ops/design-index";
+import { designIndexHref, parseDesignIndexQuery } from "@/lib/ops/design-index-query";
 import { isUuid } from "@/lib/ops/form";
 import { requireUser } from "@/lib/session";
 import { buildDesignAction, retryDesignBuildAction, reviewDesignAction, uploadDesignAction } from "./actions";
@@ -25,28 +28,24 @@ export default async function DesignPage({
   const user = await requireUser("ops");
   const db = getDb();
   const sp = await searchParams;
-  const candidates = await db
-    .select({ id: companies.id, name: companies.name })
-    .from(companies)
-    .orderBy(desc(companies.updatedAt))
-    .limit(300);
-  const companyId = first(sp, "company") ?? candidates[0]?.id;
-  if (!companyId) return <p>企業を収集するとデザインを作成できます。</p>;
-  if (!isUuid(companyId)) notFound();
-  const [company] = await db.select().from(companies).where(eq(companies.id, companyId));
-  if (!company) notFound();
-  if (!candidates.some((c) => c.id === company.id)) candidates.unshift({ id: company.id, name: company.name });
-  const { imageBase64: _image, ...metadata } = getTableColumns(designVersions);
-  const versions = await db
-    .select(metadata)
-    .from(designVersions)
-    .where(eq(designVersions.companyId, companyId))
-    .orderBy(desc(designVersions.version));
-  const selectedId = first(sp, "design") ?? versions[0]?.id ?? "new";
-  const selected = selectedId === "new" ? undefined : versions.find((d) => d.id === selectedId);
-  if (selectedId !== "new" && !selected) notFound();
-  const auditParam = first(sp, "audit");
-  if (auditParam && auditParam !== "none" && !isUuid(auditParam)) notFound();
+  const input = parseDesignIndexQuery(sp);
+  if (!input) notFound();
+  const indexed = await readDesignIndex(db, user.actor, input);
+  if (!indexed.ok) notFound();
+  const data = indexed.value;
+  const { company } = data;
+  if (!company)
+    return (
+      <div className="design-studio">
+        <h1>デザインする案件を探す</h1>
+        <DesignCompanyPicker data={data} query={data.query} />
+        <p>企業を収集するか、検索条件を変えて案件を探してください。</p>
+      </div>
+    );
+  const companyId = company.id;
+  const selected = data.selected ?? undefined;
+  const selectedId = selected?.id ?? "new";
+  const auditParam = input.auditId;
   const [auditRecord] =
     auditParam === "none"
       ? []
@@ -65,13 +64,14 @@ export default async function DesignPage({
           .limit(1);
   if (auditParam && auditParam !== "none" && !auditRecord) notFound();
   // Pin both source version and diagnosis. Background work must not replace an open working copy.
-  if (!first(sp, "design") || !auditParam) {
-    const query = new URLSearchParams({ company: companyId, design: selectedId, audit: auditRecord?.id ?? "none" });
+  const query = { ...data.query, designId: selectedId, auditId: auditRecord?.id ?? "none" };
+  if (!input.designId || !auditParam) {
+    const url = new URL(designIndexHref(query), "http://local.invalid");
     for (const key of ["error", "msg"]) {
       const message = first(sp, key);
-      if (message) query.set(key, message);
+      if (message) url.searchParams.set(key, message);
     }
-    redirect(`/ops/designs?${query}`);
+    redirect(`${url.pathname}${url.search}`);
   }
   const audit = auditRecord?.status === "evaluated" && auditRecord.decision === "create" ? auditRecord : undefined;
   const [proposal] = selected
@@ -106,6 +106,15 @@ export default async function DesignPage({
           .orderBy(desc(designBriefDrafts.updatedAt))
           .limit(20)
       : [];
+  const draftSourceIds = recentDrafts
+    .map((item) => item.context.split(":")[0])
+    .filter((id): id is string => !!id && isUuid(id));
+  const draftSources = draftSourceIds.length
+    ? await db
+        .select({ id: designVersions.id, version: designVersions.version })
+        .from(designVersions)
+        .where(and(eq(designVersions.companyId, companyId), inArray(designVersions.id, draftSourceIds)))
+    : [];
   const draftTime = new Intl.DateTimeFormat("ja-JP", {
     month: "numeric",
     day: "numeric",
@@ -133,21 +142,7 @@ export default async function DesignPage({
           <h1>デザインから、提案をつくる。</h1>
           <p>画像で方向性を揃え、同じ版から制作と提案書へ。</p>
         </div>
-        <form>
-          <label htmlFor="design-company">案件を選択</label>
-          <div className="design-inline">
-            <select id="design-company" name="company" defaultValue={companyId}>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <button className="design-button secondary" type="submit">
-              開く
-            </button>
-          </div>
-        </form>
+        <DesignCompanyPicker data={data} query={query} />
       </header>
       <DesignJourney
         companyId={companyId}
@@ -169,12 +164,10 @@ export default async function DesignPage({
               <ul>
                 {recentDrafts.map((item) => {
                   const [sourceDesign, sourceAudit] = item.context.split(":");
-                  const source = versions.find((v) => v.id === sourceDesign);
+                  const source = draftSources.find((v) => v.id === sourceDesign);
                   return (
                     <li key={item.context}>
-                      <Link
-                        href={`/ops/designs?${new URLSearchParams({ company: companyId, design: sourceDesign!, audit: sourceAudit! })}`}
-                      >
+                      <Link href={designIndexHref({ ...query, designId: sourceDesign!, auditId: sourceAudit! })}>
                         {source ? `第${source.version}版をもとにした条件` : "新しい条件"} ·{" "}
                         {draftTime.format(item.updatedAt)}
                       </Link>
@@ -204,22 +197,7 @@ export default async function DesignPage({
               </span>
             )}
           </div>
-          {versions.length > 0 && (
-            <nav className="design-versions" aria-label="デザインの版">
-              <Link className={!selected ? "selected" : ""} href={`/ops/designs?company=${companyId}&design=new`}>
-                新しい条件<span>元の版を使わず作成</span>
-              </Link>
-              {versions.map((d) => (
-                <Link
-                  key={d.id}
-                  className={d.id === selected?.id ? "selected" : ""}
-                  href={`/ops/designs?company=${companyId}&design=${d.id}`}
-                >
-                  第{d.version}版<span>{DESIGN_LABELS[d.status]}</span>
-                </Link>
-              ))}
-            </nav>
-          )}
+          <DesignHistory data={data} query={query} />
           {selected?.imageSha256 ? (
             <a className="design-image" href={`/ops/designs/${selected.id}/image`} target="_blank" rel="noreferrer">
               <Image

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { createDesignAction, saveDesignDraftAction } from "@/app/(ops)/ops/designs/actions";
 import { DESIGN_BRIEF_FIELDS, type DesignDraftScope, type DesignDraftSnapshot } from "@/lib/ops/design-draft-types";
+import { preservesDesignFilter } from "./design-filter-navigation";
 
 const fingerprint = (value: DesignBrief) => JSON.stringify(DESIGN_BRIEF_FIELDS.map(([key]) => value[key]));
 export function DesignBriefForm({
@@ -69,6 +70,11 @@ export function DesignBriefForm({
           link.hasAttribute("download") ||
           link.getAttribute("href")?.startsWith("#")) &&
         !otherForm
+      )
+        return;
+      if (
+        (link && preservesDesignFilter(link, draftScope.current)) ||
+        (otherForm && target instanceof HTMLFormElement && preservesDesignFilter(target, draftScope.current))
       )
         return;
       if (!window.confirm("まだ保存されていない入力があります。保存完了を待たずに移動しますか？")) {
