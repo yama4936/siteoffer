@@ -7,9 +7,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("../db", () => ({ getDb: vi.fn() }));
 vi.mock("../session", () => ({ getCurrentActor: vi.fn() }));
-vi.mock("../../../../demo/backup/control.ts", () => ({ readControl: vi.fn(), requestControl: vi.fn() }));
+vi.mock("../../../../demo/backup/control-client.ts", () => ({ readControl: vi.fn(), requestControl: vi.fn() }));
 
-import { requestControl } from "../../../../demo/backup/control.ts";
+import { requestControl } from "../../../../demo/backup/control-client.ts";
 import { getDb } from "../db";
 import { getCurrentActor } from "../session";
 import { backupPage, backupRuntimeStatus, requireBackupOps, runBackupOperation } from "./backups";

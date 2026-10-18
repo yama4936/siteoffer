@@ -1,7 +1,7 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { assertPlainDirectory, BackupError } from "./bundle.ts";
-import { latestVerification } from "./verify.ts";
+import { latestVerification } from "./verification-receipt.ts";
 
 export const BACKUP_ID = /^backup-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export async function backupFile(root: string, id: string) {

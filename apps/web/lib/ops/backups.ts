@@ -5,7 +5,7 @@ import { auditEvents, users } from "@siteoffer/db";
 import { and, eq } from "drizzle-orm";
 import { BackupError } from "../../../../demo/backup/bundle.ts";
 import { BACKUP_ID, listBackups } from "../../../../demo/backup/catalog.ts";
-import { type BackupStatus, requestControl } from "../../../../demo/backup/control.ts";
+import { type BackupStatus, requestControl } from "../../../../demo/backup/control-client.ts";
 import { getDb } from "../db";
 import { getCurrentActor } from "../session";
 import { isUuid } from "./form";

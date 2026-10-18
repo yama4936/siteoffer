@@ -1,7 +1,7 @@
 import path from "node:path";
 import readline from "node:readline";
 import { BackupError, ensurePlainDirectory } from "./backup/bundle.ts";
-import { requestControl } from "./backup/control.ts";
+import { requestControl } from "./backup/control-client.ts";
 import { unlockStoppedOwner } from "./backup/owner.ts";
 import { pgliteRuntime } from "./backup/runtime.ts";
 import { restoreSnapshot } from "./backup/snapshot.ts";

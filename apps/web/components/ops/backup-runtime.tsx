@@ -71,6 +71,7 @@ export function BackupRuntimePanel({ initial, children }: { initial: BackupRunti
     files: "成果物を照合しています",
     encrypt: "暗号化して保存しています",
     verify: "隔離環境で復元を確認しています",
+    retention: "バックアップの保管操作を進めています",
   };
   return (
     <RuntimeContext value={status}>

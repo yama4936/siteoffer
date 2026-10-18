@@ -6,53 +6,18 @@ import path from "node:path";
 import type { PGliteServer } from "../../packages/db/src/pglite-server.ts";
 import { assertPlainDirectory, BackupError, ensurePlainDirectory } from "./bundle.ts";
 import { backupFile } from "./catalog.ts";
-import { alive, readOwner } from "./owner.ts";
+import type { BackupStatus, ControlInfo } from "./control-client.ts";
+import { alive } from "./owner.ts";
+import { parseRetentionRequest } from "./retention-request.ts";
+import { runRetention } from "./retention-service.ts";
 import { captureDatabase, type SnapshotDb, saveSnapshot } from "./snapshot.ts";
 import type { verifySnapshot } from "./verify.ts";
 
-type Verification = Awaited<ReturnType<typeof verifySnapshot>>;
-export type BackupStatus = {
-  busy: boolean;
-  operation: "backup" | "verify" | null;
-  startedAt: string | null;
-  phase: "waiting" | "snapshot" | "files" | "encrypt" | "verify" | null;
-  files: number;
-};
+export type { BackupStatus } from "./control-client.ts";
+export { readControl, requestControl } from "./control-client.ts";
 
-type ControlInfo = {
-  kind: "siteoffer-backup-control-v1";
-  pid: number;
-  ownerNonce: string;
-  pipe: string;
-  token: string;
-};
-export async function readControl(dataRoot: string) {
-  await assertPlainDirectory(dataRoot);
-  const file = path.join(dataRoot, "backup-control.json"),
-    info = await lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 4096)
-    throw new BackupError("バックアップの受付情報を確認できません。");
-  const value = JSON.parse(await readFile(file, "utf8")) as ControlInfo,
-    owner = await readOwner(dataRoot);
-  if (
-    value?.kind !== "siteoffer-backup-control-v1" ||
-    value.pid !== owner.pid ||
-    value.ownerNonce !== owner.nonce ||
-    !alive(owner.pid) ||
-    typeof value.pipe !== "string" ||
-    !/^[-_a-zA-Z0-9]{43}$/.test(value.token)
-  )
-    throw new BackupError("稼働中のバックアップ受付がありません。デモを正常に起動してください。");
-  const windows = /^\\\\\.\\pipe\\siteoffer-backup-[a-f0-9-]{36}$/;
-  if (
-    process.platform === "win32"
-      ? !windows.test(value.pipe)
-      : path.dirname(value.pipe) !== os.tmpdir() ||
-        !/^siteoffer-backup-[a-f0-9-]{36}\.sock$/.test(path.basename(value.pipe))
-  )
-    throw new BackupError("バックアップの接続先を確認できません。");
-  return value;
-}
+type Verification = Awaited<ReturnType<typeof verifySnapshot>>;
+
 export async function startBackupControl(options: {
   db: SnapshotDb;
   server: PGliteServer;
@@ -63,6 +28,7 @@ export async function startBackupControl(options: {
   ownerNonce: string;
   stop: () => void;
   verify: (file: string, password: string, signal: AbortSignal) => Promise<Verification>;
+  retentionNow?: () => Date;
 }) {
   await ensurePlainDirectory(options.backupRoot);
   await assertPlainDirectory(options.dataRoot);
@@ -121,7 +87,14 @@ export async function startBackupControl(options: {
           } finally {
             buffer = "";
           }
-          const r = request as { token?: string; command?: string; password?: string; backupId?: string };
+          const r = request as {
+            token?: string;
+            command?: string;
+            password?: string;
+            backupId?: string;
+            retention?: unknown;
+            requester?: unknown;
+          };
           const offered = Buffer.from(typeof r?.token === "string" ? r.token : "");
           if (offered.length !== token.length || !timingSafeEqual(offered, Buffer.from(token)))
             throw new BackupError("バックアップの利用権限を確認できません。");
@@ -132,6 +105,55 @@ export async function startBackupControl(options: {
           if (r.command === "stop") {
             send({ done: true, stopping: true });
             socket.end(() => options.stop());
+            return;
+          }
+          if (r.command === "retention") {
+            const operation = parseRetentionRequest(r.retention);
+            const requester = r.requester;
+            const authorize =
+              requester === undefined
+                ? undefined
+                : async () => {
+                    if (
+                      typeof requester !== "string" ||
+                      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(requester)
+                    )
+                      throw new BackupError("運営の利用権限を確認できません。");
+                    const result = await options.server.exclusive(
+                      () =>
+                        options.db.query("select id from public.users where id=$1 and role='ops' and status='active'", [
+                          requester,
+                        ]),
+                      controller.signal,
+                    );
+                    if (result.rows.length !== 1)
+                      throw new BackupError("運営の利用権限を確認できません。ログインし直してください。");
+                  };
+            if (busy || closing) throw new BackupError("別の保存・保管操作が進行中です。完了を待ってください。");
+            busy = true;
+            status = {
+              busy: true,
+              operation: "retention",
+              startedAt: new Date().toISOString(),
+              phase: "retention",
+              files: 0,
+            };
+            try {
+              const retention = await runRetention(
+                options.backupRoot,
+                operation,
+                r.password,
+                (file, password, signal) => options.verify(file, password, signal ?? controller.signal),
+                controller.signal,
+                options.retentionNow?.(),
+                authorize,
+              );
+              send({ done: true, result: { retention } });
+            } finally {
+              busy = false;
+              status = { busy: false, operation: null, startedAt: null, phase: null, files: 0 };
+              r.password = "";
+            }
             return;
           }
           if (
@@ -257,66 +279,4 @@ export async function startBackupControl(options: {
       return stopTask;
     },
   };
-}
-export async function requestControl(
-  dataRoot: string,
-  command: "backup" | "stop" | "verify" | "status",
-  password?: string,
-  progress?: (value: { phase: string; files: number }) => void,
-  backupId?: string,
-) {
-  const info = await readControl(dataRoot);
-  return new Promise<{
-    file?: string;
-    files?: number;
-    bytes?: number;
-    stopping?: boolean;
-    verification?: Verification;
-    status?: BackupStatus;
-  }>((resolve, reject) => {
-    const socket = net.connect(info.pipe),
-      timer = setTimeout(
-        () => {
-          socket.destroy();
-          reject(new BackupError("バックアップの確認が時間切れになりました。"));
-        },
-        command === "status" ? 2500 : 300000,
-      );
-    socket.setEncoding("utf8");
-    let buffer = "",
-      finished = false;
-    socket.on("connect", () => socket.write(`${JSON.stringify({ token: info.token, command, password, backupId })}\n`));
-    socket.on("error", () => {
-      if (!finished) reject(new BackupError("バックアップ受付に接続できません。"));
-      clearTimeout(timer);
-    });
-    socket.on("close", () => {
-      clearTimeout(timer);
-      if (!finished) reject(new BackupError("バックアップの確認が切断されました。完成済みとは扱っていません。"));
-    });
-    socket.on("data", (chunk) => {
-      buffer += chunk;
-      if (buffer.length > 65536) {
-        socket.destroy();
-        return;
-      }
-      while (buffer.includes("\n")) {
-        const index = buffer.indexOf("\n"),
-          line = buffer.slice(0, index);
-        buffer = buffer.slice(index + 1);
-        try {
-          const value = JSON.parse(line);
-          if (value.done) {
-            finished = true;
-            clearTimeout(timer);
-            socket.end();
-            if (value.error) reject(new BackupError(value.error));
-            else resolve(value.result ?? { stopping: value.stopping });
-          } else if (typeof value.phase === "string" && Number.isSafeInteger(value.files)) progress?.(value);
-        } catch {
-          socket.destroy();
-        }
-      }
-    });
-  });
 }

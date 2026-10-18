@@ -38,6 +38,11 @@ export default async function BackupsPage({
           </Link>
         }
       />
+      <p className="mb-5 text-sm">
+        <Link href="/ops/backups/storage" className="text-primary underline">
+          保護指定・保存期間の条件で整理・容量の確認
+        </Link>
+      </p>
       {!data.enabled ? (
         <Section title="この環境のバックアップ接続が未設定です">
           <p className="text-sm">

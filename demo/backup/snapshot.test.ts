@@ -21,7 +21,8 @@ import {
 import { type PGliteServer, startPGliteServer } from "../../packages/db/src/pglite-server.ts";
 import * as bundle from "./bundle.ts";
 import { BackupError, ensurePlainDirectory, removeOwnedDirectory } from "./bundle.ts";
-import { requestControl, startBackupControl } from "./control.ts";
+import { startBackupControl } from "./control.ts";
+import { requestControl } from "./control-client.ts";
 import { acquireOwner } from "./owner.ts";
 import { pgliteRuntime } from "./runtime.ts";
 import { captureDatabase, createSnapshot, restoreSnapshot, type SnapshotDb, saveSnapshot } from "./snapshot.ts";

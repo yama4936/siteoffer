@@ -6,8 +6,8 @@ export function parseBackupRuntimeStatus(value: unknown): BackupRuntimeStatus | 
   if (
     typeof r.available !== "boolean" ||
     typeof r.busy !== "boolean" ||
-    ![null, "backup", "verify"].includes(r.operation) ||
-    ![null, "waiting", "snapshot", "files", "encrypt", "verify"].includes(r.phase) ||
+    ![null, "backup", "verify", "retention"].includes(r.operation) ||
+    ![null, "waiting", "snapshot", "files", "encrypt", "verify", "retention"].includes(r.phase) ||
     !Number.isSafeInteger(r.files) ||
     r.files < 0 ||
     (r.startedAt !== null && (typeof r.startedAt !== "string" || !Number.isFinite(Date.parse(r.startedAt)))) ||
