@@ -180,6 +180,7 @@ export const proposalStep: StepDefinition<
         updatesUrl: contentSiteUrl(company.id, "demo"),
       },
       workDir,
+      signal: ctx.signal,
     });
     await ctx.assertCurrent();
     if (!built.ok) {

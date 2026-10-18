@@ -1,0 +1,15 @@
+FROM node:24-bookworm-slim
+WORKDIR /app/templates/astro-site
+COPY templates/astro-site/runtime/package.json templates/astro-site/runtime/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY templates/astro-site/build ./build
+COPY templates/astro-site/check ./check
+COPY templates/astro-site/lib ./lib
+COPY templates/astro-site/schema ./schema
+COPY templates/astro-site/src ./src
+COPY templates/astro-site/astro.config.ts ./astro.config.ts
+COPY tsconfig.base.json /app/tsconfig.base.json
+ENV ASTRO_TELEMETRY_DISABLED=1 HOME=/tmp SITEOFFER_SITE_SANDBOX=1
+USER 1000:1000
+WORKDIR /work
+CMD ["node", "/app/templates/astro-site/build/container-entry.ts"]

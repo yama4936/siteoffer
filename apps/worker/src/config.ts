@@ -30,6 +30,12 @@ import type { JobQueue, Logger, WorkerDeps } from "./deps.ts";
 import { defaultGenerationInputBuilder, fixtureGenerationInputBuilder } from "./input.ts";
 import { DEFAULT_POLICIES, DEFAULT_SCHEDULES, type StepKind, type StepPolicy } from "./queues.ts";
 import { createAstroSiteBuilder } from "./site-builder.ts";
+import {
+  createDockerSiteBuilder,
+  DEFAULT_SITE_BUILD_IMAGE,
+  DEFAULT_SITE_BUILD_TIMEOUT_MS,
+  siteBuildUserValid,
+} from "./site-builder-docker.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -44,6 +50,7 @@ export interface WorkerConfig {
   databaseUrl: string | null;
   discoveryOnly: boolean;
   generator: GeneratorConfig;
+  siteBuild: { kind: "local" } | { kind: "docker"; image: string; timeoutMs: number; user: string };
   discoveryProviders: DiscoveryProviderName[];
   siteSearch: "fixture" | "none" | "tavily";
   searchLimit: number;
@@ -109,6 +116,27 @@ export function resolveWorkerConfig(
   } else if (genKind !== "mock") {
     problems.push(`SITEOFFER_GENERATOR は mock か codex（${genKind}）`);
   }
+
+  const siteKind = v("SITEOFFER_SITE_BUILDER") ?? (generator.kind === "codex" ? "docker" : "local");
+  const siteBuildImage = v("SITEOFFER_SITE_BUILD_IMAGE") ?? DEFAULT_SITE_BUILD_IMAGE;
+  const siteBuildTimeout = Number(v("SITEOFFER_SITE_BUILD_TIMEOUT_MS") ?? DEFAULT_SITE_BUILD_TIMEOUT_MS);
+  const siteBuildUser =
+    v("SITEOFFER_SITE_BUILD_USER") ??
+    v("SITEOFFER_CODEX_USER") ??
+    `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+  if (siteKind === "docker" && !siteBuildUserValid(siteBuildUser))
+    problems.push("SITEOFFER_SITE_BUILD_USER は非rootの数値UID:GIDで指定してください");
+  if (!["local", "docker"].includes(siteKind)) problems.push("SITEOFFER_SITE_BUILDER は local・docker のいずれか");
+  if (generator.kind === "codex" && siteKind !== "docker")
+    problems.push("実Codexのサイト制作にはDockerビルドが必要です");
+  if (!/^[a-z0-9][a-z0-9./_:@-]{0,254}$/i.test(siteBuildImage))
+    problems.push("SITEOFFER_SITE_BUILD_IMAGE を確認してください");
+  if (!Number.isSafeInteger(siteBuildTimeout) || siteBuildTimeout < 1000 || siteBuildTimeout > 900_000)
+    problems.push("SITEOFFER_SITE_BUILD_TIMEOUT_MS は1000〜900000の整数");
+  const siteBuild: WorkerConfig["siteBuild"] =
+    siteKind === "docker"
+      ? { kind: "docker", image: siteBuildImage, timeoutMs: siteBuildTimeout, user: siteBuildUser }
+      : { kind: "local" };
 
   if (v("NODE_ENV") === "production" && generator.kind === "mock" && v("SITEOFFER_ALLOW_MOCK_DEMO") !== "true")
     problems.push(
@@ -177,6 +205,7 @@ export function resolveWorkerConfig(
     databaseUrl: v("DATABASE_URL") ?? null,
     discoveryOnly: v("SITEOFFER_DISCOVERY_ONLY") === "true",
     generator,
+    siteBuild,
     discoveryProviders,
     siteSearch: siteSearch as WorkerConfig["siteSearch"],
     searchLimit,
@@ -214,6 +243,8 @@ export function buildWorkerDeps(
   config: WorkerConfig,
   base: { db: Db; clock: Clock; queue: JobQueue; logger: Logger },
 ): WorkerDeps {
+  if (config.generator.kind === "codex" && config.siteBuild.kind !== "docker")
+    throw new Error("実Codexのサイト制作にはDockerビルドが必要です");
   const generator = createGenerator(config.generator);
   const limiter = new ConcurrencyLimiter(DEFAULT_GENERATION_LIMITS.maxConcurrent);
   const providers: Record<string, DiscoveryProvider> = {};
@@ -247,7 +278,8 @@ export function buildWorkerDeps(
     generation: { generator, limiter },
     buildGenerationInput:
       config.generationInput === "fixture" ? fixtureGenerationInputBuilder : defaultGenerationInputBuilder,
-    siteBuilder: createAstroSiteBuilder(),
+    siteBuilder:
+      config.siteBuild.kind === "docker" ? createDockerSiteBuilder(config.siteBuild) : createAstroSiteBuilder(),
     demoArtifactRoot: config.demoArtifactRoot,
     deliveryArtifactRoot: config.deliveryArtifactRoot,
     policies: config.policies,
@@ -259,6 +291,7 @@ export function buildWorkerDeps(
 export function describeConfig(config: WorkerConfig): Record<string, unknown> {
   return {
     generator: config.generator.kind,
+    siteBuilder: config.siteBuild.kind,
     requestedModel: config.generator.kind === "codex" ? config.generator.model : null,
     discoveryProviders: config.discoveryProviders,
     discoveryOnly: config.discoveryOnly,

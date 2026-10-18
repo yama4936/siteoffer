@@ -282,7 +282,9 @@ async function processDelivery(
       updatesUrl,
     },
     workDir,
+    signal,
   });
+  if (signal.aborted) return stale();
   if (!built.ok) {
     return {
       deliveryId: d.id,

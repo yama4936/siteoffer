@@ -18,6 +18,7 @@ describe("設定", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.generator).toEqual({ kind: "mock" });
+    expect(r.value.siteBuild).toEqual({ kind: "local" });
     expect(r.value.discoveryProviders).toEqual(["fixture"]);
     expect(r.value.auditCollector.kind).toBe("fixture");
     expect(r.value.databaseUrl).toBeNull();
@@ -38,6 +39,7 @@ describe("設定", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.generator).toMatchObject({ kind: "codex", model: null });
+    expect(r.value.siteBuild).toMatchObject({ kind: "docker", image: "siteoffer-site:local" });
     // 生成器を作るだけで、Codex・Dockerは呼ばない
     expect(createGenerator(r.value.generator, {}).kind).toBe("codex");
     // ログ用の要約に認証ファイルのパスや接続文字列を出さない
@@ -49,6 +51,22 @@ describe("設定", () => {
     const r = resolveWorkerConfig({ SITEOFFER_DISCOVERY_PROVIDERS: "fixture,nta", NTA_APPLICATION_ID: "dummy" });
     expect(r.ok && r.value.discoveryProviders).toEqual(["fixture", "nta"]);
     expect(resolveWorkerConfig({ SITEOFFER_DISCOVERY_PROVIDERS: "google" })).toMatchObject({ ok: false });
+  });
+  it("実Codexをホストビルドへ戻さず、イメージ・時間の不正な設定を拒否する", () => {
+    const env = {
+      SITEOFFER_GENERATOR: "codex",
+      SITEOFFER_CODEX_IMAGE: "test",
+      SITEOFFER_CODEX_NETWORK: "bridge",
+      SITEOFFER_CODEX_AUTH_FILE: "/secure/auth.json",
+    };
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILDER: "local" })).toMatchObject({
+      ok: false,
+      error: "invalid_config",
+    });
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_IMAGE: "--privileged" }).ok).toBe(false);
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_TIMEOUT_MS: "Infinity" }).ok).toBe(false);
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_TIMEOUT_MS: "0" }).ok).toBe(false);
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_USER: "0:0" }).ok).toBe(false);
   });
 });
 
