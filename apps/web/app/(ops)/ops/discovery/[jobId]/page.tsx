@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { DescriptionList, PageHeader, Section } from "@/components/ui/page";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
-import { isUuid } from "@/lib/ops/form";
+import { isUuid, safeReturnTo } from "@/lib/ops/form";
 import { fmtDate, JOB_STATUS_LABEL } from "@/lib/ops/format";
 import { getDiscoveryJob } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
@@ -30,6 +30,9 @@ export default async function DiscoveryJobPage({
 }) {
   const { jobId } = await params;
   if (!isUuid(jobId)) notFound();
+  const sp = await searchParams;
+  const returnTo = safeReturnTo(sp.returnTo, "/ops/discovery");
+  const here = `/ops/discovery/${jobId}?returnTo=${encodeURIComponent(returnTo)}`;
   const r = await getDiscoveryJob(getDb(), await getCurrentActor(), jobId);
   if (!r.ok) return <Forbidden />;
   if (!r.value) notFound();
@@ -47,7 +50,7 @@ export default async function DiscoveryJobPage({
     <>
       <PageHeader
         eyebrow={
-          <Link href="/ops/discovery" className="text-muted-foreground hover:text-foreground">
+          <Link href={returnTo} className="text-muted-foreground hover:text-foreground">
             ← 収集・候補へ戻る
           </Link>
         }
@@ -57,7 +60,12 @@ export default async function DiscoveryJobPage({
           </>
         }
       />
-      <Flash searchParams={await searchParams} />
+      <Flash searchParams={sp} />
+      <p className="mb-4 text-sm">
+        <Link className="text-primary underline" href={`/ops/discovery?sourceJob=${jobId}#companies`}>
+          この収集に関連する企業を見る
+        </Link>
+      </p>
       <DiscoveryRefresh />
       <DiscoveryStatus capabilities={capabilities} />
       {job.retryOfJobId && (
@@ -72,7 +80,7 @@ export default async function DiscoveryJobPage({
       ) : (
         job.status === "failed" && (
           <form action={retryDiscoveryJobAction} className="mb-6">
-            <ReturnTo path={`/ops/discovery/${job.id}`} />
+            <ReturnTo path={here} />
             <input type="hidden" name="jobId" value={job.id} />
             <Button type="submit" disabled={!ready}>
               同じ条件で再試行
