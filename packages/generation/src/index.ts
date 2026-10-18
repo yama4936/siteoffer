@@ -22,7 +22,9 @@ export type {
   SandboxRunner,
   SandboxRunOutcome,
   SandboxRunSpec,
+  SandboxStopReference,
 } from "./sandbox/types.ts";
+export * from "./stop-recovery.ts";
 export * from "./types.ts";
 export * from "./validate.ts";
 // runCodexTurn（SDKの直接呼び出し）はコンテナ内のエントリ専用のため export しない

@@ -27,6 +27,10 @@ const ACTIONS: Record<string, string> = {
   "worker.step_started": "処理工程を開始",
   "worker.step_succeeded": "処理工程が完了",
   "worker.step_failed": "処理工程が停止",
+  "generation.stop_unconfirmed": "生成の停止確認を待機",
+  "generation.blocked_by_stop": "停止確認まで生成を保留",
+  "generation.late_stop_evidence": "生成の停止情報を受領",
+  "generation.stop_confirmed": "生成の停止を確認",
 };
 export const HISTORY_TARGETS: Record<string, string> = {
   company: "企業",
@@ -41,6 +45,7 @@ export const HISTORY_TARGETS: Record<string, string> = {
   user: "ユーザー",
   session: "ログイン状態",
   worker_step: "処理工程",
+  generation_job: "生成",
   audit_request: "診断依頼",
   product_terms: "販売条件",
   website_candidate_operation: "候補保存の受付",
@@ -61,6 +66,7 @@ const GROUPS: Record<string, string> = {
   auth: "ログイン",
   session: "ログイン",
   worker: "自動処理",
+  generation: "生成",
   backup: "バックアップ",
   publication_material: "公開素材",
   image_asset: "画像素材",

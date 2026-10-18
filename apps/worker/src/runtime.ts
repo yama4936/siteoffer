@@ -1,5 +1,5 @@
 import { cleanupAuthAttempts, releaseExpiredAssignments } from "@siteoffer/core";
-import { recoverExpiredGenerationJobs } from "@siteoffer/generation";
+import { recoverExpiredGenerationJobs, recoverUnconfirmedGenerationJobs } from "@siteoffer/generation";
 import { dispatchAuditRequests, reconcileAuditRequest } from "./audit-request-dispatch.ts";
 import type { JobQueue, WorkerDeps } from "./deps.ts";
 import { executeStep, type StepExecutionOptions, type StepOutcome } from "./execute.ts";
@@ -56,8 +56,14 @@ export function createWorkerRuntime(deps: WorkerDeps) {
       }
       case QUEUES.recoverGeneration: {
         const recovered = await recoverExpiredGenerationJobs(deps.db, deps.clock);
+        const stopped = await recoverUnconfirmedGenerationJobs({
+          db: deps.db,
+          clock: deps.clock,
+          generator: deps.generation.generator,
+        });
         if (recovered.length) deps.logger.warn("接続が途切れた生成履歴を閉じました", { recovered });
-        return { status: "maintenance", result: { recovered } };
+        if (stopped.length) deps.logger.info("生成の停止を確認しました", { stopped });
+        return { status: "maintenance", result: { recovered, stopped } };
       }
       case QUEUES.recoverDiscovery: {
         const recovered = await recoverStaleDiscoveryJobs(deps.db, deps.clock, deps.discoveryStaleAfterMs);

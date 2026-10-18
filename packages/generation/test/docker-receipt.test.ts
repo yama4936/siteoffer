@@ -29,11 +29,16 @@ beforeEach(async () => {
     path.join(dir, "out/result.json"),
     JSON.stringify({ ...result, executionId: "11111111-1111-4111-8111-111111111111" }),
   );
-  mock.spawn.mockReset().mockImplementation(() => {
+  mock.spawn.mockReset().mockImplementation((_command: string, args: string[]) => {
     const child = Object.assign(new EventEmitter(), { stderr: new EventEmitter(), kill: vi.fn() });
     queueMicrotask(async () => {
       if (mode === "spawn-error") {
         child.emit("error", new Error("test-only unavailable process"));
+        return;
+      }
+      child.emit("spawn");
+      if (args[0] === "rm") {
+        child.emit("close", 0);
         return;
       }
       const input = JSON.parse(await readFile(path.join(dir, "request.json"), "utf8"));
@@ -87,6 +92,9 @@ it("a fresh receipt succeeds and another run in the same directory has a differe
   expect(second.ok).toBe(true);
   expect(first.result?.executionId).toMatch(/^[a-f0-9-]{36}$/);
   expect(second.result?.executionId).not.toBe(first.result?.executionId);
+  const names = mock.spawn.mock.calls.filter((c) => c[1][0] === "run").map((c) => c[1][c[1].indexOf("--name") + 1]);
+  expect(new Set(names).size).toBe(2);
+  expect(names).toEqual([first.stopReference?.containerName, second.stopReference?.containerName]);
 });
 it("a zero exit without a new receipt cannot reuse a previous successful result", async () => {
   mode = "stale";

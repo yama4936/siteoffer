@@ -5,7 +5,7 @@ import { withReferencePalette } from "./design-palette.ts";
 import { referencePalette, requireReferenceVisualSchema, requiresReferenceVisual } from "./design-reference.ts";
 import { toCodexOutputSchema } from "./json-schema.ts";
 import { buildPrompt, promptVersion } from "./prompt.ts";
-import type { SandboxRequest, SandboxRunner, SandboxRunSpec } from "./sandbox/types.ts";
+import type { SandboxRequest, SandboxRunner, SandboxRunSpec, SandboxStopReference } from "./sandbox/types.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 import type { ExecutionRecord, GenerateRequest, Generator, GeneratorResult } from "./types.ts";
 import { validateRawOutput } from "./validate.ts";
@@ -46,6 +46,10 @@ export class CodexGenerator implements Generator {
     return promptVersion(purpose);
   }
 
+  async recoverStop(reference: SandboxStopReference): Promise<boolean> {
+    return this.runner.recoverStop ? this.runner.recoverStop(reference) : false;
+  }
+
   async generate<T>(req: GenerateRequest<T>): Promise<GeneratorResult<T>> {
     const record: ExecutionRecord = {
       generator: this.kind,
@@ -74,6 +78,8 @@ export class CodexGenerator implements Generator {
     record.promptVersion = prompt.version;
 
     const workDir = await this.createWorkDir(req.jobId, req.attempt);
+    let stopped = true;
+    let stopReference: SandboxStopReference | undefined;
     try {
       await writeInputFiles(workDir, input);
 
@@ -85,7 +91,10 @@ export class CodexGenerator implements Generator {
       };
       if (req.signal) spec.signal = req.signal;
 
+      stopped = false;
       const outcome = await this.runner.run(spec);
+      stopped = outcome.stopped;
+      stopReference = outcome.stopReference;
       if (outcome.result) {
         record.threadId = outcome.result.threadId;
         record.usage = outcome.result.usage;
@@ -93,13 +102,40 @@ export class CodexGenerator implements Generator {
         record.sdkVersion = outcome.result.sdkVersion;
         record.cliVersion = outcome.result.cliVersion;
       }
-      if (!outcome.ok) return { ok: false, error: outcome.error, message: outcome.message, record };
+      const reference = stopReference ? { stopReference } : {};
+      if (!stopped)
+        return {
+          ok: false,
+          error: "sandbox_stop_unconfirmed",
+          message: "生成の停止を確認できません。自動再試行を停止しました。",
+          record,
+          ...reference,
+        };
+      if (!outcome.ok) return { ok: false, error: outcome.error, message: outcome.message, record, ...reference };
 
       const v = validateRawOutput(req.purpose, input, req.outputSchema, outcome.result.finalResponse);
-      if (!v.ok) return { ok: false, error: v.error, message: v.message, record };
-      return { ok: true, output: v.output, record };
+      if (!v.ok) return { ok: false, error: v.error, message: v.message, record, ...reference };
+      return { ok: true, output: v.output, record, ...reference };
+    } catch {
+      return {
+        ok: false,
+        error: stopped ? "sandbox_error" : "sandbox_stop_unconfirmed",
+        message: stopped
+          ? "生成の準備・結果確認に失敗しました。生成履歴を確認してください。"
+          : "生成の終了を確認できません。自動再試行を停止し、作業データを保持しました。",
+        record,
+        ...(stopReference ? { stopReference } : {}),
+      };
     } finally {
-      if (!this.config.keepWorkDir) await rm(workDir, { recursive: true, force: true });
+      // A running sandbox may still have this directory mounted. Never remove it without termination proof.
+      const resolved = path.resolve(workDir);
+      if (
+        stopped &&
+        !this.config.keepWorkDir &&
+        path.dirname(resolved) === this.workRoot() &&
+        path.basename(resolved).startsWith(`${req.jobId}-${req.attempt}-`)
+      )
+        await rm(resolved, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
@@ -123,9 +159,15 @@ export class CodexGenerator implements Generator {
   }
 
   private async createWorkDir(jobId: string, attempt: number): Promise<string> {
-    const root = this.config.workRoot ?? path.join(os.tmpdir(), "siteoffer-gen");
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(jobId) || !Number.isInteger(attempt) || attempt < 1)
+      throw new Error("生成のジョブ識別子・試行番号が不正です");
+    const root = this.workRoot();
     await mkdir(root, { recursive: true });
     return mkdtemp(path.join(root, `${jobId}-${attempt}-`));
+  }
+
+  private workRoot() {
+    return path.resolve(this.config.workRoot ?? path.join(os.tmpdir(), "siteoffer-gen"));
   }
 }
 

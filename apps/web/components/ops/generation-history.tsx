@@ -19,6 +19,12 @@ const REASONS: Record<string, string> = {
   aborted: "元の処理が中断されたため、この生成を終了しました。",
   timeout: "生成が制限時間を超えました。",
   sandbox_error: "生成の実行環境でエラーが発生しました。認証・ワーカーの設定を確認してください。",
+  sandbox_stop_unconfirmed:
+    "生成処理の停止確認を待っています。自動再試行と新しい生成を止めています。ワーカーの稼働を確認してください。",
+  sandbox_stop_pending:
+    "別の生成処理の停止確認を待っているため開始しませんでした。確認後、元の依頼から再試行できます。",
+  sandbox_stop_confirmed:
+    "停止を確認しました。遅れて届いた結果は採用していません。必要な場合は元の依頼から再試行できます。",
   empty_response: "生成結果が返りませんでした。",
   invalid_json: "生成結果の形式を読み取れませんでした。",
   schema_violation: "必要な内容を満たす生成結果が得られませんでした。",
@@ -35,7 +41,9 @@ export function GenerationHistory({ jobs, companyId, now }: { jobs: GenerationJo
         </Link>
       </div>
       <p className="text-xs text-muted-foreground">直近20件。生成の完了と、サイトの検査・承認・公開は別の工程です。</p>
-      {jobs.some((j) => j.status === "queued" || j.status === "running") && <DiscoveryRefresh />}
+      {jobs.some(
+        (j) => j.status === "queued" || j.status === "running" || j.errorCode === "sandbox_stop_unconfirmed",
+      ) && <DiscoveryRefresh />}
       {!jobs.length && (
         <p className="rounded-lg border p-4 text-sm text-muted-foreground">生成履歴はまだありません。</p>
       )}
@@ -43,7 +51,8 @@ export function GenerationHistory({ jobs, companyId, now }: { jobs: GenerationJo
         {jobs.map((j) => {
           const lost = generationConnectionLost(j, now);
           const active = j.status === "queued" || j.status === "running";
-          const failed = lost || j.status === "failed";
+          const stopPending = j.errorCode === "sandbox_stop_unconfirmed";
+          const failed = lost || j.status === "failed" || j.status === "needs_review";
           return (
             <li key={j.id} className="rounded-xl border bg-card p-4 text-sm" data-generation-id={j.id}>
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -51,9 +60,11 @@ export function GenerationHistory({ jobs, companyId, now }: { jobs: GenerationJo
                 <Badge variant={failed ? "warning" : j.status === "succeeded" ? "success" : "secondary"}>
                   {lost
                     ? "接続切れ"
-                    : active && !j.leaseUntil
-                      ? "稼働未確認"
-                      : (JOB_STATUS_LABEL[j.status] ?? j.status)}
+                    : stopPending
+                      ? "停止確認待ち"
+                      : active && !j.leaseUntil
+                        ? "稼働未確認"
+                        : (JOB_STATUS_LABEL[j.status] ?? j.status)}
                 </Badge>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
@@ -75,7 +86,7 @@ export function GenerationHistory({ jobs, companyId, now }: { jobs: GenerationJo
                       : "生成処理を実行しています。この画面を開いたままにする必要はありません。"}
                 </p>
               ) : null}
-              {failed && (
+              {failed && !stopPending && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   過去の実行履歴です。元の依頼が再試行・完了している場合は、追加の再実行は不要です。
                 </p>

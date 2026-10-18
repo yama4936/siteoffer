@@ -434,6 +434,51 @@ describe("失敗・再試行・上限", () => {
     expect(again).toMatchObject({ status: "duplicate", state: "gave_up" });
   });
 
+  it("生成の停止が未確認なら親の提案工程も自動再試行せず止める", async () => {
+    const base = new MockGenerator({ overrides: { evaluation: generationShapedEvaluation() } });
+    let calls = 0;
+    const generator: Generator = {
+      kind: "mock",
+      requestedModel: null,
+      promptVersion: (purpose) => base.promptVersion(purpose),
+      async generate(req) {
+        if (req.purpose === "evaluation") return base.generate(req);
+        calls++;
+        return {
+          ok: false,
+          error: "sandbox_stop_unconfirmed",
+          message: "生成処理の停止を確認できません。",
+          record: {
+            generator: "mock",
+            requestedModel: null,
+            responseModel: null,
+            sdkVersion: null,
+            cliVersion: null,
+            promptVersion: "test",
+            threadId: null,
+            requestId: null,
+            usage: null,
+          },
+        };
+      },
+    };
+    env = await setupEnv({ threshold: 100, generator: base });
+    env.deps.generation.generator = generator;
+    await startDiscovery(env);
+    const results = await drainWithDesignApproval(env);
+    expect(results.map((r) => `${r.name}:${r.outcome.status}`)).toEqual([
+      `${QUEUES.discovery}:succeeded`,
+      `${QUEUES.audit}:succeeded`,
+      `${QUEUES.proposal}:failed`,
+    ]);
+    expect(calls).toBe(1);
+    expect(env.queue.size).toBe(0);
+    expect(await versions(env)).toMatchObject([{ status: "failed" }]);
+    expect(await env.db.select().from(generationJobs).where(eq(generationJobs.purpose, "proposal_text"))).toMatchObject(
+      [{ status: "needs_review", attempts: 1, errorCode: "sandbox_stop_unconfirmed", output: null }],
+    );
+  });
+
   it("前の試行で成功した生成は、再試行で再実行しない", async () => {
     const fake = fakeSiteBuilder({ ok: false, retryable: true });
     env = await setupEnv({ threshold: 100, siteBuilder: fake.builder, policies: { proposal: { maxAttempts: 2 } } });
@@ -460,7 +505,7 @@ describe("失敗・再試行・上限", () => {
     if (last.status === "failed") expect(last.reason).toContain("StepTimeoutError");
   });
 
-  it("提案の制限時間が過ぎたら実行中の生成も閉じ、後続の生成・ビルドを始めない", async () => {
+  it("提案の制限時間後も生成が終了しなければ停止確認待ちにし、後続の生成・ビルドを始めない", async () => {
     const fake = fakeSiteBuilder(),
       mock = new MockGenerator({ overrides: { evaluation: generationShapedEvaluation() } });
     let signal: AbortSignal | undefined,
@@ -483,6 +528,7 @@ describe("失敗・再試行・上限", () => {
       policies: { proposal: { timeoutMs: 1000, maxAttempts: 1 } },
     });
     env.deps.generation.generator = generator;
+    env.deps.generation.limits = { ...env.deps.generation.limits, stopTimeoutMs: 10 };
     await startDiscovery(env);
     const results = await drainWithDesignApproval(env);
     expect(results.at(-1)!.outcome).toMatchObject({ status: "failed" });
@@ -494,9 +540,9 @@ describe("失敗・再試行・上限", () => {
         const [job] = await env!.db.select().from(generationJobs).where(eq(generationJobs.purpose, "proposal_text"));
         return job?.status;
       })
-      .toBe("failed");
+      .toBe("needs_review");
     const [job] = await env.db.select().from(generationJobs).where(eq(generationJobs.purpose, "proposal_text"));
-    expect(job).toMatchObject({ errorCode: "aborted", attempts: 1, output: null });
+    expect(job).toMatchObject({ errorCode: "sandbox_stop_unconfirmed", attempts: 1, output: null });
     expect((await versions(env))[0]!.status).toBe("failed");
   });
 

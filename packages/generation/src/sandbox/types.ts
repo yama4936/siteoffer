@@ -39,6 +39,20 @@ export const sandboxResultSchema = z.strictObject({
 });
 export type SandboxResult = z.infer<typeof sandboxResultSchema>;
 
+/** Host evidence only, never supplied by the model or the container's result file. */
+export const sandboxStopReferenceSchema = z
+  .strictObject({
+    executionId: z.uuid(),
+    jobId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
+    containerName: z.string(),
+    host: z.string().min(1).max(255),
+    clientPid: z.number().int().positive().nullable(),
+    clientClosed: z.boolean(),
+    stopped: z.boolean(),
+  })
+  .refine((ref) => ref.containerName === `siteoffer-gen-${ref.executionId}`, "実行とコンテナの識別が一致しません");
+export type SandboxStopReference = z.infer<typeof sandboxStopReferenceSchema>;
+
 export interface SandboxRunSpec {
   /** ジョブの識別子（コンテナ名に使う。英数字と-_のみ） */
   jobId: string;
@@ -50,8 +64,15 @@ export interface SandboxRunSpec {
 }
 
 export type SandboxRunOutcome =
-  | { ok: true; result: SandboxResult }
-  | { ok: false; error: "timeout" | "aborted" | "sandbox_error"; message: string; result: SandboxResult | null };
+  | { ok: true; result: SandboxResult; stopped: true; stopReference?: SandboxStopReference }
+  | {
+      ok: false;
+      error: "timeout" | "aborted" | "sandbox_error" | "sandbox_stop_unconfirmed";
+      message: string;
+      result: SandboxResult | null;
+      stopped: boolean;
+      stopReference?: SandboxStopReference;
+    };
 
 /**
  * Codexの実行場所。実行は必ずこのインターフェースを通す。
@@ -60,6 +81,7 @@ export type SandboxRunOutcome =
 export interface SandboxRunner {
   readonly kind: string;
   run(spec: SandboxRunSpec): Promise<SandboxRunOutcome>;
+  recoverStop?(reference: SandboxStopReference): Promise<boolean>;
 }
 
 export const SANDBOX_WORKDIR = "/work";

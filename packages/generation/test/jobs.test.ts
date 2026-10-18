@@ -167,14 +167,14 @@ describe("タイムアウトと同時実行数", () => {
     generate: () => new Promise<GeneratorResult<never>>(() => {}),
   };
 
-  it("応答のない試行はタイムアウトで打ち切る", async () => {
+  it("応答も停止確認もない試行は要確認にして再試行しない", async () => {
     const r = await runGenerationJob(
-      { db, clock, generator: hanging, limits: { timeoutMs: 20, maxAttempts: 2 } },
+      { db, clock, generator: hanging, limits: { timeoutMs: 20, stopTimeoutMs: 10, maxAttempts: 2 } },
       { idempotencyKey: "hang", companyId: null, purpose: "faq", input: fixtureInput() },
     );
     expect(r.ok).toBe(false);
     const [job] = await db.select().from(generationJobs);
-    expect(job).toMatchObject({ status: "failed", attempts: 2, errorCode: "timeout" });
+    expect(job).toMatchObject({ status: "needs_review", attempts: 1, errorCode: "sandbox_stop_unconfirmed" });
   });
 
   it("同時実行数の上限を超えて生成器を呼ばない", async () => {

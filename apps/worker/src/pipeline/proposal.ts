@@ -283,7 +283,8 @@ async function generateOnce(
   });
   if (!r.ok) {
     const msg = `生成（${req.purpose}）に失敗した：${r.message ?? r.error}`;
-    if (r.error === "invalid_input") throw new PermanentError(msg);
+    if (r.error === "invalid_input" || r.error === "sandbox_stop_unconfirmed" || r.error === "sandbox_stop_pending")
+      throw new PermanentError(msg);
     throw new Error(msg);
   }
   if (r.value.output === null) throw new Error(`生成（${req.purpose}）のジョブが ${r.value.job.status}（出力なし）`);

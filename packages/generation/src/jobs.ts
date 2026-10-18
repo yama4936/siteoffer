@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { type Actor, type Clock, err, ok, type Result, recordEvent } from "@siteoffer/core";
 import { type Db, type DbOrTx, generationJobs } from "@siteoffer/db";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import type { z } from "zod";
+import { attemptOnce } from "./attempt.ts";
 import { type GenerationLimits, resolveLimits } from "./config.ts";
 import {
   GENERATION_HEARTBEAT_MS,
@@ -21,6 +22,7 @@ import {
   generationInputSchema,
   generationOutputSchemas,
 } from "./schemas.ts";
+import { hasUnconfirmedGenerationStop, rememberLateGenerationStop } from "./stop-recovery.ts";
 import type { ExecutionRecord, Generator, GeneratorErrorCode, GeneratorResult } from "./types.ts";
 
 export type GenerationJob = typeof generationJobs.$inferSelect;
@@ -55,10 +57,14 @@ export interface GenerationJobOutcome<T> {
   reused: boolean;
 }
 
-export type GenerationJobError = "invalid_input" | "generation_failed";
+export type GenerationJobError =
+  | "invalid_input"
+  | "generation_failed"
+  | "sandbox_stop_unconfirmed"
+  | "sandbox_stop_pending";
 
-/** 再試行しない失敗（外部からの中断） */
-const NON_RETRYABLE: GeneratorErrorCode[] = ["aborted"];
+/** 外部からの中断・停止確認待ちでは自動再試行しない。 */
+const NON_RETRYABLE: GeneratorErrorCode[] = ["aborted", "sandbox_stop_unconfirmed", "sandbox_stop_pending"];
 
 const SYSTEM_ACTOR: Actor = { kind: "system", job: "generation" };
 
@@ -76,20 +82,6 @@ function inputRef(input: GenerationInput) {
     imagePolicies: input.attachments
       .filter((a) => a.kind === "image")
       .map((a) => ({ name: a.name, policy: a.imagePolicy })),
-  };
-}
-
-function emptyRecord(generator: Generator, purpose: GenerationPurpose): ExecutionRecord {
-  return {
-    generator: generator.kind,
-    requestedModel: generator.requestedModel,
-    responseModel: null,
-    sdkVersion: null,
-    cliVersion: null,
-    promptVersion: generator.promptVersion(purpose),
-    threadId: null,
-    requestId: null,
-    usage: null,
   };
 }
 
@@ -114,71 +106,27 @@ async function updateJob(
 ): Promise<GenerationJob> {
   // 行ロックの待ち時間中に期限を過ぎた場合も、取得後の時刻で再照合する。
   await db.select({ id: generationJobs.id }).from(generationJobs).where(eq(generationJobs.id, id)).for("update");
-  const terminal = values.status === "succeeded" || values.status === "failed";
+  const terminal = values.status === "succeeded" || values.status === "failed" || values.status === "needs_review";
+  // This job is never leased to a replacement executor. Even after its lease expires, the original
+  // executor must be able to quarantine its own unconfirmed sandbox. This exception cannot save output.
+  const unconfirmed = values.status === "needs_review" && values.errorCode === "sandbox_stop_unconfirmed";
   const [row] = await db
     .update(generationJobs)
-    .set({ ...values, ...(terminal ? { leaseUntil: null } : {}) })
-    .where(ownedGeneration(id, clock.now()))
+    .set({ ...values, ...(terminal ? { leaseUntil: null } : {}), ...(unconfirmed ? { output: null } : {}) })
+    .where(
+      unconfirmed
+        ? and(
+            eq(generationJobs.id, id),
+            or(
+              inArray(generationJobs.status, ["queued", "running"]),
+              and(eq(generationJobs.status, "failed"), eq(generationJobs.errorCode, "interrupted")),
+            ),
+          )
+        : ownedGeneration(id, clock.now()),
+    )
     .returning();
   if (!row) throw new GenerationLeaseLost();
   return row;
-}
-
-/** 1回の試行。タイムアウトしたら generator の完了を待たずに打ち切る */
-async function attemptOnce<T>(
-  generator: Generator,
-  purpose: GenerationPurpose,
-  input: GenerationInput,
-  outputSchema: z.ZodType<T>,
-  jobId: string,
-  attempt: number,
-  timeoutMs: number,
-  signal?: AbortSignal,
-): Promise<GeneratorResult<T>> {
-  const ac = new AbortController();
-  let timer: NodeJS.Timeout | undefined;
-  let cause: "timeout" | "aborted" | undefined;
-  let stop!: (value: "timeout" | "aborted") => void;
-  const stopped = new Promise<"timeout" | "aborted">((resolve) => {
-    stop = resolve;
-  });
-  const cancel = (reason: "timeout" | "aborted") => {
-    if (cause) return;
-    cause = reason;
-    stop(reason);
-    ac.abort();
-  };
-  const onAbort = () => cancel("aborted");
-  const failure = (error: "timeout" | "aborted"): GeneratorResult<T> => ({
-    ok: false,
-    error,
-    message: error === "timeout" ? `${timeoutMs}msで打ち切った` : "親の処理が中断されたため生成を停止しました",
-    record: emptyRecord(generator, purpose),
-  });
-  signal?.addEventListener("abort", onAbort, { once: true });
-  try {
-    if (signal?.aborted) return failure("aborted");
-    timer = setTimeout(() => cancel("timeout"), timeoutMs);
-    const r = await Promise.race([
-      generator.generate({ purpose, input, outputSchema, jobId, attempt, timeoutMs, signal: ac.signal }),
-      stopped,
-    ]);
-    // 中断に協調しない生成器が遅れて成功しても採用しない。タイムアウトと親からの中断を区別する。
-    if (cause) return failure(cause);
-    if (typeof r === "string") return failure(r);
-    return r;
-  } catch (e) {
-    if (cause) return failure(cause);
-    return {
-      ok: false,
-      error: "sandbox_error",
-      message: (e as Error).message,
-      record: emptyRecord(generator, purpose),
-    };
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
-  }
 }
 
 /**
@@ -237,6 +185,8 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
       .from(generationJobs)
       .where(eq(generationJobs.idempotencyKey, req.idempotencyKey));
     const job = existing!;
+    if (job.errorCode === "sandbox_stop_unconfirmed" || job.errorCode === "sandbox_stop_pending")
+      return err(job.errorCode, "生成の停止確認が済んでいません。生成履歴とワーカーの稼働を確認してください。");
     return ok({ job, output: job.status === "succeeded" ? (job.output as T) : null, reused: true });
   }
 
@@ -265,6 +215,28 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
         let last: Extract<GeneratorResult<T>, { ok: false }> | null = null;
 
         for (let attempt = 1; attempt <= limits.maxAttempts; attempt++) {
+          // Check after waiting for a slot and before every retry. A blocked request is not another orphan.
+          if (await hasUnconfirmedGenerationStop(db, generator.kind)) {
+            await db.transaction(async (tx) => {
+              await updateJob(tx, clock, job.id, {
+                status: "failed",
+                errorCode: "sandbox_stop_pending",
+                error: "別の生成処理の停止確認を待っています。確認が済むまで新しい生成を開始しません。",
+                finishedAt: clock.now(),
+              });
+              await recordEvent(tx, clock, {
+                actor,
+                action: "generation.blocked_by_stop",
+                targetType: "generation_job",
+                targetId: job.id,
+                after: { errorCode: "sandbox_stop_pending" },
+              });
+            });
+            return err(
+              "sandbox_stop_pending",
+              "別の生成処理の停止確認を待っています。ワーカーの稼働を確認してください。",
+            );
+          }
           job = await db.transaction(async (tx) => {
             const row = await updateJob(tx, clock, job.id, {
               status: "running",
@@ -281,7 +253,7 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
             return row;
           });
 
-          const r = await attemptOnce(
+          const attempted = await attemptOnce(
             generator,
             req.purpose,
             input,
@@ -289,8 +261,10 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
             job.id,
             attempt,
             limits.timeoutMs,
+            limits.stopTimeoutMs,
             signal,
           );
+          const r = attempted.result;
 
           if (r.ok) {
             const sha256 = createHash("sha256").update(JSON.stringify(r.output)).digest("hex");
@@ -321,24 +295,39 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
           job = await db.transaction(async (tx) => {
             const row = await updateJob(tx, clock, job.id, {
               ...recordColumns(r.record),
-              status: final ? "failed" : "running",
+              status: r.error === "sandbox_stop_unconfirmed" ? "needs_review" : final ? "failed" : "running",
               errorCode: r.error,
               error: r.message.slice(0, 2000),
+              outputRef: r.stopReference ? { stopReference: r.stopReference } : null,
               ...(final ? { finishedAt: clock.now() } : {}),
             });
             await recordEvent(tx, clock, {
               actor,
-              action: final ? "generation.failed" : "generation.attempt_failed",
+              action:
+                r.error === "sandbox_stop_unconfirmed"
+                  ? "generation.stop_unconfirmed"
+                  : final
+                    ? "generation.failed"
+                    : "generation.attempt_failed",
               targetType: "generation_job",
               targetId: job.id,
               after: { attempt, errorCode: r.error, threadId: r.record.threadId },
             });
             return row;
           });
+          if (attempted.late) {
+            // Metadata only: never save late output, resume a parent, or automatically re-run a model.
+            void attempted.late
+              .then((late) => rememberLateGenerationStop(db, clock, job.id, late))
+              .catch(() => undefined);
+          }
           if (final) break;
         }
 
-        return err("generation_failed", `${job.id}: ${last?.error ?? "unknown"}: ${last?.message ?? ""}`);
+        return err(
+          last?.error === "sandbox_stop_unconfirmed" ? "sandbox_stop_unconfirmed" : "generation_failed",
+          `${job.id}: ${last?.error ?? "unknown"}: ${last?.message ?? ""}`,
+        );
       }, signal)
       .catch(async (error: unknown) => {
         if (!(error instanceof GenerationWaitAborted)) throw error;

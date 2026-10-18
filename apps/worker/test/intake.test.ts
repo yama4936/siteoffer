@@ -472,7 +472,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       vi.unstubAllEnvs();
     }
   });
-  it("制作回の更新を検出すると古い生成へ中断を伝え、待たずに新しい制作へ進める", async () => {
+  it("制作回の更新で古い生成へ中断を伝え、停止未確認なら新しい生成を始めない", async () => {
     const [d] = await db.select().from(deliveries).limit(1);
     const back = await transitionDelivery(db, clock, { kind: "system", job: "test" }, d!.id, "building");
     if (!back.ok) throw Error(back.error);
@@ -483,6 +483,7 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       entered = resolve;
     });
     const builds = env.fake.calls.length;
+    env.deps.generation.limits = { ...env.deps.generation.limits, stopTimeoutMs: 10 };
     const generate = vi.spyOn(env.deps.generation.generator, "generate").mockImplementation((req) => {
       signal = req.signal;
       jobId = req.jobId;
@@ -502,9 +503,15 @@ describe("デモの流れ（受付 → 収集 → 診断 → 生成 → 納品�
       expect(generate).toHaveBeenCalledTimes(1);
       expect(env.fake.calls).toHaveLength(builds);
       const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, jobId));
-      expect(job).toMatchObject({ status: "failed", errorCode: "interrupted", attempts: 1, output: null });
+      expect(job).toMatchObject({
+        status: "needs_review",
+        errorCode: "sandbox_stop_unconfirmed",
+        attempts: 1,
+        output: null,
+      });
       generate.mockRestore();
-      expect(await intakeDeliveries(env.deps, createIntakeState())).toMatchObject([{ status: "version_added" }]);
+      expect(await intakeDeliveries(env.deps, createIntakeState())).toMatchObject([{ status: "failed" }]);
+      expect(env.fake.calls).toHaveLength(builds);
     } finally {
       generate.mockRestore();
       vi.useRealTimers();

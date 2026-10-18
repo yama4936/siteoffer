@@ -161,11 +161,11 @@ it("生成の定期回復は期限切れの履歴を閉じ、再実行しても�
     .returning();
   expect(await env.runtime.run(QUEUES.recoverGeneration, {})).toEqual({
     status: "maintenance",
-    result: { recovered: [job!.id] },
+    result: { recovered: [job!.id], stopped: [] },
   });
   expect(await env.runtime.run(QUEUES.recoverGeneration, {})).toEqual({
     status: "maintenance",
-    result: { recovered: [] },
+    result: { recovered: [], stopped: [] },
   });
   const [after] = await env.db.select().from(generationJobs).where(eq(generationJobs.id, job!.id));
   expect(after).toMatchObject({ status: "failed", errorCode: "interrupted", leaseUntil: null });

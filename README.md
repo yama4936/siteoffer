@@ -78,6 +78,7 @@ pnpm check           # 型検査・Lint・自動テスト（外部APIはモッ�
 pnpm dev:setup       # .envがない場合だけ、アプリのローカル設定を用意
 pnpm codex:setup      # .envへ認証ファイルの参照・実行UIDを設定し、生成用とビルド用のイメージを作る
 pnpm codex:sandbox-check # ダミー認証・ネットワークなしでWindowsのパスや隔離・結果の受け渡しを検査
+pnpm codex:lifecycle-check # モデル・DBなしで中断・時間切れ・停止確認・実行分離を実Dockerで検査
 pnpm site:build-check # モデル・DBを使わず、実Dockerでデモ・納品・開始前の中断と制限時間を確認
 pnpm codex:check      # 使い捨てコンテナ内のSDKで短い実応答を確認（Codex利用枠を消費）
 pnpm codex:worker     # Composeのモックワーカーを停止し、ホスト側の実ワーカーを起動
@@ -91,6 +92,7 @@ WindowsではDocker Desktopを起動してください。空白・日本語を�
 既存デモの稼働確認だけなら、`.env` の作成や実ワーカーへの切替は不要です。上記手順は実Codexを使う通常環境の設定です。
 認証を設定せず隔離処理だけ確認する場合は、`docker build -f Dockerfile.codex -t siteoffer-codex:local .` と `pnpm codex:sandbox-check` を使えます。
 各実行に固有のIDを割り当て、現在のIDと一致した結果だけを受け取ります。古い生成イメージはIDを返さないため、ランナー更新後は生成用イメージも再ビルドしてください。
+生成の中断・時間切れではDockerクライアントと専用コンテナの終了を確認してから戻ります。生成ジョブは停止確認を最大30秒待ち、その間は同時実行枠を保持します。停止を確認できなければ「停止確認待ち」にし、同じ生成方式の新規実行と自動再試行を止めます。マウントした作業データは削除しません。通常のワーカーの毎分の回復処理で、同じホスト・終了済みのクライアント・当該実行の識別ラベルを照合し、停止を確認できたものだけ受付の制限を解除します。遅れて届いた結果は採用せず、必要な再生成は元の依頼から行います。元のホストやクライアントの終了を確認できない場合は制限を維持するため、ワーカー・Dockerの稼働と生成履歴を確認してください。
 ビルド用イメージだけを準備する場合は `docker build -f Dockerfile.site -t siteoffer-site:local .` を実行します。ビルドはネットワークなし・非root・読み取り専用のルートで行い、検証した構成と選択画像だけを専用ディレクトリへ渡します。Codex認証・DB接続・APIキーは渡しません。Dockerの各オプションは [公式の実行ガイド](https://docs.docker.com/engine/containers/run/)を参照してください。
 ビルドの既定上限は180秒、1 CPU・2GB・256 PIDです。`SITEOFFER_SITE_BUILD_IMAGE`、`SITEOFFER_SITE_BUILD_TIMEOUT_MS`、非rootの数値UID:GIDを指定する `SITEOFFER_SITE_BUILD_USER` で設定できます。セットアップはホストの実行ユーザーに合わせます。入力は1MB、画像32点・1点12MB・合計64MBまで、出力は500項目・128MB・階層16まで検査します。スマホの見た目は、この構造検査とは別に確認します。
 ビルドごとに別の出力先を作り、過去の成果物を上書きしません。中断・時間切れでは自身のコンテナだけを停止し、停止を確認できない場合は作業データを残して運営の確認へ戻します。

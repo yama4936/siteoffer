@@ -272,7 +272,10 @@ async function processDelivery(
     return {
       deliveryId: d.id,
       status: "failed",
-      reason: "サイトの生成に失敗しました。生成履歴と設定を確認して再試行してください。",
+      reason:
+        gen.error === "sandbox_stop_unconfirmed" || gen.error === "sandbox_stop_pending"
+          ? "生成処理の停止確認を待っています。ワーカーの稼働と生成履歴を確認してください。停止確認が済むまで再試行は行いません。"
+          : "サイトの生成に失敗しました。生成履歴と設定を確認して再試行してください。",
     };
   if (gen.value.output === null) {
     return {

@@ -96,7 +96,6 @@ describe("親の中断と生成履歴", () => {
     );
     const signal = await entered.promise;
     controller.abort();
-    expect((await result).ok).toBe(false);
     expect(signal.aborted).toBe(true);
     late.resolve({
       ok: true,
@@ -114,6 +113,7 @@ describe("親の中断と生成履歴", () => {
       },
     });
     await late.promise;
+    expect((await result).ok).toBe(false);
     expect(await db.select().from(generationJobs)).toMatchObject([
       { status: "failed", errorCode: "aborted", attempts: 1, output: null },
     ]);
@@ -123,7 +123,7 @@ describe("親の中断と生成履歴", () => {
     expect(same.ok && same.value).toMatchObject({ reused: true, output: null, job: { errorCode: "aborted" } });
     expect(calls).toBe(1);
   });
-  it("親の中断と生成器のタイムアウトを混同せず、タイムアウトだけは再試行する", async () => {
+  it("終了しない生成器は停止確認待ちにし、同じ試行を再実行しない", async () => {
     const { db } = testDb,
       signals: AbortSignal[] = [];
     const generator: Generator = {
@@ -136,14 +136,14 @@ describe("親の中断と生成履歴", () => {
       },
     };
     const r = await runGenerationJob(
-      { db, clock, generator, limits: { maxAttempts: 2, timeoutMs: 10 } },
+      { db, clock, generator, limits: { maxAttempts: 2, timeoutMs: 10, stopTimeoutMs: 10 } },
       req(new AbortController().signal),
     );
     expect(r.ok).toBe(false);
-    expect(signals).toHaveLength(2);
+    expect(signals).toHaveLength(1);
     expect(signals.every((s) => s.aborted)).toBe(true);
     expect(await db.select().from(generationJobs)).toMatchObject([
-      { status: "failed", errorCode: "timeout", attempts: 2 },
+      { status: "needs_review", errorCode: "sandbox_stop_unconfirmed", attempts: 1, leaseUntil: null, output: null },
     ]);
   });
 });
