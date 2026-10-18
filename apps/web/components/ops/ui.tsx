@@ -2,6 +2,7 @@ import {
   ClipboardCheck,
   DatabaseBackup,
   FileSignature,
+  History,
   Images,
   KeyRound,
   LayoutDashboard,
@@ -40,6 +41,7 @@ export const NAV_ITEMS = [
   { href: "/ops/assignments", label: "担当・引き継ぎ", icon: Users },
   { href: "/ops/contracts", label: "契約・報酬", icon: FileSignature },
   { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
+  { href: "/ops/history", label: "操作履歴を探す", icon: History },
   { href: "/ops/backups", label: "バックアップ", icon: DatabaseBackup },
   { href: "/ops/account-recovery", label: "ログイン復旧", icon: KeyRound },
   { href: "/account/security", label: "安全設定", icon: ShieldCheck },
@@ -49,7 +51,10 @@ const NAV_GROUPS = [
   { label: "案件・提案", hrefs: ["/ops/discovery", "/ops/designs", "/ops/review"] },
   { label: "営業・契約", hrefs: ["/ops/consultations", "/ops/assignments", "/ops/contracts"] },
   { label: "制作・運用", hrefs: ["/ops/materials", "/ops/delivery", "/ops/publication-checks", "/ops/content"] },
-  { label: "管理", hrefs: ["/ops/settings", "/ops/backups", "/ops/account-recovery", "/account/security"] },
+  {
+    label: "管理",
+    hrefs: ["/ops/settings", "/ops/history", "/ops/backups", "/ops/account-recovery", "/account/security"],
+  },
 ];
 
 export function OpsShell({
