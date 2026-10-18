@@ -23,6 +23,27 @@
   font-size: 16px;
   font-weight: 700;
 }
+.articles-site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+.articles-site-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #2447ae;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.articles-site-nav a:focus-visible {
+  outline: 2px solid #2447ae;
+  outline-offset: 4px;
+  border-radius: 3px;
+}
 .articles-eyebrow {
   margin-top: 36px;
   color: #536784;

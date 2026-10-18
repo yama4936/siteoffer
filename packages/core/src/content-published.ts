@@ -1,4 +1,12 @@
-import { contentEntries, contentRevisions, type DbOrTx } from "@siteoffer/db";
+import {
+  contentEntries,
+  contentRevisions,
+  contracts,
+  type DbOrTx,
+  deliveries,
+  deliveryVersions,
+  deployments,
+} from "@siteoffer/db";
 import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
 import { hasPublishedSite } from "./content.ts";
 import { ContentError } from "./content-auth.ts";
@@ -24,6 +32,37 @@ const publishedRevision = and(
   eq(contentRevisions.entryId, contentEntries.id),
   eq(contentRevisions.revision, contentEntries.publishedRevision),
 );
+
+/** A return link must refer to the latest recorded publication, never the old source site or a new draft. */
+export async function publishedSiteHomeUrl(db: DbOrTx, companyId: string): Promise<string | null> {
+  if (!uuid.test(companyId)) return null;
+  const [record] = await db
+    .select({ url: deployments.url, deliveryId: deliveries.id, versionDeliveryId: deliveryVersions.deliveryId })
+    .from(deployments)
+    .innerJoin(deliveries, eq(deliveries.id, deployments.deliveryId))
+    .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+    .leftJoin(deliveryVersions, eq(deliveryVersions.id, deployments.deliveryVersionId))
+    .where(
+      and(eq(contracts.companyId, companyId), eq(contracts.status, "completed"), eq(deployments.status, "recorded")),
+    )
+    .orderBy(desc(deployments.createdAt), desc(deployments.id))
+    .limit(1);
+  if (!record || record.versionDeliveryId !== record.deliveryId || typeof record.url !== "string") return null;
+  const value = record.url;
+  if (
+    value.length > 2048 ||
+    value !== value.trim() ||
+    Array.from(value).some((c) => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 127)
+  )
+    return null;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
 function scope(companyId: string) {
   if (!uuid.test(companyId)) throw new ContentError("企業を確認してください");
   return and(eq(contentEntries.companyId, companyId), isNotNull(contentEntries.publishedRevision));

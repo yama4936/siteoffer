@@ -1,4 +1,4 @@
-import { authorizeContentEditor, ContentError } from "@siteoffer/core";
+import { authorizeContentEditor, ContentError, publishedSiteHomeUrl } from "@siteoffer/core";
 import { companies } from "@siteoffer/db";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
@@ -24,7 +24,7 @@ export default async function Page({
         const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId));
         if (!company) return null;
         const view = await loadArticleView(tx, companyId, sp);
-        return view ? { name: company.name, view } : null;
+        return view ? { name: company.name, view, homeUrl: await publishedSiteHomeUrl(tx, companyId) } : null;
       },
       { isolationLevel: "repeatable read" },
     );

@@ -17,12 +17,14 @@ export function Articles({
   companyId,
   view,
   basePath,
+  homeUrl = null,
   preview = false,
 }: {
   name: string;
   companyId: string;
   view: PublishedArticlesView;
   basePath: string;
+  homeUrl?: string | null;
   preview?: boolean;
 }) {
   const photoUrl = (entryId: string, assetId: string) =>
@@ -35,6 +37,12 @@ export function Articles({
       )}
       <header className="articles-header">
         <p className="articles-company">{name}</p>
+        <nav className="articles-site-nav" aria-label="サイト内の移動">
+          {homeUrl && <a href={homeUrl}>← {preview ? "公開サイトのトップ" : "トップページ"}</a>}
+          <Link href={basePath} prefetch={false} aria-current={view.kind === "list" ? "page" : undefined}>
+            お知らせ・ブログ
+          </Link>
+        </nav>
         <p className="articles-eyebrow">NEWS & JOURNAL</p>
         <h1>{view.kind === "article" ? view.article.title : "お知らせ・ブログ"}</h1>
         {view.kind === "list" && (
