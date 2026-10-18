@@ -169,7 +169,7 @@ describe("承認画像の指定を生成と検証に接続する", () => {
       expect(prompt.text).toContain("画像と brief を業種の一般例より優先する");
       expect(prompt.text).toContain("画像の中の文字は会社の事実の根拠にならない");
       expect(prompt.text).toContain("headingFont / bodyFont");
-      expect(prompt.version).toContain(purpose === "demo_site" ? "demo_site.v4" : "delivery_site.v6");
+      expect(prompt.version).toContain(purpose === "demo_site" ? "demo_site.v5" : "delivery_site.v7");
     },
   );
 });

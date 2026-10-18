@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CodexGenerator } from "../src/codex.ts";
 import { runGenerationJob } from "../src/jobs.ts";
 import { ConcurrencyLimiter } from "../src/limiter.ts";
-import { MockGenerator } from "../src/mock.ts";
+import { loadCodexFixture, MockGenerator } from "../src/mock.ts";
 import { NoopSandboxRunner } from "../src/sandbox/noop.ts";
 import { generationPurposes } from "../src/schemas.ts";
 import type { Generator, GeneratorResult } from "../src/types.ts";
@@ -102,6 +102,22 @@ describe("生成ジョブ（モック）", () => {
     expect(await db.select().from(generationJobs)).toHaveLength(0);
   });
 
+  it("会社情報が取り違えられたサイトを成功出力として保存しない", async () => {
+    const output = structuredClone(loadCodexFixture("demo_site")) as {
+      contact: { phone: { display: string; tel: string | null } };
+    };
+    output.contact.phone.tel = "052-987-6543";
+    const generator = new MockGenerator({ overrides: { demo_site: output } });
+    const result = await runGenerationJob(
+      { db, clock, generator, limits: { maxAttempts: 1 } },
+      { idempotencyKey: "wrong-contact", companyId: null, purpose: "demo_site", input: fixtureInput() },
+    );
+    expect(result).toMatchObject({ ok: false, error: "generation_failed" });
+    const [job] = await db.select().from(generationJobs).where(eq(generationJobs.idempotencyKey, "wrong-contact"));
+    expect(job).toMatchObject({ status: "failed", errorCode: "fact_violation", output: null, outputRef: null });
+    expect((await db.select().from(auditEvents)).some((e) => e.action === "generation.succeeded")).toBe(false);
+  });
+
   it("状態の変化を操作履歴に残す", async () => {
     await runGenerationJob(
       { db, clock, generator: new MockGenerator() },
@@ -113,6 +129,20 @@ describe("生成ジョブ（モック）", () => {
 });
 
 describe("生成ジョブ（Codex生成器＋NoopSandboxRunner）", () => {
+  it("Codex側の応答でも、別会社のサイト構成は失敗にして採用しない", async () => {
+    const output = structuredClone(loadCodexFixture("demo_site")) as { company: { name: string } };
+    output.company.name = "別会社の印刷所";
+    const runner = new NoopSandboxRunner([{ finalResponse: JSON.stringify(output) }]);
+    const result = await runGenerationJob(
+      { db, clock, generator: new CodexGenerator(runner), limits: { maxAttempts: 1 } },
+      { idempotencyKey: "wrong-company", companyId: null, purpose: "demo_site", input: fixtureInput() },
+    );
+    expect(result).toMatchObject({ ok: false, error: "generation_failed" });
+    const [job] = await db.select().from(generationJobs);
+    expect(job).toMatchObject({ status: "failed", errorCode: "fact_violation", output: null, outputRef: null });
+    expect(runner.calls).toHaveLength(1);
+  });
+
   it("実行場所が失敗し続けると再試行上限で止まり、最後のスレッドIDを記録する", async () => {
     const runner = new NoopSandboxRunner([
       { ok: false, threadId: "t-1", error: "boom" },

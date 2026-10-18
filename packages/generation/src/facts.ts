@@ -1,4 +1,5 @@
 import { type GenerationInput, type GenerationPurpose, markerRegex, NEEDS_REVIEW_MARKERS } from "./schemas.ts";
+import { checkSiteFacts } from "./site-facts.ts";
 
 /**
  * 生成物の事実検査（10.2）。
@@ -6,7 +7,14 @@ import { type GenerationInput, type GenerationPurpose, markerRegex, NEEDS_REVIEW
  * 機械的な検査であり、すべての無根拠な主張を見つけられるわけではない（公開前の人の確認は別に必要）。
  */
 export interface FactViolation {
-  kind: "marker" | "needs_review_value" | "unsupported_claim" | "unknown_fact_ref" | "unconfirmed_fact_ref";
+  kind:
+    | "marker"
+    | "needs_review_value"
+    | "unsupported_claim"
+    | "unknown_fact_ref"
+    | "unconfirmed_fact_ref"
+    | "identity_mismatch"
+    | "fact_value_mismatch";
   /** 出力JSON内の位置（例：measures.0.current） */
   path: string;
   detail: string;
@@ -147,5 +155,6 @@ export function checkFacts(purpose: GenerationPurpose, input: GenerationInput, o
       violations.push({ kind: "unconfirmed_fact_ref", path, detail: `未確認の事実「${f.label}」を参照している` });
   }
 
+  if (purpose === "demo_site" || purpose === "delivery_site") violations.push(...checkSiteFacts(input, output));
   return violations;
 }
