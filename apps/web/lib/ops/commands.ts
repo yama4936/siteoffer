@@ -52,7 +52,6 @@ import {
   proposalVersions,
   salesOffers,
   users,
-  websites,
 } from "@siteoffer/db";
 import {
   createDiscoveryJob,
@@ -64,6 +63,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { isUuid } from "./form.ts";
 import { type OpsActor, requireOps } from "./guard.ts";
 import { type SellableIssue, sellableIssues } from "./sellable.ts";
+import { reviewOfficialWebsite } from "./website-candidate.ts";
 
 export interface OpsDeps {
   db: DbOrTx;
@@ -296,42 +296,7 @@ export async function setOfficialSiteStatus(
   actor: Actor | null,
   input: { companyId: string; status: OfficialSiteStatus; websiteId?: string | null; note?: string },
 ): Promise<Result<Company, string>> {
-  const ops = authorizeCompanyManage(actor, input.companyId);
-  if (!ops.ok) return ops;
-  if (!["confirmed", "candidate", "needs_review", "not_found"].includes(input.status)) {
-    return err("invalid_input", "公式サイトの確度が不正です");
-  }
-  return inTx(db, async (tx, fail) => {
-    const [before] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
-    if (!before) return fail("not_found");
-    let primaryWebsiteId: string | null = null;
-    if (input.websiteId) {
-      const [site] = await tx
-        .select()
-        .from(websites)
-        .where(and(eq(websites.id, input.websiteId), eq(websites.companyId, before.id)));
-      if (!site) return fail("website_not_found", "この企業のサイトではありません");
-      if (input.status === "confirmed") {
-        await tx.update(websites).set({ isPrimary: false }).where(eq(websites.companyId, before.id));
-        await tx.update(websites).set({ isPrimary: true }).where(eq(websites.id, site.id));
-        primaryWebsiteId = site.id;
-      }
-    }
-    const [after] = await tx
-      .update(companies)
-      .set({ officialSiteStatus: input.status, updatedAt: clock.now() })
-      .where(eq(companies.id, before.id))
-      .returning();
-    await recordEvent(tx, clock, {
-      actor: ops.value,
-      action: "company.official_site_status",
-      targetType: "company",
-      targetId: before.id,
-      before: { officialSiteStatus: before.officialSiteStatus },
-      after: { officialSiteStatus: input.status, primaryWebsiteId, note: input.note?.trim() || null },
-    });
-    return after!;
-  });
+  return reviewOfficialWebsite({ db, clock }, actor, input);
 }
 
 /** 候補の除外・既存顧客の記録（企業共通の抑止。再収集で営業可能に戻らない） */

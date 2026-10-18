@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isTermsReadyForSales, systemClock } from "@siteoffer/core";
 import { getCompanyAuditRequest } from "@siteoffer/worker/audit-request";
 import { ArrowLeft } from "lucide-react";
@@ -18,6 +19,7 @@ import {
   stackFormClass,
   summaryClass,
 } from "@/components/ops/ui-parts-2";
+import { WebsiteCandidate, WebsiteReview } from "@/components/ops/website-candidate";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -44,13 +46,13 @@ import {
 } from "@/lib/ops/format";
 import { getCompanyDetail, listAuditEventsForOps, listProductTerms } from "@/lib/ops/queries";
 import { sellableIssues, termsIssueText } from "@/lib/ops/sellable";
+import { listWebsiteCandidateEvidence, websiteReviewFingerprint } from "@/lib/ops/website-candidate";
 import { getCurrentActor } from "@/lib/session";
 import {
   createImageAssetAction,
   excludeCandidateAction,
   makeSellableAction,
   reviewProposalAction,
-  setOfficialSiteStatusAction,
   updateCandidateAction,
   updateImageAssetPolicyAction,
   withdrawSellableAction,
@@ -95,6 +97,22 @@ export default async function CompanyPage({
   if (!journey.ok) return journey.error === "forbidden" ? <Forbidden /> : notFound();
   const d = r.value;
   const c = d.company;
+  const websiteProps = {
+    companyId: c.id,
+    fingerprint: websiteReviewFingerprint(c),
+    requestId: randomUUID(),
+    status: c.officialSiteStatus,
+    sites: d.websites
+      .filter((site) => site.kind === "current")
+      .map((site) => ({
+        id: site.id,
+        url: site.url,
+        primary: site.isPrimary,
+        fingerprint: websiteReviewFingerprint(c, site),
+      })),
+  };
+  const evidence = await listWebsiteCandidateEvidence(db, actor, c.id);
+  if (!evidence.ok) return <Forbidden />;
   const here = `/ops/companies/${c.id}`;
   const back = safeReturnTo(first(sp, "returnTo") ?? null, "/ops/discovery");
   const latest = d.proposalVersions[0] ?? null;
@@ -321,34 +339,28 @@ export default async function CompanyPage({
             {d.websites.length === 0 ? <EmptyRow colSpan={4}>サイトは見つかっていません</EmptyRow> : null}
           </TableBody>
         </Table>
-        <form action={setOfficialSiteStatusAction} className={inlineFormClass}>
-          <ReturnTo path={here} />
-          <input type="hidden" name="companyId" value={c.id} />
-          <NativeSelect
-            name="status"
-            defaultValue={c.officialSiteStatus === "needs_review" ? "confirmed" : c.officialSiteStatus}
-            aria-label="公式サイトの確度"
-            className="w-auto"
-          >
-            {Object.entries(OFFICIAL_SITE_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </NativeSelect>
-          <NativeSelect name="websiteId" defaultValue="" aria-label="主サイト" className="w-auto max-w-full">
-            <option value="">（主サイトは変えない）</option>
-            {d.websites.map((w) => (
-              <option key={w.id} value={w.id}>
-                主サイト：{w.url}
-              </option>
-            ))}
-          </NativeSelect>
-          <Input name="note" placeholder="確認メモ（任意）" aria-label="確認メモ" className="w-56" />
-          <Button type="submit" size="sm">
-            公式サイトの確度を更新
-          </Button>
-        </form>
+        <WebsiteCandidate {...websiteProps} />
+        <WebsiteReview {...websiteProps} />
+        {!!evidence.value.length && (
+          <details className="my-4 rounded-xl border p-4">
+            <summary className="cursor-pointer font-medium">運営が追加した候補の確認根拠（最近20件）</summary>
+            <ul className="mt-3 space-y-3">
+              {evidence.value.map((row) => {
+                const proof = row.data as { url?: string; sourceUrl?: string; note?: string };
+                return (
+                  <li key={row.id} className="rounded-lg bg-slate-50 p-3 text-sm">
+                    <p className="break-all">候補：{proof.url}</p>
+                    <p className="mt-1 break-all">出典：{proof.sourceUrl}</p>
+                    <p className="mt-2 break-words">{proof.note}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {fmtDate(row.at)} · {row.by ?? "運営"}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        )}
 
         <SubHeading>出典</SubHeading>
         <Table>
