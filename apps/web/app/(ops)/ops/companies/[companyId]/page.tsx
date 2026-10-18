@@ -1,10 +1,11 @@
-import { isTermsReadyForSales } from "@siteoffer/core";
+import { isTermsReadyForSales, systemClock } from "@siteoffer/core";
 import { getCompanyAuditRequest } from "@siteoffer/worker/audit-request";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AuditRequest } from "@/components/ops/audit-request";
 import { AuditView } from "@/components/ops/audit-view";
+import { CompanyJourney } from "@/components/ops/company-journey";
 import { GenerationHistory } from "@/components/ops/generation-history";
 import { ImageAssetUpload } from "@/components/ops/image-asset-upload";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
@@ -28,6 +29,7 @@ import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { sellableIssueText } from "@/lib/ops/commands";
+import { getCompanyJourney } from "@/lib/ops/company-journey";
 import { isUuid, safeReturnTo } from "@/lib/ops/form";
 import {
   ASSIGNMENT_STATUS_LABEL,
@@ -89,6 +91,8 @@ export default async function CompanyPage({
 
   const auditRequest = await getCompanyAuditRequest(db, actor, companyId);
   if (!auditRequest.ok) return <Forbidden />;
+  const journey = await getCompanyJourney(db, systemClock, actor, companyId);
+  if (!journey.ok) return journey.error === "forbidden" ? <Forbidden /> : notFound();
   const d = r.value;
   const c = d.company;
   const here = `/ops/companies/${c.id}`;
@@ -110,6 +114,7 @@ export default async function CompanyPage({
         suppression={c.suppression}
       />
       <Flash searchParams={sp} />
+      <CompanyJourney data={journey.value} />
 
       <div className="mb-8 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -138,7 +143,9 @@ export default async function CompanyPage({
               </dd>
               <dt>業種</dt>
               <dd>{c.industry ?? "不明"}</dd>
-              <dt>営業抑止</dt>
+              <dt id="company-policy" className="scroll-mt-24">
+                営業抑止
+              </dt>
               <dd>
                 {label(SUPPRESSION_LABEL, c.suppression)}
                 {c.suppressionReason ? `（${c.suppressionReason}）` : ""}
@@ -220,7 +227,7 @@ export default async function CompanyPage({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card id="company-sales">
           <CardHeader>
             <CardTitle>
               <h2>営業可能化</h2>
@@ -292,7 +299,7 @@ export default async function CompanyPage({
         </Card>
       </div>
 
-      <Section title="サイトと公式サイトの確認">
+      <Section title="サイトと公式サイトの確認" id="company-site">
         <Table>
           <TableHeader>
             <TableRow>
@@ -511,6 +518,7 @@ export default async function CompanyPage({
 
       <Section
         title="診断結果"
+        id="company-audit"
         actions={
           <Link className="text-sm text-primary underline" href={`/ops/processing?company=${companyId}#audit-recovery`}>
             処理状況・再開を確認
