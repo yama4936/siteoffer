@@ -16,6 +16,8 @@ export interface DiscoveryProviders {
   companies: DiscoveryProvider;
   /** 公式サイト候補の取得元（検索系API）。なければ公式サイトは not_found のまま */
   search?: SearchProvider;
+  searchLimit?: number;
+  signal?: AbortSignal;
   /** 第三者サイトとして扱う追加ドメイン */
   thirdPartyDomains?: readonly string[];
 }
@@ -83,6 +85,44 @@ export async function runDiscovery(
   });
 
   const failures: DiscoveryFailure[] = [];
+  let searched = 0;
+  let blockedSearch: Awaited<ReturnType<SearchProvider["findOfficialSite"]>> | undefined;
+  if (
+    providers.searchLimit !== undefined &&
+    (!Number.isSafeInteger(providers.searchLimit) || providers.searchLimit < 1 || providers.searchLimit > 1000)
+  )
+    return finish(
+      db,
+      clock,
+      jobId,
+      "failed",
+      { found: 0, created: 0, updated: 0, skipped: 0, failed: 0 },
+      null,
+      failures,
+      "検索回数の上限が不正です",
+    );
+  const limited: DiscoveryProviders = {
+    ...providers,
+    ...(providers.search
+      ? {
+          search: {
+            name: providers.search.name,
+            findOfficialSite: async (query, context) => {
+              if (providers.signal?.aborted)
+                return Promise.resolve(err("search_failed" as const, "検索が中断されました"));
+              if (blockedSearch) return blockedSearch;
+              if (searched >= (providers.searchLimit ?? 1000))
+                return Promise.resolve(err("search_rate_limited" as const, "この試行の検索回数の上限に達しました"));
+              searched++;
+              const result = await providers.search!.findOfficialSite(query, { ...context, signal: providers.signal });
+              if (!result.ok && ["search_unavailable", "search_rate_limited"].includes(result.error))
+                blockedSearch = result;
+              return result;
+            },
+          },
+        }
+      : {}),
+  };
   const counts = { found: 0, created: 0, updated: 0, skipped: 0, failed: 0 };
 
   const parsed = discoveryCriteriaSchema.safeParse(job.criteria);
@@ -93,7 +133,7 @@ export async function runDiscovery(
 
   let provided: Awaited<ReturnType<DiscoveryProvider["discover"]>>;
   try {
-    provided = await providers.companies.discover(criteria, { clock });
+    provided = await providers.companies.discover(criteria, { clock, signal: providers.signal });
   } catch (e) {
     const reason = `取得元で例外：${(e as Error).message.slice(0, 500)}`;
     failures.push({ externalId: null, stage: "provider", reason });
@@ -112,6 +152,8 @@ export async function runDiscovery(
   counts.found = candidates.length;
 
   for (const cand of candidates) {
+    if (providers.signal?.aborted)
+      return finish(db, clock, jobId, "failed", counts, criteria.limit, failures, "収集が中断されました");
     const area = checkArea(criteria, cand);
     if (area) {
       counts.skipped++;
@@ -119,7 +161,7 @@ export async function runDiscovery(
       continue;
     }
     try {
-      const outcome = await processCandidate(db, clock, jobId, cand, providers, failures);
+      const outcome = await processCandidate(db, clock, jobId, cand, limited, failures);
       counts[outcome]++;
     } catch (e) {
       counts.failed++;
@@ -127,6 +169,8 @@ export async function runDiscovery(
     }
   }
 
+  if (providers.signal?.aborted)
+    return finish(db, clock, jobId, "failed", counts, criteria.limit, failures, "収集が中断されました");
   const status = counts.found > 0 && counts.failed === counts.found ? "failed" : "succeeded";
   return finish(
     db,

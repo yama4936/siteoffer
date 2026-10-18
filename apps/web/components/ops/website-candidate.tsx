@@ -7,6 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/select";
 import { OFFICIAL_SITE_LABEL } from "@/lib/ops/format";
+import type { listSiteSearchCandidates } from "@/lib/ops/website-candidate";
+
+type Candidates = Extract<Awaited<ReturnType<typeof listSiteSearchCandidates>>, { ok: true }>["value"];
 
 type Props = {
   companyId: string;
@@ -14,6 +17,7 @@ type Props = {
   requestId: string;
   status: string;
   sites: { id: string; url: string; primary: boolean; fingerprint: string }[];
+  searchCandidates?: Candidates;
 };
 const initial = { nonce: "", ok: false, message: "" };
 export function WebsiteCandidate(props: Props) {
@@ -40,10 +44,64 @@ export function WebsiteCandidate(props: Props) {
   }, [state.nonce, state.ok, router]);
   return (
     <details className="my-4 rounded-xl border bg-white p-4">
-      <summary className="cursor-pointer font-medium">公式サイトの候補URLと確認根拠を追加</summary>
+      <summary className="cursor-pointer font-medium">
+        公式サイトの候補URLと確認根拠を追加
+        {props.searchCandidates?.length ? `（検索候補${props.searchCandidates.length}件）` : ""}
+      </summary>
       <p className="mt-3 text-sm text-muted-foreground">
         自動収集でURLが見つからない場合や候補を補足する運営用の機能です。候補の保存では公式サイトの確定や診断は行いません。確認済みの主サイトは置き換えません。
       </p>
+      {!!props.searchCandidates?.length && (
+        <section className="mt-4" aria-label="自動収集したサイト候補">
+          <h3 className="font-medium">検索で見つかった候補（最近20件から表示）</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            検索結果だけでは公式サイトと判断できません。候補を開いて会社名・所在地などを確認し、その根拠を下の欄に記録してください。
+          </p>
+          <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+            {props.searchCandidates.map((candidate) => (
+              <li key={candidate.id} className="min-w-0 rounded-lg border p-3 text-sm">
+                <p className="font-medium break-words">{candidate.title || "サイト候補"}</p>
+                <a
+                  href={candidate.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="mt-1 block break-all text-primary underline"
+                >
+                  {candidate.url}（別タブ）
+                </a>
+                <p className="mt-2 break-words text-muted-foreground">
+                  {candidate.reason || "企業との一致は未確認です"}
+                </p>
+                <p className="mt-2 break-all text-xs text-muted-foreground">
+                  {candidate.provider} · {candidate.fetchedAt}
+                </p>
+                {candidate.sourceUrl && (
+                  <p className="mt-1 break-all text-xs text-muted-foreground">検索の出典：{candidate.sourceUrl}</p>
+                )}
+                {candidate.selectable ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-3"
+                    disabled={!ready || pending}
+                    onClick={() => {
+                      setValues({ url: candidate.url, sourceUrl: candidate.sourceUrl!, note: "" });
+                      setChecked(false);
+                    }}
+                  >
+                    この候補を確認欄に入力
+                  </Button>
+                ) : (
+                  <p className="mt-3 text-amber-800">
+                    第三者サイト・別企業・出典不明の可能性があるため、確認欄への自動入力はできません。
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <form action={action} className="mt-4 space-y-3">
         <noscript>
           <p>保存操作にはJavaScriptが必要です。登録済みのサイトと出典はこのまま確認できます。</p>

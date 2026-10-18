@@ -11,6 +11,7 @@ export function DiscoveryStatus({ capabilities }: { capabilities: Awaited<Return
               {p.ready ? "受付可能" : "利用不可"}
             </strong>
             <p className="text-muted-foreground">{p.reason}</p>
+            {p.ready && <p className="mt-1 text-muted-foreground">{p.search}</p>}
           </li>
         ))}
       </ul>
@@ -26,7 +27,12 @@ export function DiscoveryStatus({ capabilities }: { capabilities: Awaited<Return
             を設定し、pnpm dev:worker でワーカーを起動します。画面が「受付可能」になってから登録・再試行してください。
           </p>
           <p>
-            法人名を指定しない場合は直近30日間に更新された法人が対象です。「名古屋市の全法人から50件」を保証する収集ではありません。業種・電話番号・公式サイトURLは国税庁APIからは取得できません。実収集モードでは法人情報の収集までを行います。公式サイトの確認・実診断・AI制作には別途設定が必要です。
+            法人名を指定しない場合は直近30日間に更新された法人が対象です。「名古屋市の全法人から50件」を保証する収集ではありません。業種・電話番号・公式サイトURLは国税庁APIからは取得できません。公式サイトの確認・実診断・AI制作には別途設定が必要です。
+          </p>
+          <p>
+            検索APIは任意です。Tavilyを利用する場合は、契約・利用条件を確認してから SITEOFFER_SEARCH_PROVIDER=tavily と
+            TAVILY_API_KEY を設定します。SITEOFFER_SEARCH_MAX_PER_RUN
+            は1試行の上限（既定50、1〜1000）で、日次・月次の予算上限ではありません。通常の架空デモでは実検索を無効にします。
           </p>
           <a
             className="text-primary underline"

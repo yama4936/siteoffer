@@ -51,6 +51,8 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
         });
       }
       const r = await runDiscovery(db, clock, job.id, {
+        signal: ctx.signal,
+        searchLimit: deps.discovery.searchLimit,
         companies: provider,
         ...(deps.discovery.search ? { search: deps.discovery.search } : {}),
         ...(deps.discovery.thirdPartyDomains ? { thirdPartyDomains: deps.discovery.thirdPartyDomains } : {}),

@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { fixedClock } from "@siteoffer/core";
-import { auditEvents, companies, type Db, users, websites } from "@siteoffer/db";
+import { auditEvents, companies, type Db, discoveryJobs, discoverySources, users, websites } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { getCompanyAuditRequest, requestAuditByOps } from "@siteoffer/worker/audit-request";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { seedUser } from "./test-seed";
 import {
+  listSiteSearchCandidates,
   listWebsiteCandidateEvidence,
   reviewOfficialWebsite,
   safeWebsiteCandidateUrl,
@@ -41,6 +42,53 @@ function value<T>(r: { ok: true; value: T } | { ok: false; error: string }): T {
   if (!r.ok) throw Error(r.error);
   return r.value;
 }
+it("search candidates are scoped, bounded metadata and do not expose private URLs or full result bodies", async () => {
+  const s = await setup(),
+    foreign = await setup();
+  const [job] = await db.insert(discoveryJobs).values({ provider: "fixture", criteria: {} }).returning();
+  const add = async (companyId: string, url: string, index: number, extra: object = {}) =>
+    db.insert(discoverySources).values({
+      companyId,
+      jobId: job!.id,
+      provider: "tavily",
+      externalId: `${companyId}-${index}`,
+      role: "site",
+      fetchedAt: new Date(clock.now().getTime() + index),
+      sourceUrl: "https://api.tavily.com/search",
+      payload: {
+        url,
+        title: "候補".repeat(500),
+        verdict: "unrelated",
+        reason: "社名・所在地は未確認",
+        content: "BODY_MUST_NOT_LEAK",
+        ...extra,
+      },
+    });
+  for (let i = 0; i < 24; i++) await add(s.company.id, `https://company${i}.example.test/`, i);
+  await add(foreign.company.id, "https://foreign.example.test/", 100);
+  let rows = value(await listSiteSearchCandidates(db, s.actor, s.company.id));
+  expect(rows).toHaveLength(20);
+  expect(rows[0]?.url).toBe("https://company23.example.test/");
+  expect(rows.every((row) => row.title!.length === 300 && row.selectable)).toBe(true);
+  expect(JSON.stringify(rows)).not.toMatch(/BODY_MUST_NOT_LEAK|foreign\.example/);
+  await add(s.company.id, "http://127.0.0.1/", 25);
+  await add(s.company.id, "https://facebook.com/company", 26);
+  await add(s.company.id, "https://wrong.example.test/", 27, { verdict: "other_company" });
+  rows = value(await listSiteSearchCandidates(db, s.actor, s.company.id));
+  expect(rows.some((row) => row.url.includes("127.0.0.1"))).toBe(false);
+  expect(rows.filter((row) => !row.selectable)).toHaveLength(2);
+  expect(await db.select().from(websites)).toHaveLength(0);
+});
+it("search provenance requires a current active ops account", async () => {
+  const s = await setup(),
+    sales = await seedUser(db, "sales");
+  expect(await listSiteSearchCandidates(db, sales.actor, s.company.id)).toMatchObject({
+    ok: false,
+    error: "forbidden",
+  });
+  await db.update(users).set({ status: "suspended" }).where(eq(users.id, s.actor.userId));
+  expect(await listSiteSearchCandidates(db, s.actor, s.company.id)).toMatchObject({ ok: false, error: "forbidden" });
+});
 it("rejects non-public, credential-bearing, malformed and secret URLs without performing a fetch", () => {
   expect(safeWebsiteCandidateUrl("https://www.example.test/a?utm_source=x")).toMatchObject({
     domain: "example.test",

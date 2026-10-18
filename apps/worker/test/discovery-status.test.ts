@@ -47,6 +47,35 @@ it("heartbeat advertises real capabilities and is removed on shutdown", async ()
   }
   expect(await e.db.select().from(workerRuntimes)).toHaveLength(0);
 });
+it("search capabilities distinguish configured, disabled, legacy and inconsistent workers without a connectivity claim", async () => {
+  e.deps.discovery.search = { name: "tavily", findOfficialSite: async () => ({ ok: true, value: [] }) };
+  e.deps.discovery.searchLimit = 2;
+  const stop = await startWorkerHeartbeat(e.deps, "standard");
+  try {
+    let statuses = await discoveryAvailability(e.db, e.clock);
+    expect(statuses[0]?.search).toContain("最大2回");
+    expect(statuses[0]?.search).toContain("接続・残高は未確認");
+    const [row] = await e.db.select().from(workerRuntimes);
+    const legacy = { ...row!.capabilities! };
+    delete legacy.siteSearch;
+    await e.db.update(workerRuntimes).set({ capabilities: legacy }).where(eq(workerRuntimes.id, row!.id));
+    statuses = await discoveryAvailability(e.db, e.clock);
+    expect(statuses[0]?.search).toContain("確認できません");
+    await e.db
+      .update(workerRuntimes)
+      .set({ capabilities: { ...legacy, siteSearch: { provider: "none", maxPerRun: 2 } } })
+      .where(eq(workerRuntimes.id, row!.id));
+    expect((await discoveryAvailability(e.db, e.clock))[0]?.search).toContain("サイト検索は無効");
+    await e.db.insert(workerRuntimes).values({
+      ...row!,
+      id: crypto.randomUUID(),
+      capabilities: { ...legacy, siteSearch: { provider: "tavily", maxPerRun: 2 } },
+    });
+    expect((await discoveryAvailability(e.db, e.clock))[0]?.search).toContain("設定が異なります");
+  } finally {
+    await stop();
+  }
+});
 it("real collection has no fake search and collection-only mode queues no audit", async () => {
   const c = resolveWorkerConfig({
     SITEOFFER_DISCOVERY_PROVIDERS: "nta",

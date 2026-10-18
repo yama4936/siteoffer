@@ -46,7 +46,11 @@ import {
 } from "@/lib/ops/format";
 import { getCompanyDetail, listAuditEventsForOps, listProductTerms } from "@/lib/ops/queries";
 import { sellableIssues, termsIssueText } from "@/lib/ops/sellable";
-import { listWebsiteCandidateEvidence, websiteReviewFingerprint } from "@/lib/ops/website-candidate";
+import {
+  listSiteSearchCandidates,
+  listWebsiteCandidateEvidence,
+  websiteReviewFingerprint,
+} from "@/lib/ops/website-candidate";
 import { getCurrentActor } from "@/lib/session";
 import {
   createImageAssetAction,
@@ -113,6 +117,8 @@ export default async function CompanyPage({
   };
   const evidence = await listWebsiteCandidateEvidence(db, actor, c.id);
   if (!evidence.ok) return <Forbidden />;
+  const searchCandidates = await listSiteSearchCandidates(db, actor, c.id);
+  if (!searchCandidates.ok) return <Forbidden />;
   const here = `/ops/companies/${c.id}`;
   const back = safeReturnTo(first(sp, "returnTo") ?? null, "/ops/discovery");
   const latest = d.proposalVersions[0] ?? null;
@@ -339,7 +345,7 @@ export default async function CompanyPage({
             {d.websites.length === 0 ? <EmptyRow colSpan={4}>サイトは見つかっていません</EmptyRow> : null}
           </TableBody>
         </Table>
-        <WebsiteCandidate {...websiteProps} />
+        <WebsiteCandidate {...websiteProps} searchCandidates={searchCandidates.value} />
         <WebsiteReview {...websiteProps} />
         {!!evidence.value.length && (
           <details className="my-4 rounded-xl border p-4">

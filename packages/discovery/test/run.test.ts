@@ -1,10 +1,11 @@
-import { DAY, fixedClock } from "@siteoffer/core";
+import { DAY, err, fixedClock } from "@siteoffer/core";
 import { auditEvents, companies, type Db, discoveryJobs, discoverySources, websites } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureProvider } from "../src/providers/fixture.ts";
 import { MockSearchProvider } from "../src/providers/search.ts";
+import { TavilySearchProvider } from "../src/providers/tavily.ts";
 import type { DiscoveryProvider } from "../src/providers/types.ts";
 import { createDiscoveryJob, type DiscoveryProviders, runDiscovery } from "../src/run.ts";
 
@@ -32,6 +33,81 @@ async function run(criteria: unknown, p: DiscoveryProviders = providers()) {
 }
 
 const byName = async (name: string) => db.select().from(companies).where(eq(companies.name, name));
+
+it("limits paid search attempts while retaining companies and per-candidate reasons", async () => {
+  const search = new MockSearchProvider();
+  const result = await run({ prefecture: "愛知県", city: "名古屋市" }, providers({ search, searchLimit: 2 }));
+  expect(search.calls).toHaveLength(2);
+  expect(await db.select().from(companies)).toHaveLength(6);
+  expect(result.failures.filter((row) => row.stage === "search")).toHaveLength(4);
+  expect(result.failures.some((row) => row.reason.includes("検索回数の上限"))).toBe(true);
+});
+it("auth/quota errors stop further provider requests within an attempt", async () => {
+  let calls = 0;
+  const result = await run(
+    { prefecture: "愛知県", city: "名古屋市" },
+    providers({
+      search: {
+        name: "test-search",
+        findOfficialSite: async () => {
+          calls++;
+          return err("search_rate_limited", "利用上限");
+        },
+      },
+    }),
+  );
+  expect(calls).toBe(1);
+  expect(result.failures.filter((row) => row.stage === "search")).toHaveLength(6);
+});
+it("real-provider-shaped results remain unconfirmed, retain review provenance and cannot queue diagnosis automatically", async () => {
+  let calls = 0;
+  const search = new TavilySearchProvider({
+    apiKey: "test-only-private-key",
+    fetch: async () => {
+      calls++;
+      return new Response(
+        JSON.stringify({
+          results: [{ url: "https://unverified.example.test/", title: "架空候補", content: "企業の所在地と同じ" }],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  await run({ prefecture: "愛知県", city: "名古屋市" }, providers({ search, searchLimit: 1 }));
+  expect(calls).toBe(1);
+  expect(await db.select().from(websites)).toHaveLength(0);
+  expect((await db.select().from(companies)).every((row) => row.officialSiteStatus === "needs_review")).toBe(true);
+  const sources = await db.select().from(discoverySources);
+  expect(sources.filter((row) => row.role === "site")).toHaveLength(1);
+  expect(sources.find((row) => row.role === "site")?.payload).toMatchObject({
+    url: "https://unverified.example.test/",
+    verdict: "unrelated",
+    evidence: { companyName: null, address: null, corporateNumber: null },
+  });
+  expect(JSON.stringify(sources)).not.toContain("企業の所在地と同じ");
+});
+it("a cancellation during search stops the remaining companies and does not report success", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const result = await run(
+    { prefecture: "愛知県", city: "名古屋市" },
+    providers({
+      signal: controller.signal,
+      search: {
+        name: "cancel-test",
+        findOfficialSite: async (_, context) => {
+          expect(context.signal).toBe(controller.signal);
+          calls++;
+          controller.abort();
+          return err("search_failed", "中断");
+        },
+      },
+    }),
+  );
+  expect(result.status).toBe("failed");
+  expect(calls).toBe(1);
+  expect(await db.select().from(companies)).toHaveLength(1);
+});
 
 describe("runDiscovery", () => {
   it("名古屋市の候補を出典・所在地・公式サイト確度付きで保存し、ジョブの件数を記録する（AC-01・AC-02）", async () => {

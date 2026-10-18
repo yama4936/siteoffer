@@ -37,6 +37,7 @@ export interface WorkerDeps {
     /** 有効な企業候補の取得元（名前 → 実装）。収集ジョブの provider で選ぶ */
     providers: Record<string, DiscoveryProvider>;
     search?: SearchProvider;
+    searchLimit?: number;
     thirdPartyDomains?: readonly string[];
   };
   /** 診断（collect.py → 採点 → score.py → decide.py） */

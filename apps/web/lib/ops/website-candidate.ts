@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { type Actor, type Clock, err, ok, recordEvent } from "@siteoffer/core";
-import { auditEvents, companies, type DbOrTx, users, websites } from "@siteoffer/db";
-import { normalizeUrl } from "@siteoffer/discovery";
+import { auditEvents, companies, type DbOrTx, discoverySources, users, websites } from "@siteoffer/db";
+import { isThirdPartyDomain, normalizeUrl } from "@siteoffer/discovery";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { detectSecretLike } from "../../../../packages/core/src/domain-preference/secrets.ts";
 import { currentAuditSite } from "../../../worker/src/audit-request.ts";
 import { checkPublicHttpUrl } from "../../../worker/src/url.ts";
-import { isUuid } from "./form";
+import { isUuid } from "./form.ts";
 
 type Company = typeof companies.$inferSelect;
 type Site = Pick<typeof websites.$inferSelect, "id" | "url" | "kind" | "isPrimary">;
@@ -296,5 +296,49 @@ export async function listWebsiteCandidateEvidence(db: DbOrTx, actor: Actor | nu
       )
       .orderBy(desc(auditEvents.createdAt), desc(auditEvents.id))
       .limit(20);
+  });
+}
+
+/** Bounded public metadata only; search snippets and page bodies are never sent to the client. */
+export async function listSiteSearchCandidates(db: DbOrTx, actor: Actor | null, companyId: string) {
+  if (actor?.kind !== "ops" || !isUuid(actor.userId) || !isUuid(companyId)) return err("forbidden");
+  return run(db, async (tx) => {
+    await activeOperator(tx, actor);
+    const rows = await tx
+      .select({
+        id: discoverySources.id,
+        provider: sql<string>`left(${discoverySources.provider}, 100)`,
+        fetchedAt: discoverySources.fetchedAt,
+        sourceUrl: sql<
+          string | null
+        >`case when length(${discoverySources.sourceUrl}) <= 2048 then ${discoverySources.sourceUrl} else null end`,
+        url: sql<
+          string | null
+        >`case when length(${discoverySources.payload}->>'url') <= 2048 then ${discoverySources.payload}->>'url' else null end`,
+        title: sql<string | null>`left(${discoverySources.payload}->>'title', 300)`,
+        verdict: sql<string | null>`left(${discoverySources.payload}->>'verdict', 40)`,
+        reason: sql<string | null>`left(${discoverySources.payload}->>'reason', 500)`,
+      })
+      .from(discoverySources)
+      .where(and(eq(discoverySources.companyId, companyId), eq(discoverySources.role, "site")))
+      .orderBy(desc(discoverySources.fetchedAt), desc(discoverySources.id))
+      .limit(20);
+    return rows.flatMap((row) => {
+      const url = safeWebsiteCandidateUrl(row.url);
+      if (!url) return [];
+      const source = safeWebsiteCandidateUrl(row.sourceUrl);
+      return [
+        {
+          ...row,
+          url: url.url,
+          sourceUrl: source?.url ?? null,
+          fetchedAt: row.fetchedAt.toISOString(),
+          selectable:
+            !!source &&
+            !isThirdPartyDomain(url.domain) &&
+            ["unrelated", "probable", "verified"].includes(row.verdict ?? ""),
+        },
+      ];
+    });
   });
 }

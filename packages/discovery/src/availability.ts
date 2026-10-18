@@ -32,6 +32,28 @@ export async function discoveryAvailability(db: DbOrTx, clock: Clock) {
       ready,
       reason,
       mode: demo ? "demo" : "standard",
+      search: searchDescription(live.map((worker) => worker.capabilities?.siteSearch)),
     };
   });
+}
+
+function searchDescription(searches: ({ provider: string; maxPerRun: number } | undefined)[]) {
+  if (
+    !searches.length ||
+    searches.some(
+      (search) =>
+        !search ||
+        !["fixture", "none", "tavily"].includes(search.provider) ||
+        !Number.isSafeInteger(search.maxPerRun) ||
+        search.maxPerRun < 1 ||
+        search.maxPerRun > 1000,
+    )
+  )
+    return "サイト検索の設定を確認できません。ワーカーの通常の再起動後に再確認してください。";
+  const first = searches[0]!;
+  if (searches.some((search) => search!.provider !== first.provider || search!.maxPerRun !== first.maxPerRun))
+    return "ワーカー間でサイト検索の設定が異なります。全ワーカーの設定を揃えてください。";
+  if (first.provider === "fixture") return "サイト検索は架空の結果による動作確認です。実サイトの検索は行いません。";
+  if (first.provider === "none") return "サイト検索は無効です。法人情報の収集までを行います。";
+  return `Tavilyによるサイト候補検索を設定済み（1試行あたり最大${first.maxPerRun}回）。接続・残高は未確認です。検索結果は公式サイトと断定せず、運営が確認します。再試行では検索料金が再度発生する場合があります。`;
 }

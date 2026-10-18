@@ -19,6 +19,7 @@ import { assertPlainDirectory } from "./backup/bundle.ts";
 import { alive, readOwner } from "./backup/owner.ts";
 import { DEMO_DATABASE_URL, DEMO_PATHS, DEMO_PORTS, REPO_ROOT } from "./paths.ts";
 import { pnpmCommand } from "./pnpm-command.ts";
+import { demoSearchEnv } from "./search-env.ts";
 import { demoShareKey } from "./share-key.ts";
 
 const realDiscovery = process.argv.includes("--real-discovery");
@@ -43,7 +44,7 @@ function log(msg: string) {
 
 /** 実APIのキー等を渡さない。デモで使う値だけを上書きする */
 function baseEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...demoSearchEnv(process.env, realDiscovery) };
   for (const k of [
     "SITEOFFER_SHARE_TOKEN_KEY",
     "NTA_APPLICATION_ID",

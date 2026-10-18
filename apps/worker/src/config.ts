@@ -16,6 +16,7 @@ import {
   FixtureProvider,
   MockSearchProvider,
   NtaCorporateNumberProvider,
+  TavilySearchProvider,
 } from "@siteoffer/discovery";
 import {
   CodexGenerator,
@@ -44,6 +45,8 @@ export interface WorkerConfig {
   discoveryOnly: boolean;
   generator: GeneratorConfig;
   discoveryProviders: DiscoveryProviderName[];
+  siteSearch: "fixture" | "none" | "tavily";
+  searchLimit: number;
   auditCollector: { kind: "fixture"; collectedPath: string } | { kind: "python" };
   auditOptions: AuditOptions;
   demoArtifactRoot: string;
@@ -122,6 +125,16 @@ export function resolveWorkerConfig(
   }
 
   const collectorKind = v("SITEOFFER_AUDIT_COLLECTOR") ?? "fixture";
+  const siteSearch =
+    v("SITEOFFER_SEARCH_PROVIDER") ?? (discoveryProviders.every((name) => name === "fixture") ? "fixture" : "none");
+  const searchLimit = Number(v("SITEOFFER_SEARCH_MAX_PER_RUN") ?? 50);
+  if (!["fixture", "none", "tavily"].includes(siteSearch))
+    problems.push("SITEOFFER_SEARCH_PROVIDER は fixture・none・tavily のいずれか");
+  if (siteSearch === "fixture" && discoveryProviders.some((name) => name !== "fixture"))
+    problems.push("実データ収集に模擬の検索結果は使えません");
+  if (siteSearch === "tavily" && !v("TAVILY_API_KEY")) problems.push("実検索には TAVILY_API_KEY が必要です");
+  if (!Number.isSafeInteger(searchLimit) || searchLimit < 1 || searchLimit > 1000)
+    problems.push("SITEOFFER_SEARCH_MAX_PER_RUN は1〜1000の整数");
   let auditCollector: WorkerConfig["auditCollector"];
   if (collectorKind === "python") auditCollector = { kind: "python" };
   else {
@@ -165,6 +178,8 @@ export function resolveWorkerConfig(
     discoveryOnly: v("SITEOFFER_DISCOVERY_ONLY") === "true",
     generator,
     discoveryProviders,
+    siteSearch: siteSearch as WorkerConfig["siteSearch"],
+    searchLimit,
     auditCollector,
     auditOptions: defaultAuditOptions(env, {
       paths: { repoRoot: REPO_ROOT, ...(evalConfigPath ? { configPath: evalConfigPath } : {}) },
@@ -216,8 +231,12 @@ export function buildWorkerDeps(
     discoveryOnly: config.discoveryOnly,
     discovery: {
       providers,
-      // 検索系APIの製品は未決（24.6）。実装はモックだけ
-      ...(config.discoveryProviders.every((name) => name === "fixture") ? { search: new MockSearchProvider() } : {}),
+      ...(config.siteSearch === "fixture"
+        ? { search: new MockSearchProvider() }
+        : config.siteSearch === "tavily"
+          ? { search: new TavilySearchProvider() }
+          : {}),
+      searchLimit: config.searchLimit,
     },
     audit: {
       collector,
@@ -243,6 +262,8 @@ export function describeConfig(config: WorkerConfig): Record<string, unknown> {
     requestedModel: config.generator.kind === "codex" ? config.generator.model : null,
     discoveryProviders: config.discoveryProviders,
     discoveryOnly: config.discoveryOnly,
+    siteSearch: config.siteSearch,
+    searchLimit: config.searchLimit,
     auditCollector: config.auditCollector.kind,
     generationInput: config.generationInput,
     evaluationConfig: path.relative(REPO_ROOT, config.auditOptions.paths.configPath),

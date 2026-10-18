@@ -19,6 +19,16 @@ export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intak
     imageConfigured: !deps.discoveryOnly && !!process.env.OPENAI_API_KEY?.trim(),
     generator: kind === "mock" || kind === "codex" ? kind : "unknown",
     intakeIntervalMs,
+    siteSearch: {
+      provider: !deps.discovery.search
+        ? "none"
+        : deps.discovery.search.name === "tavily"
+          ? "tavily"
+          : deps.discovery.search.name === "search-mock"
+            ? "fixture"
+            : "unknown",
+      maxPerRun: deps.discovery.searchLimit ?? 1000,
+    },
   };
   const initial: WorkerLaneProgress = {
     phase: "starting",
