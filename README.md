@@ -73,6 +73,8 @@ pnpm check           # 型検査・Lint・自動テスト（外部APIはモッ�
 ## 現在のCodexアカウントを生成に使う
 
 現在のCodex desktop/CLIのChatGPTログインを共有します。APIキーは不要です。
+`pnpm demo`／`pnpm demo:resume` の一括起動は、環境変数を設定しただけでは実生成へ変わりません。既存のローカルDBで実生成を明示して選ぶ場合は、`pnpm demo:doctor` で起動条件を確認し、通常停止後に同じポート設定で `pnpm demo:codex` を実行します。[一括起動の切替手順](demo/README.md#実生成を明示して選ぶ)を参照してください。事前確認は認証ファイルの内容を読まず、モデルを呼ばず、起動・設定変更を行いません。
+
 通常のComposeワーカーはモックです。実Codexへ切り替える場合は次の順で実行します。
 
 ```sh

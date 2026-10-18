@@ -144,7 +144,8 @@ export function resolveWorkerConfig(
     );
 
   const discoveryProviders: DiscoveryProviderName[] = [];
-  for (const name of (v("SITEOFFER_DISCOVERY_PROVIDERS") ?? "fixture").split(",").map((s) => s.trim())) {
+  const providerSetting = v("SITEOFFER_DISCOVERY_PROVIDERS") ?? "fixture";
+  for (const name of (providerSetting === "none" ? [] : providerSetting.split(",")).map((s) => s.trim())) {
     if (name === "fixture") discoveryProviders.push("fixture");
     else if (name === "nta") {
       if (!v("NTA_APPLICATION_ID")) problems.push("取得元 nta には環境変数 NTA_APPLICATION_ID が必要");
@@ -154,7 +155,8 @@ export function resolveWorkerConfig(
 
   const collectorKind = v("SITEOFFER_AUDIT_COLLECTOR") ?? "fixture";
   const siteSearch =
-    v("SITEOFFER_SEARCH_PROVIDER") ?? (discoveryProviders.every((name) => name === "fixture") ? "fixture" : "none");
+    v("SITEOFFER_SEARCH_PROVIDER") ??
+    (providerSetting !== "none" && discoveryProviders.every((name) => name === "fixture") ? "fixture" : "none");
   const searchLimit = Number(v("SITEOFFER_SEARCH_MAX_PER_RUN") ?? 50);
   if (!["fixture", "none", "tavily"].includes(siteSearch))
     problems.push("SITEOFFER_SEARCH_PROVIDER は fixture・none・tavily のいずれか");
