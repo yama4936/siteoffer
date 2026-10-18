@@ -144,6 +144,8 @@ export async function retryDesignBuildAction(fd: FormData) {
   return run(fd, async (actor) => {
     const id = value(fd, "designId");
     if (!isUuid(id)) throw new DesignError("デザインIDが不正です");
-    return (await retryDesignBuild(getDb(), systemClock, actor, id)).id;
+    const versionId = value(fd, "proposalVersionId");
+    if (!isUuid(versionId)) throw new DesignError("再制作する元の提案版を確認してください");
+    return (await retryDesignBuild(getDb(), systemClock, actor, id, versionId)).id;
   });
 }

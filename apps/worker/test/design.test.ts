@@ -6,6 +6,7 @@ import {
   createDesign,
   DEFAULT_DESIGN_BRIEF,
   loadCompanyProfile,
+  proposalRevisionFingerprint,
   requestDesignBuild,
   retryDesignBuild,
   reviewDesign,
@@ -31,6 +32,7 @@ import { intakeDesignBuilds, processDesignJobs } from "../src/design.ts";
 import { executeStep } from "../src/execute.ts";
 import { defaultGenerationInputBuilder } from "../src/input.ts";
 import { ensureProposalVersion, proposalStep } from "../src/pipeline/proposal.ts";
+import { withProposalRevision } from "../src/proposal-revision.ts";
 import { stepKeys } from "../src/queues.ts";
 import { deferred, setupEnv, type TestEnv } from "./helpers.ts";
 
@@ -79,6 +81,118 @@ async function seed() {
   );
   return { company: company!, audit: audit!, actor, image };
 }
+async function rejectedProposal() {
+  const s = await seed();
+  const d = await createDesign(env.db, env.clock, s.actor, {
+    companyId: s.company.id,
+    auditId: s.audit.id,
+    requestKey: "revision-source",
+    brief: DEFAULT_DESIGN_BRIEF,
+    source: "import",
+  });
+  await attachDesignImage(env.db, env.clock, s.actor, d.id, s.image);
+  await reviewDesign(env.db, env.clock, s.actor, {
+    id: d.id,
+    approve: true,
+    note: "画像確認済み",
+    factsChecked: true,
+    rightsChecked: true,
+    layoutChecked: true,
+  });
+  await requestDesignBuild(env.db, env.clock, s.actor, d.id);
+  await intakeDesignBuilds(env.deps);
+  expect((await env.queue.drain(env.runtime)).at(-1)?.outcome.status).toBe("succeeded");
+  const [source] = await env.db
+    .update(proposalVersions)
+    .set({
+      status: "rejected",
+      reviewNote: "見出しを短くし、スマホでは写真を先に。",
+      reviewedBy: s.actor.userId,
+      reviewedAt: env.clock.now(),
+    })
+    .returning();
+  return { ...s, design: d, source: source! };
+}
+
+it("再制作の4用途へ固定した修正メモと元構成を渡し、元の版・画像・事実を変えない", async () => {
+  const s = await rejectedProposal();
+  const before = proposalRevisionFingerprint(s.source);
+  const retry = await retryDesignBuild(env.db, env.clock, s.actor, s.design.id, s.source.id);
+  const generation = vi.spyOn(env.deps.generation.generator, "generate");
+  const base = await env.deps.buildGenerationInput(env.db, { company: s.company, audit: s.audit });
+  await intakeDesignBuilds(env.deps);
+  expect((await env.queue.drain(env.runtime)).at(-1)?.outcome.status).toBe("succeeded");
+  expect(generation).toHaveBeenCalledTimes(4);
+  for (const [request] of generation.mock.calls) {
+    expect(request.input.context.proposalRevision).toMatchObject({
+      sourceVersionId: s.source.id,
+      request: s.source.reviewNote,
+      sourceSha256: before,
+    });
+    expect(request.input.facts).toEqual(base.facts);
+    const old = request.input.externalData.find((item) => item.id === "previous-proposal");
+    expect(JSON.parse(old!.content)).toHaveProperty("demoSite");
+    expect(request.input.attachments.find((a) => a.name === "approved-design.png")?.imagePolicy?.allowedUses).toEqual([
+      "analysis_only",
+    ]);
+  }
+  const rows = await env.db.select().from(proposalVersions);
+  expect(rows).toHaveLength(2);
+  const fresh = rows.find((row) => row.id !== s.source.id)!;
+  expect(fresh.content).toMatchObject({ proposalRevision: { sourceVersionId: s.source.id, sourceVersion: 1 } });
+  expect(JSON.stringify(fresh.content)).not.toContain(s.source.reviewNote!);
+  expect(proposalRevisionFingerprint(rows.find((row) => row.id === s.source.id)!)).toBe(before);
+  expect(retry.imageSha256).toBe((s.source.content as { designSha256: string }).designSha256);
+  expect((await retryDesignBuild(env.db, env.clock, s.actor, s.design.id, s.source.id)).id).toBe(retry.id);
+});
+it("元の提案・修正メモや依頼履歴が変更されたら、追加の生成前に止める", async () => {
+  const s = await rejectedProposal();
+  const retry = await retryDesignBuild(env.db, env.clock, s.actor, s.design.id, s.source.id);
+  const base = await env.deps.buildGenerationInput(env.db, { company: s.company, audit: s.audit });
+  const [event] = await env.db.select().from(auditEvents).where(eq(auditEvents.targetId, retry.id));
+  for (const after of [
+    null,
+    {},
+    { ...(event!.after as object), previousProposalId: s.design.id },
+    { ...(event!.after as object), revisionNote: "保存後に差し替えた短い指示" },
+    { ...(event!.after as object), revisionNote: "x".repeat(4001) },
+  ]) {
+    await env.db.update(auditEvents).set({ after }).where(eq(auditEvents.id, event!.id));
+    await expect(withProposalRevision(env.db, retry, base)).rejects.toThrow("再制作");
+  }
+  await env.db.update(auditEvents).set({ after: event!.after }).where(eq(auditEvents.id, event!.id));
+  await env.db
+    .update(proposalVersions)
+    .set({ reviewNote: "後から差し替えた指示" })
+    .where(eq(proposalVersions.id, s.source.id));
+  await expect(withProposalRevision(env.db, retry, base)).rejects.toThrow("元の提案が変更");
+  expect(await env.db.select().from(generationJobs)).toHaveLength(4);
+});
+it("別の元版・新しい提案がある場合と、無効な運営による再制作を拒否する", async () => {
+  const s = await rejectedProposal();
+  await expect(retryDesignBuild(env.db, env.clock, s.actor, s.design.id, s.design.id)).rejects.toThrow("制作失敗");
+  await env.db.update(users).set({ status: "suspended" }).where(eq(users.id, s.actor.userId));
+  await expect(retryDesignBuild(env.db, env.clock, s.actor, s.design.id, s.source.id)).rejects.toThrow("有効な運営");
+  await env.db.update(users).set({ status: "active" }).where(eq(users.id, s.actor.userId));
+  await env.db
+    .insert(proposalVersions)
+    .values({ proposalId: s.source.proposalId, auditId: s.audit.id, version: 2, status: "in_review" });
+  await expect(retryDesignBuild(env.db, env.clock, s.actor, s.design.id, s.source.id)).rejects.toThrow("新しい提案版");
+  expect(await env.db.select().from(designVersions)).toHaveLength(1);
+});
+it("通常制作・旧形式の再制作は後から修正指示を足さず、jsonbのキー順で元版の署名を変えない", async () => {
+  const s = await rejectedProposal();
+  const base = await env.deps.buildGenerationInput(env.db, { company: s.company, audit: s.audit });
+  expect(await withProposalRevision(env.db, s.design, base)).toBe(base);
+  const [approved] = await env.db.select().from(designVersions);
+  expect(
+    await withProposalRevision(env.db, { ...approved!, requestKey: `retry:${s.design.id}:${s.source.id}` }, base),
+  ).toBe(base);
+  const content = s.source.content as Record<string, unknown>;
+  expect(
+    proposalRevisionFingerprint({ ...s.source, content: Object.fromEntries(Object.entries(content).reverse()) }),
+  ).toBe(proposalRevisionFingerprint(s.source));
+});
 describe("画像を先に承認する制作フロー", () => {
   async function withProfile(key: string) {
     const s = await seed();

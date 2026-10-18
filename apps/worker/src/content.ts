@@ -31,6 +31,8 @@ export interface ProposalContent {
   auditId: string;
   designVersionId?: string;
   designSha256?: string | null;
+  /** Only the source reference is public; the operator's note stays in the private input/audit record. */
+  proposalRevision?: { sourceVersionId: string; sourceVersion: number; sourceSha256: string; requestedAt: string };
   demoImageAssets?: ProposalImageAsset[];
   revision: string;
   [PROPOSAL_CONTENT_KEYS.proposalText]: ProposalText | null;

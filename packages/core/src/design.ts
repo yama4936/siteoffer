@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { companies, type DbOrTx, designVersions, proposalVersions, siteAudits } from "@siteoffer/db";
+import { companies, type DbOrTx, designVersions, proposals, proposalVersions, siteAudits, users } from "@siteoffer/db";
 import { and, count, desc, eq, gte, max, sql } from "drizzle-orm";
 import { recordEvent } from "./common/events.ts";
 import type { Actor, Clock } from "./common/index.ts";
@@ -7,6 +7,29 @@ import type { Actor, Clock } from "./common/index.ts";
 export type DesignBrief = { objective: string; audience: string; direction: string; scope: string; updatePlan: string };
 export type DesignVersion = typeof designVersions.$inferSelect;
 export class DesignError extends Error {}
+/** Seal the stored revision source; key ordering in jsonb must not change its identity. */
+export function proposalRevisionFingerprint(version: typeof proposalVersions.$inferSelect) {
+  const value = [
+    version.id,
+    version.proposalId,
+    version.auditId,
+    version.status,
+    version.reviewNote,
+    version.reviewedBy,
+    version.reviewedAt?.toISOString() ?? null,
+    version.content,
+  ];
+  const canonical = JSON.stringify(value, (_key, item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((key) => [key, item[key]]),
+        )
+      : item,
+  );
+  return createHash("sha256").update(canonical).digest("hex");
+}
 export const DESIGN_LABELS: Record<DesignVersion["status"], string> = {
   draft: "画像待ち",
   queued: "生成待ち",
@@ -233,25 +256,66 @@ export async function requestDesignBuild(db: DbOrTx, clock: Clock, actor: Actor 
 }
 
 /** Reuse the exact approved image after a failed/rejected site build; never call the image API again. */
-export async function retryDesignBuild(db: DbOrTx, clock: Clock, actor: Actor | null, id: string) {
+export async function retryDesignBuild(
+  db: DbOrTx,
+  clock: Clock,
+  actor: Actor | null,
+  id: string,
+  expectedProposalId?: string,
+) {
   requireOperator(actor);
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('siteoffer:design:create'))`);
+    const [operator] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")))
+      .for("share");
+    if (!operator) throw new DesignError("有効な運営権限が必要です");
     const [d] = await tx.select().from(designVersions).where(eq(designVersions.id, id));
     if (d?.status !== "approved" || !d.imageSha256) throw new DesignError("承認済みの画像が必要です");
+    const [parent] = await tx
+      .select({ id: proposals.id })
+      .from(proposals)
+      .where(eq(proposals.companyId, d.companyId))
+      .for("update");
+    if (!parent) throw new DesignError("元の提案がありません");
     const [company] = await tx.select().from(companies).where(eq(companies.id, d.companyId)).for("update");
     if (company?.suppression !== "none") throw new DesignError("営業抑止中の企業は制作できません");
     const [previous] = await tx
       .select()
       .from(proposalVersions)
-      .where(sql`${proposalVersions.content}->>'designVersionId' = ${id}`)
+      .where(
+        and(
+          eq(proposalVersions.proposalId, parent.id),
+          eq(proposalVersions.auditId, d.auditId),
+          sql`${proposalVersions.content}->>'designVersionId' = ${id}`,
+          expectedProposalId ? eq(proposalVersions.id, expectedProposalId) : undefined,
+        ),
+      )
       .orderBy(desc(proposalVersions.version))
       .limit(1);
     if (!previous || !["failed", "rejected"].includes(previous.status))
       throw new DesignError("制作失敗・修正依頼の提案だけを再制作できます");
-    const requestKey = `retry:${id}:${previous.id}`;
+    if ((previous.content as { designSha256?: unknown } | null)?.designSha256 !== d.imageSha256)
+      throw new DesignError("元の提案と承認画像が一致しません");
+    if (previous.reviewNote && previous.reviewNote.length > 4000)
+      throw new DesignError("修正メモは4000文字以内で入力してください");
+    const requestKey = `retry-v2:${id}:${previous.id}`;
     const [existing] = await tx.select().from(designVersions).where(eq(designVersions.requestKey, requestKey));
     if (existing) return existing;
+    const [latest] = await tx
+      .select({ id: proposalVersions.id })
+      .from(proposalVersions)
+      .where(eq(proposalVersions.proposalId, parent.id))
+      .orderBy(desc(proposalVersions.version))
+      .limit(1);
+    if (latest?.id !== previous.id) throw new DesignError("新しい提案版があります。最新版の制作結果を確認してください");
+    const [legacy] = await tx
+      .select({ id: designVersions.id })
+      .from(designVersions)
+      .where(eq(designVersions.requestKey, `retry:${id}:${previous.id}`));
+    if (legacy) throw new DesignError("以前の再制作依頼があります。その制作結果を先に確認してください");
     const [m] = await tx
       .select({ n: max(designVersions.version) })
       .from(designVersions)
@@ -286,7 +350,13 @@ export async function retryDesignBuild(db: DbOrTx, clock: Clock, actor: Actor | 
       action: "design.retry_build",
       targetType: "design",
       targetId: row!.id,
-      after: { originalDesignId: id, previousProposalId: previous.id, sha256: d.imageSha256 },
+      after: {
+        originalDesignId: id,
+        previousProposalId: previous.id,
+        sha256: d.imageSha256,
+        previousProposalSha256: proposalRevisionFingerprint(previous),
+        revisionNote: previous.reviewNote ?? "",
+      },
     });
     return row!;
   });

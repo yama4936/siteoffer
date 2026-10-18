@@ -91,10 +91,17 @@ export function buildPrompt(
     ...input.attachments.map((a) => `- input/files/${a.name}：添付（${a.kind}）`),
   ];
   const correction = sanitizeFeedback(feedback);
+  const revision = input.context.proposalRevision as { request?: unknown; sourceVersionId?: unknown } | undefined;
+  const revisionFile = "proposal_revision.v1.md";
+  const hasRevision = revision && typeof revision.request === "string" && typeof revision.sourceVersionId === "string";
+  if (hasRevision) sections.push(load(revisionFile).trim());
   const retryFile = "validation_retry.v1.md";
   if (correction) sections.push(load(retryFile).trim(), "```json", JSON.stringify(correction, null, 2), "```");
   return {
     text: `${sections.join("\n\n")}\n`,
-    version: promptVersion(purpose) + (correction ? `+validation_retry.v1#${sha8(load(retryFile))}` : ""),
+    version:
+      promptVersion(purpose) +
+      (hasRevision ? `+proposal_revision.v1#${sha8(load(revisionFile))}` : "") +
+      (correction ? `+validation_retry.v1#${sha8(load(retryFile))}` : ""),
   };
 }

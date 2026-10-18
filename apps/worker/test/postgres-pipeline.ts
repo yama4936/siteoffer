@@ -7,8 +7,9 @@ import { type AddressInfo, createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { attachDesignImage, requestDesignBuild, reviewDesign, systemClock } from "@siteoffer/core";
+import { attachDesignImage, requestDesignBuild, retryDesignBuild, reviewDesign, systemClock } from "@siteoffer/core";
 import {
+  auditEvents,
   companies,
   type Db,
   designVersions,
@@ -46,7 +47,17 @@ const report: Record<string, unknown> = {
   recovery,
 };
 const checks: string[] = [],
-  events: { type: string; worker: string; queue?: string; status?: string; pid?: number; jobId?: string }[] = [];
+  events: {
+    type: string;
+    worker: string;
+    queue?: string;
+    status?: string;
+    pid?: number;
+    jobId?: string;
+    purpose?: string;
+    sourceVersionId?: string;
+    revisionMatched?: boolean;
+  }[] = [];
 const children: ChildProcess[] = [],
   producers: PgBoss[] = [];
 const expectedStops = new Set<ChildProcess>();
@@ -419,6 +430,79 @@ async function main() {
   checks.push(
     "Late duplicate receipts drain without extra versions or generation calls, and both OS workers execute pipeline jobs",
   );
+  if (!recovery) {
+    const source = versions[0]!;
+    const designId = (source.content as { designVersionId: string }).designVersionId;
+    await db
+      .update(proposalVersions)
+      .set({
+        status: "rejected",
+        reviewedBy: operator!.id,
+        reviewedAt: systemClock.now(),
+        reviewNote: "架空の修正依頼：見出しを短くし、スマホの写真を先に表示。",
+      })
+      .where(eq(proposalVersions.id, source.id));
+    const requests = await Promise.all(
+      Array.from({ length: 6 }, () => retryDesignBuild(db, systemClock, actor, designId, source.id)),
+    );
+    assert.equal(new Set(requests.map((r) => r.id)).size, 1);
+    const retry = requests[0]!;
+    await eventually(
+      async () => {
+        const rows = await db.select().from(proposalVersions);
+        return (
+          rows.length === 3 &&
+          rows.some(
+            (row) =>
+              row.status === "in_review" &&
+              (row.content as { proposalRevision?: { sourceVersionId: string } } | null)?.proposalRevision
+                ?.sourceVersionId === source.id,
+          )
+        );
+      },
+      "reviewable revision from a sealed operator note",
+      150_000,
+    );
+    const revisionEvents = events.filter(
+      (event) => event.type === "proposal_revision_input" && event.sourceVersionId === source.id,
+    );
+    assert.equal(revisionEvents.length, 4);
+    assert(revisionEvents.every((event) => event.revisionMatched));
+    assert.deepEqual(revisionEvents.map((event) => event.purpose).sort(), [
+      "call_script",
+      "demo_site",
+      "faq",
+      "proposal_text",
+    ]);
+    assert.equal((await db.select().from(generationJobs)).length, 14);
+    const receipts = await db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.targetId, retry.id), eq(auditEvents.action, "design.retry_build")));
+    assert.equal(receipts.length, 1);
+    assert.equal(
+      (receipts[0]!.after as { revisionNote: string }).revisionNote,
+      "架空の修正依頼：見出しを短くし、スマホの写真を先に表示。",
+    );
+    const rows = await db.select().from(proposalVersions);
+    const fresh = rows.find(
+      (row) => (row.content as { designVersionId?: string } | null)?.designVersionId === retry.id,
+    )!;
+    assert(
+      fresh.demoArtifactDir &&
+        (await readFile(path.join(fresh.demoArtifactDir, "index.html"), "utf8")).includes("<!DOCTYPE html>"),
+    );
+    assert.equal(
+      (fresh.content as { designSha256: string }).designSha256,
+      (source.content as { designSha256: string }).designSha256,
+    );
+    assert(!JSON.stringify(fresh.content).includes("架空の修正依頼："));
+    checks.push("Six concurrent PostgreSQL revision requests create one durable request and one new proposal");
+    checks.push("Real pg-boss workers receive the exact sealed operator note for all four purposes");
+    checks.push(
+      "Revision builds real Astro HTML while preserving the approved image and keeping operator notes out of proposal content",
+    );
+  }
   report.status = "passed";
 }
 await mkdir(artifactRoot, { recursive: true });

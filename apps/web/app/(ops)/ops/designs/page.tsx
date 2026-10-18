@@ -78,7 +78,12 @@ export default async function DesignPage({
   const audit = auditRecord?.status === "evaluated" && auditRecord.decision === "create" ? auditRecord : undefined;
   const [proposal] = selected
     ? await db
-        .select({ id: proposalVersions.id, status: proposalVersions.status, version: proposalVersions.version })
+        .select({
+          id: proposalVersions.id,
+          status: proposalVersions.status,
+          version: proposalVersions.version,
+          reviewNote: proposalVersions.reviewNote,
+        })
         .from(proposalVersions)
         .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
         .where(
@@ -309,8 +314,18 @@ export default async function DesignPage({
               {proposal && ["failed", "rejected"].includes(proposal.status) && (
                 <form action={retryDesignBuildAction}>
                   {hidden}
+                  <input type="hidden" name="proposalVersionId" value={proposal.id} />
+                  {proposal.reviewNote && (
+                    <details className="design-note">
+                      <summary>今回引き継ぐ修正メモ</summary>
+                      <p className="whitespace-pre-wrap break-words">{proposal.reviewNote}</p>
+                    </details>
+                  )}
                   <DesignSubmit>同じ承認画像で再制作</DesignSubmit>
-                  <p className="design-note">画像APIは再実行せず、新しい制作版を作ります。</p>
+                  <p className="design-note">
+                    提案 第{proposal.version}版の修正メモと構成を引き継ぎ、新しい制作版を作ります。
+                    画像APIは再実行しません。実AIの制作ではCodexの利用枠を使います。
+                  </p>
                 </form>
               )}
               {proposal && (

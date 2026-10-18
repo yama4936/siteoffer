@@ -21,6 +21,7 @@ import { contentSiteUrl, withDesignReference } from "../design.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
 import { siteGenerationInputIssue } from "../input.ts";
 import { applyProposalMaterials, prepareProposalMaterials } from "../proposal-materials.ts";
+import { withProposalRevision } from "../proposal-revision.ts";
 import { type ProposalPayload, type ProposalPayloadInput, proposalPayloadSchema, QUEUES, stepKeys } from "../queues.ts";
 import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
 
@@ -131,7 +132,11 @@ export const proposalStep: StepDefinition<
       if (error instanceof ImageAssetError) throw new PermanentError(error.message);
       throw error;
     }
-    const input = await withDesignReference(material.input, design, path.join(workDir, "reference"));
+    const input = await withProposalRevision(
+      db,
+      design,
+      await withDesignReference(material.input, design, path.join(workDir, "reference")),
+    );
     const genDeps: GenerationDeps = {
       db,
       clock,
@@ -166,6 +171,14 @@ export const proposalStep: StepDefinition<
       }),
     );
 
+    const revisionSource = input.context.proposalRevision as
+      | {
+          sourceVersionId: string;
+          sourceVersion: number;
+          sourceSha256: string;
+          requestedAt: string;
+        }
+      | undefined;
     const content: ProposalContent = {
       ...emptyProposalContent({ idempotencyKey: key, auditId: audit.id, revision: payload.revision }),
       designVersionId: design.id,
@@ -177,6 +190,16 @@ export const proposalStep: StepDefinition<
       demoSite: out.demo_site,
       generationJobIds: jobIds,
       generator: deps.generation.generator.kind,
+      ...(revisionSource
+        ? {
+            proposalRevision: {
+              sourceVersionId: revisionSource.sourceVersionId,
+              sourceVersion: revisionSource.sourceVersion,
+              sourceSha256: revisionSource.sourceSha256,
+              requestedAt: revisionSource.requestedAt,
+            },
+          }
+        : {}),
     };
 
     await ctx.assertCurrent();

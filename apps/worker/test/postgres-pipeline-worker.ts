@@ -49,6 +49,17 @@ process.once("message", async (raw) => {
     pauseEvaluation = !!setup.pauseEvaluation;
     const generate = deps.generation.generator.generate.bind(deps.generation.generator);
     deps.generation.generator.generate = async <T>(request: GenerateRequest<T>) => {
+      const revision = request.input.context.proposalRevision as
+        | { sourceVersionId: string; request: string }
+        | undefined;
+      if (revision)
+        notify({
+          type: "proposal_revision_input",
+          worker: setup.worker,
+          purpose: request.purpose,
+          sourceVersionId: revision.sourceVersionId,
+          revisionMatched: revision.request === "架空の修正依頼：見出しを短くし、スマホの写真を先に表示。",
+        });
       if (pauseEvaluation && request.purpose === "evaluation") {
         await new Promise<void>((resolve) => {
           const release = () => {

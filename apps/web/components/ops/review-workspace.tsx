@@ -140,6 +140,7 @@ export function ReviewWorkspace({
   const retryInput = useRef<ReviewCommitInput | null>(null);
   const operationKey = useRef<string | null>(null);
   const content = record(version?.content);
+  const revisionSource = c?.versions.find((item) => item.id === record(content.proposalRevision).sourceVersionId);
   const proposal = record(content.proposalText);
   const measures = Array.isArray(proposal.measures) ? proposal.measures.map(record) : [];
   const safeWebsite = c?.website && /^https?:\/\//i.test(c.website) ? c.website : null;
@@ -194,7 +195,7 @@ export function ReviewWorkspace({
           setMessage(
             input.decision === "approved"
               ? "提案版を承認しました。販売条件を選ぶと営業可能にできます。"
-              : "提案版を差し戻しました。修正メモを履歴に保存しました。",
+              : "提案版を差し戻し、修正メモを保存しました。同じ承認画像から再制作できます。",
           );
           router.refresh();
         }
@@ -334,6 +335,12 @@ export function ReviewWorkspace({
               <div className="review-version-notice" role="status">
                 過去の提案版を表示しています。この版の承認・差し戻しはできません。
                 <Link href={reviewHref(c.id, c.versions[0]?.id)}>最新版を開く</Link>
+              </div>
+            )}
+            {revisionSource && (
+              <div className="review-version-notice" role="status">
+                提案 第{revisionSource.version}版の修正メモを引き継いだ制作です。
+                <Link href={reviewHref(c.id, revisionSource.id)}>修正元の提案を確認</Link>
               </div>
             )}
             <ol className="review-steps">
@@ -656,8 +663,15 @@ export function ReviewWorkspace({
                     ? "営業可能な案件です。担当・引き継ぎから営業の進行状況を確認できます。"
                     : version?.status === "approved"
                       ? "承認済みです。「販売条件を確認して営業へ」から次へ進めます。"
-                      : "企業情報と素材を整え、提案を準備してください。"}
+                      : version?.status === "rejected"
+                        ? "修正メモを保存しました。同じ承認画像と元の構成を使って、新しい提案版を制作できます。"
+                        : "企業情報と素材を整え、提案を準備してください。"}
               </p>
+              {version?.isLatest && version.status === "rejected" && version.design && (
+                <Link className="review-outline" href={`${version.design.studioHref}#design-build`}>
+                  修正メモを使って再制作へ <ArrowRight size={16} />
+                </Link>
+              )}
               {version?.note && <p className="previous-note">前回の確認メモ：{version.note}</p>}
             </div>
           </aside>
