@@ -1,6 +1,6 @@
 import { attachImageAssetFile, fixedClock } from "@siteoffer/core";
 import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
-import { type Db, imageAssets, imageSubmissions, users } from "@siteoffer/db";
+import { auditEvents, type Db, imageAssets, imageSubmissions, users } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -46,6 +46,34 @@ it("同じ配置先を選び直すと次回用の配置だけを置き換え、�
   );
   const [old] = await db.select().from(imageAssets).where(eq(imageAssets.id, s.rows[0]!.id));
   expect(old).toMatchObject({ placement: "reference", allowProduction: true, policyRevision: 2 });
+});
+it("同じ許諾の保存では確認者・日時・版・履歴を維持し、古い版や変更された内容は区別する", async () => {
+  const s = await setup();
+  const first = await updateImageAssetPolicy({ db, clock }, s.ops, s.input);
+  expect(first.ok).toBe(true);
+  if (!first.ok) throw new Error(first.error);
+  const events = await db.select().from(auditEvents);
+  const later = fixedClock("2026-10-18T00:00:00Z");
+  const again = await updateImageAssetPolicy({ db, clock: later }, s.ops, {
+    ...s.input,
+    expectedRevision: 1,
+    note: "   ",
+  });
+  expect(again).toEqual(first);
+  expect(await db.select().from(auditEvents)).toEqual(events);
+  expect(await updateImageAssetPolicy({ db, clock: later }, s.ops, s.input)).toMatchObject({
+    ok: false,
+    error: "conflict",
+  });
+  const changed = await updateImageAssetPolicy({ db, clock: later }, s.ops, {
+    ...s.input,
+    expectedRevision: 1,
+    note: "変更後の許諾条件",
+  });
+  expect(changed).toMatchObject({
+    ok: true,
+    value: { policyRevision: 2, note: "変更後の許諾条件", confirmedAt: later.now() },
+  });
 });
 it("画像取込前の画面から許諾を戻せず、停止運営と不正配置を拒否する", async () => {
   const s = await setup();

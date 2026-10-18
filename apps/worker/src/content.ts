@@ -1,3 +1,4 @@
+import type { ProposalImageAsset } from "@siteoffer/core";
 import type { CallScript, Faq, ProposalText, SiteGenerationOutput } from "@siteoffer/schemas";
 
 /**
@@ -30,6 +31,7 @@ export interface ProposalContent {
   auditId: string;
   designVersionId?: string;
   designSha256?: string | null;
+  demoImageAssets?: ProposalImageAsset[];
   revision: string;
   [PROPOSAL_CONTENT_KEYS.proposalText]: ProposalText | null;
   [PROPOSAL_CONTENT_KEYS.callScript]: CallScript | null;

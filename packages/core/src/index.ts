@@ -28,6 +28,7 @@ export * from "./domain-preference/index.ts";
 export * from "./image-assets.ts";
 export * from "./image-submissions.ts";
 export * from "./permissions/index.ts";
+export * from "./proposal-images.ts";
 export * from "./publication-materials.ts";
 export * from "./reward/index.ts";
 export * from "./sales-activity/index.ts";

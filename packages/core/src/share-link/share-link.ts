@@ -21,6 +21,7 @@ import { getSetting } from "../common/settings.ts";
 import { deliveryVersionSuperseded } from "../delivery/change.ts";
 import { deliveryVersionImagesValid } from "../image-assets.ts";
 import { authorizeUser } from "../permissions/policy.ts";
+import { proposalVersionImagesValid } from "../proposal-images.ts";
 import { getSalesOffer } from "../sales-offer/offer.ts";
 import { generateShareToken, hashShareToken, isShareTokenFormat, type ShareTokenRecovery } from "./token.ts";
 
@@ -87,6 +88,7 @@ async function loadTarget(db: DbOrTx, purpose: SharePurpose, targetId: string): 
       .from(proposalVersions)
       .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
       .where(eq(proposalVersions.id, targetId));
+    if (row && !(await proposalVersionImagesValid(db, targetId))) return null;
     return row ? { companyId: row.companyId, approved: row.status === "approved", artifactDir: row.artifactDir } : null;
   }
   const [row] = await db

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   attachDesignImage,
+  attachImageAssetFile,
   createDesign,
   DEFAULT_DESIGN_BRIEF,
   requestDesignBuild,
@@ -13,6 +14,7 @@ import {
   companies,
   designVersions,
   generationJobs,
+  imageAssets,
   proposalVersions,
   siteAudits,
   users,
@@ -24,7 +26,8 @@ import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { intakeDesignBuilds, processDesignJobs } from "../src/design.ts";
 import { executeStep } from "../src/execute.ts";
-import { proposalStep } from "../src/pipeline/proposal.ts";
+import { ensureProposalVersion, proposalStep } from "../src/pipeline/proposal.ts";
+import { stepKeys } from "../src/queues.ts";
 import { deferred, setupEnv, type TestEnv } from "./helpers.ts";
 
 let env: TestEnv;
@@ -73,6 +76,195 @@ async function seed() {
   return { company: company!, audit: audit!, actor, image };
 }
 describe("画像を先に承認する制作フロー", () => {
+  it("keeps a legacy generating proposal image-free instead of adopting newly registered materials", async () => {
+    const s = await seed();
+    const d = await createDesign(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      requestKey: "legacy-material",
+      brief: DEFAULT_DESIGN_BRIEF,
+      source: "import",
+    });
+    await attachDesignImage(env.db, env.clock, s.actor, d.id, s.image);
+    await reviewDesign(env.db, env.clock, s.actor, {
+      id: d.id,
+      approve: true,
+      note: "内部検証",
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+    });
+    const payload = {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      designVersionId: d.id,
+      revision: "legacy-no-materials",
+    };
+    const version = await ensureProposalVersion(env.db, env.clock, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      idempotencyKey: stepKeys.proposal(payload),
+      revision: payload.revision,
+    });
+    const legacy = { ...(version.content as Record<string, unknown>) };
+    delete legacy.demoImageAssets;
+    await env.db.update(proposalVersions).set({ content: legacy }).where(eq(proposalVersions.id, version.id));
+    const [asset] = await env.db
+      .insert(imageAssets)
+      .values({ companyId: s.company.id, label: "後から登録した写真", sourceType: "generated", placement: "hero" })
+      .returning();
+    await attachImageAssetFile(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      assetId: asset!.id,
+      png: s.image.png,
+      width: s.image.width,
+      height: s.image.height,
+    });
+    await env.db
+      .update(imageAssets)
+      .set({
+        rightsStatus: "use_approved",
+        allowSalesDemo: true,
+        confirmedBy: s.actor.userId,
+        confirmedAt: env.clock.now(),
+      })
+      .where(eq(imageAssets.id, asset!.id));
+    let hero: unknown;
+    const builder = env.deps.siteBuilder.buildDemo;
+    env.deps.siteBuilder.buildDemo = async (args) => {
+      hero = args.siteInput.hero.image;
+      return builder(args);
+    };
+    const result = await executeStep(env.deps, proposalStep, payload);
+    expect(result.status).toBe("succeeded");
+    expect(hero).toBeUndefined();
+    const rows = await env.db.select().from(proposalVersions);
+    expect(rows).toHaveLength(1);
+    expect((rows[0]!.content as { demoImageAssets: unknown }).demoImageAssets).toEqual([]);
+  });
+  it("does not replace or regenerate a proposal's frozen materials on a build retry after permission changes", async () => {
+    const s = await seed();
+    env.deps.policies.proposal.maxAttempts = 2;
+    const [asset] = await env.db
+      .insert(imageAssets)
+      .values({ companyId: s.company.id, label: "変更前の概念写真", sourceType: "generated", placement: "hero" })
+      .returning();
+    await attachImageAssetFile(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      assetId: asset!.id,
+      png: s.image.png,
+      width: s.image.width,
+      height: s.image.height,
+    });
+    await env.db
+      .update(imageAssets)
+      .set({
+        rightsStatus: "use_approved",
+        allowSalesDemo: true,
+        confirmedBy: s.actor.userId,
+        confirmedAt: env.clock.now(),
+      })
+      .where(eq(imageAssets.id, asset!.id));
+    const d = await createDesign(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      requestKey: "retry-material",
+      brief: DEFAULT_DESIGN_BRIEF,
+      source: "import",
+    });
+    await attachDesignImage(env.db, env.clock, s.actor, d.id, s.image);
+    await reviewDesign(env.db, env.clock, s.actor, {
+      id: d.id,
+      approve: true,
+      note: "内部検証",
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+    });
+    env.deps.siteBuilder.buildDemo = async () => ({
+      ok: false,
+      reason: "astro-build-failed",
+      message: "transient fixture failure",
+      retryable: true,
+    });
+    const payload = { companyId: s.company.id, auditId: s.audit.id, designVersionId: d.id, revision: "frozen-retry" };
+    expect((await executeStep(env.deps, proposalStep, payload)).status).toBe("retry");
+    expect(env.generator.calls).toHaveLength(4);
+    const [before] = await env.db.select().from(proposalVersions);
+    await env.db
+      .update(imageAssets)
+      .set({ allowSalesDemo: false, policyRevision: 2 })
+      .where(eq(imageAssets.id, asset!.id));
+    const retry = await executeStep(env.deps, proposalStep, payload);
+    expect(retry).toMatchObject({ status: "failed", reason: expect.stringContaining("許諾") });
+    expect(env.generator.calls).toHaveLength(4);
+    const [after] = await env.db.select().from(proposalVersions);
+    expect(after!.status).toBe("failed");
+    expect((after!.content as { demoImageAssets: unknown }).demoImageAssets).toEqual(
+      (before!.content as { demoImageAssets: unknown }).demoImageAssets,
+    );
+  });
+  it("separates the design reference from a permitted hero image and records immutable demo materials", async () => {
+    const s = await seed();
+    const [asset] = await env.db
+      .insert(imageAssets)
+      .values({ companyId: s.company.id, label: "デモ専用の概念写真", sourceType: "generated", placement: "hero" })
+      .returning();
+    await attachImageAssetFile(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      assetId: asset!.id,
+      png: s.image.png,
+      width: s.image.width,
+      height: s.image.height,
+    });
+    await env.db
+      .update(imageAssets)
+      .set({
+        rightsStatus: "use_approved",
+        allowSalesDemo: true,
+        confirmedBy: s.actor.userId,
+        confirmedAt: env.clock.now(),
+      })
+      .where(eq(imageAssets.id, asset!.id));
+    const d = await createDesign(env.db, env.clock, s.actor, {
+      companyId: s.company.id,
+      auditId: s.audit.id,
+      requestKey: "with-material",
+      brief: DEFAULT_DESIGN_BRIEF,
+      source: "import",
+    });
+    await attachDesignImage(env.db, env.clock, s.actor, d.id, s.image);
+    await reviewDesign(env.db, env.clock, s.actor, {
+      id: d.id,
+      approve: true,
+      note: "架空の内部検証",
+      factsChecked: true,
+      rightsChecked: true,
+      layoutChecked: true,
+    });
+    let hero: { src: string; alt: string } | undefined;
+    const builder = env.deps.siteBuilder.buildDemo;
+    env.deps.siteBuilder.buildDemo = async (args) => {
+      hero = args.siteInput.hero.image;
+      return builder(args);
+    };
+    await requestDesignBuild(env.db, env.clock, s.actor, d.id);
+    await intakeDesignBuilds(env.deps);
+    expect((await env.queue.drain(env.runtime)).at(-1)?.outcome.status).toBe("succeeded");
+    const [version] = await env.db.select().from(proposalVersions);
+    expect(hero).toEqual({ src: `materials/material-${asset!.id}.png`, alt: "デモ専用の概念写真" });
+    expect((version!.content as { demoImageAssets: unknown }).demoImageAssets).toMatchObject([
+      { assetId: asset!.id, policyRevision: 1, policy: { allowedUses: ["sales_demo"] } },
+    ]);
+    expect(await readFile(path.join(path.dirname(version!.demoArtifactDir!), hero!.src))).toEqual(s.image.png);
+    expect(env.generator.calls).toHaveLength(4);
+    for (const call of env.generator.calls) {
+      expect(call.input.attachments).toMatchObject([
+        { name: `material-${asset!.id}.png`, imagePolicy: { allowedUses: ["sales_demo"] } },
+        { name: "approved-design.png", imagePolicy: { allowedUses: ["analysis_only"] } },
+      ]);
+    }
+  });
   it("画像未承認ではHTMLを生成せず、承認・二重依頼後に同じ画像を1回だけ制作に渡す", async () => {
     const s = await seed();
     const first = await executeStep(env.deps, proposalStep, {

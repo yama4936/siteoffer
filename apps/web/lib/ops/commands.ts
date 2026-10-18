@@ -438,6 +438,19 @@ export async function updateImageAssetPolicy(
         "顧客提出の確認結果と許可された用途を確認してください。未確認・取り下げ済みの画像は利用できません",
       );
     const placement = input.placement ?? before.placement;
+    const note = input.note?.trim() || null;
+    const confirmed = input.rightsStatus !== "unknown";
+    // Saving unchanged values must not invalidate proposals pinned to this permission revision.
+    // Keep this after authorization, optimistic concurrency, and customer-scope checks.
+    if (
+      placement === before.placement &&
+      input.rightsStatus === before.rightsStatus &&
+      input.allowSalesDemo === before.allowSalesDemo &&
+      input.allowProduction === before.allowProduction &&
+      note === before.note &&
+      (confirmed ? !!before.confirmedBy && !!before.confirmedAt : !before.confirmedBy && !before.confirmedAt)
+    )
+      return before;
     const replaced =
       placement !== "reference" ? locked.filter((a) => a.id !== before.id && a.placement === placement) : [];
     for (const a of replaced)
@@ -445,7 +458,6 @@ export async function updateImageAssetPolicy(
         .update(imageAssets)
         .set({ placement: "reference", policyRevision: a.policyRevision + 1, updatedAt: clock.now() })
         .where(eq(imageAssets.id, a.id));
-    const confirmed = input.rightsStatus !== "unknown";
     const [after] = await tx
       .update(imageAssets)
       .set({
@@ -456,7 +468,7 @@ export async function updateImageAssetPolicy(
         allowProduction: input.allowProduction,
         confirmedBy: confirmed ? ops.value.userId : null,
         confirmedAt: confirmed ? clock.now() : null,
-        note: input.note?.trim() || null,
+        note,
         updatedAt: clock.now(),
       })
       .where(eq(imageAssets.id, before.id))

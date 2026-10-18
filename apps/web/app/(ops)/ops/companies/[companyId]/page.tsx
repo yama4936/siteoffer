@@ -405,6 +405,7 @@ export default async function CompanyPage({
         <Alert>
           <AlertDescription>
             元サイトの画像は登録しただけでは営業デモや納品サイトに使えません。権利状態と利用範囲を画像ごとに確認してください。外部画像の直リンクは行いません。
+            デモに掲載する写真・ロゴは、ファイル・営業デモの許可・配置先を登録すると次回の提案制作に反映されます。デザイン画像はレイアウトの参照に使います。
           </AlertDescription>
         </Alert>
         <details className={detailsClass}>
@@ -488,7 +489,7 @@ export default async function CompanyPage({
                     <input type="hidden" name="imageAssetId" value={asset.id} />
                     <input type="hidden" name="expectedRevision" value={asset.policyRevision} />
                     <label htmlFor={`placement-${asset.id}`} className="text-sm">
-                      納品サイトの配置先
+                      提案デモ・納品サイトの配置先
                     </label>
                     <NativeSelect id={`placement-${asset.id}`} name="placement" defaultValue={asset.placement}>
                       <option value="reference">自動配置しない</option>
@@ -496,7 +497,10 @@ export default async function CompanyPage({
                       <option value="logo">ロゴ</option>
                     </NativeSelect>
                     <p className="max-w-72 text-xs text-muted-foreground">
-                      各配置先に1点。別の素材を選ぶと、次回の制作から置き換わります。画像登録と本番利用の許諾が必要です。
+                      画像ファイルを登録し、下で許可した用途の次回制作に配置します。各配置先に1点。営業デモの許可だけでは納品サイトに使いません。
+                    </p>
+                    <p className="max-w-72 text-xs text-muted-foreground">
+                      許諾や配置の保存内容が変わると、この素材を使う既存の提案共有は停止します。変更後の素材で新しい提案を制作してください。
                     </p>
                     <NativeSelect
                       name="rightsStatus"

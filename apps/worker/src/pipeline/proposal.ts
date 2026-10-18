@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
-import { type Clock, createDesign, DEFAULT_DESIGN_BRIEF, recordEvent } from "@siteoffer/core";
+import {
+  type Clock,
+  captureProposalImageAssets,
+  createDesign,
+  DEFAULT_DESIGN_BRIEF,
+  ImageAssetError,
+  recordEvent,
+} from "@siteoffer/core";
 import { companies, type DbOrTx, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { findGenerationJob, type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { CallScript, Faq, GenerationInput, ProposalText, SiteGenerationOutput } from "@siteoffer/schemas";
@@ -10,6 +17,7 @@ import { emptyProposalContent, type ProposalContent } from "../content.ts";
 import type { JobQueue } from "../deps.ts";
 import { contentSiteUrl, withDesignReference } from "../design.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
+import { applyProposalMaterials, prepareProposalMaterials } from "../proposal-materials.ts";
 import { type ProposalPayload, type ProposalPayloadInput, proposalPayloadSchema, QUEUES, stepKeys } from "../queues.ts";
 import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
 
@@ -89,22 +97,35 @@ export const proposalStep: StepDefinition<
       if (version.status !== "generating") {
         throw new PreconditionError(`提案版 ${version.id} はすでに ${version.status}`);
       }
-      await tx
+      const previous = version.content as ProposalContent;
+      const demoImageAssets = previous.demoImageAssets === undefined ? [] : previous.demoImageAssets;
+      const [updated] = await tx
         .update(proposalVersions)
         .set({
-          content: { ...(version.content as object), designVersionId: design.id, designSha256: design.imageSha256 },
+          content: { ...previous, designVersionId: design.id, designSha256: design.imageSha256, demoImageAssets },
         })
-        .where(and(eq(proposalVersions.id, version.id), eq(proposalVersions.status, "generating")));
-      return version;
+        .where(and(eq(proposalVersions.id, version.id), eq(proposalVersions.status, "generating")))
+        .returning();
+      if (!updated) throw new PreconditionError("提案版の状態が変わりました");
+      return updated;
     });
     // 古いビルドが遅れて書き込んでも、新しい試行の参照画像・成果物を上書きできない。
     const workDir = path.join(deps.demoArtifactRoot, company.id, version.id, `attempt-${ctx.attempt}`);
     await ctx.assertCurrent();
-    const input = await withDesignReference(
-      await deps.buildGenerationInput(db, { company, audit }),
-      design,
-      path.join(workDir, "reference"),
-    );
+    let material: Awaited<ReturnType<typeof prepareProposalMaterials>>;
+    try {
+      material = await prepareProposalMaterials(
+        db,
+        company.id,
+        (version.content as ProposalContent).demoImageAssets,
+        workDir,
+        await deps.buildGenerationInput(db, { company, audit }),
+      );
+    } catch (error) {
+      if (error instanceof ImageAssetError) throw new PermanentError(error.message);
+      throw error;
+    }
+    const input = await withDesignReference(material.input, design, path.join(workDir, "reference"));
     const genDeps: GenerationDeps = {
       db,
       clock,
@@ -143,6 +164,7 @@ export const proposalStep: StepDefinition<
       ...emptyProposalContent({ idempotencyKey: key, auditId: audit.id, revision: payload.revision }),
       designVersionId: design.id,
       designSha256: design.imageSha256,
+      demoImageAssets: (version.content as ProposalContent).demoImageAssets,
       proposalText: out.proposal_text,
       callScript: out.call_script,
       faq: out.faq,
@@ -154,7 +176,7 @@ export const proposalStep: StepDefinition<
     await ctx.assertCurrent();
     const built = await deps.siteBuilder.buildDemo({
       siteInput: {
-        ...siteGenerationToSiteInput(out.demo_site, { mode: "demo" }),
+        ...applyProposalMaterials(siteGenerationToSiteInput(out.demo_site, { mode: "demo" }), material.images),
         updatesUrl: contentSiteUrl(company.id, "demo"),
       },
       workDir,
@@ -294,7 +316,10 @@ export async function ensureProposalVersion(
         version: (m?.max ?? 0) + 1,
         status: "generating",
         auditId: input.auditId,
-        content: emptyProposalContent(input),
+        content: {
+          ...emptyProposalContent(input),
+          demoImageAssets: await captureProposalImageAssets(tx, input.companyId),
+        },
         createdAt: clock.now(),
       })
       .returning();
