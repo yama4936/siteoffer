@@ -10,6 +10,7 @@
 ## ローカルで起動する
 
 **Dockerがない環境でデモを見る場合**は `pnpm demo` を使います（モックの生成器と架空企業のフィクスチャだけで動き、実在企業・実API・AWSは使いません）。
+正常停止後は、同じポート設定で `pnpm demo:resume` を実行すると、初期ユーザー・条件を再投入せず既存データで再開できます。
 手順・デモ用アカウント・画面の流れは [demo/README.md](demo/README.md) を参照してください。
 実在企業の評価結果（reports/sites、Git対象外）は、`pnpm reports:import` でDBに取り込み、`pnpm demo:promote-imported` でデモのDBに限り営業可能まで進められます（提案文・デモサイトはモックのまま。デモで表示するのは85点以下）。接続先の指定などは [docs/DECISIONS.md](docs/DECISIONS.md) の作業AD・AEを参照してください。
 

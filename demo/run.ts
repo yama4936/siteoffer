@@ -8,6 +8,7 @@
  * ルートの .env は読まない（実APIのキーを子プロセスへ渡さないため、該当の環境変数は空にする）。
  *
  *   pnpm demo           起動（データは .data/demo に残る）
+ *   pnpm demo:resume    既存DB・共有復旧鍵で継続起動（初期データを投入しない）
  *   pnpm demo:reset     .data/demo を消してから起動（作り直し）
  */
 import { type ChildProcess, spawn } from "node:child_process";
@@ -19,6 +20,7 @@ import { assertPlainDirectory } from "./backup/bundle.ts";
 import { alive, readOwner } from "./backup/owner.ts";
 import { DEMO_DATABASE_URL, DEMO_PATHS, DEMO_PORTS, REPO_ROOT } from "./paths.ts";
 import { pnpmCommand } from "./pnpm-command.ts";
+import { assertResumeProfile } from "./resume.ts";
 import { demoSearchEnv } from "./search-env.ts";
 import { demoShareKey } from "./share-key.ts";
 
@@ -28,6 +30,8 @@ if (realDiscovery && !process.env.NTA_APPLICATION_ID?.trim())
   throw new Error("NTA_APPLICATION_ID を .env に設定してください。既存データは変更していません");
 
 const reset = process.argv.includes("--reset");
+const resume = process.argv.includes("--resume");
+if (resume && reset) throw new Error("継続起動と初期化は同時に指定できません。");
 
 interface Proc {
   name: string;
@@ -209,12 +213,14 @@ async function main() {
   }
 
   const env = baseEnv();
+  if (resume) await assertResumeProfile(DEMO_PATHS);
   const shareTokenKey = await demoShareKey(DEMO_PATHS.data);
   const node = process.execPath;
 
   start("db", node, ["--import", "tsx", "demo/db-server.ts"], env);
   await waitPort(DEMO_PORTS.db, "デモ用DB", process.platform === "win32" ? 600_000 : 120_000);
-  await runOnce("seed", node, ["--import", "tsx", "demo/seed.ts"], env);
+  if (resume) log("既存DBを継続使用する（初期ユーザー・条件の投入はしない）");
+  else await runOnce("seed", node, ["--import", "tsx", "demo/seed.ts"], env);
 
   // トンネル等で外から見せるときは、公開URLを DEMO_PUBLIC_PREVIEW_URL で渡す（web側は WEB_BASE_URL、
   // プレビューの埋め込み許可は PREVIEW_FRAME_ANCESTORS をそのまま引き継ぐ）
