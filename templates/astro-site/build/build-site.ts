@@ -101,14 +101,22 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
+async function removeBuildWork(dir: string, parent: string, prefix: string) {
+  const target = path.resolve(dir);
+  if (path.dirname(target) !== path.resolve(parent) || !path.basename(target).startsWith(prefix))
+    throw new Error("ビルド用一時領域を確認できないため削除しません");
+  await rm(target, { recursive: true, force: true });
+}
+
 function runAstro(
   args: string[],
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
+  cwd: string,
 ): Promise<{ code: number | null; log: string }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [ASTRO_BIN, ...args], {
-      cwd: TEMPLATE_DIR,
+      cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -159,6 +167,7 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
   if (unsafe) return fail("unsafe-out-dir", unsafe, { mode });
 
   const work = await mkdtemp(path.join(tmpdir(), "siteoffer-astro-"));
+  let runtimeDir: string | undefined;
   try {
     // 画像を一時 public/images へコピーし、src を出力内の相対パスに書き換える
     const input = structuredClone(v.input);
@@ -208,10 +217,17 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
       SITEOFFER_PUBLIC_DIR: publicDir,
       SITEOFFER_CACHE_DIR: path.join(work, "cache"),
     };
+    // Astro falls back to <cwd>/.astro for prerender output outside cwd. A shared cwd makes
+    // concurrent builds overwrite/delete each other's bundle. Stay below the template for
+    // node_modules resolution, but give each invocation its own cwd (also writable in Docker).
+    const runtimeParent = path.join(TEMPLATE_DIR, ".astro");
+    await mkdir(runtimeParent, { recursive: true });
+    runtimeDir = await mkdtemp(path.join(runtimeParent, "siteoffer-build-"));
     const { code, log } = await runAstro(
       ["build", "--root", TEMPLATE_DIR, "--outDir", outDir],
       childEnv,
       opts.timeoutMs ?? 120_000,
+      runtimeDir,
     );
     if (code !== 0) {
       return fail("astro-build-failed", `astro build が失敗した（終了コード ${code}）`, { mode, log });
@@ -221,7 +237,8 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     }
     return { ok: true, mode, outDir, markers: v.markers, log };
   } finally {
-    await rm(work, { recursive: true, force: true });
+    if (runtimeDir) await removeBuildWork(runtimeDir, path.join(TEMPLATE_DIR, ".astro"), "siteoffer-build-");
+    await removeBuildWork(work, tmpdir(), "siteoffer-astro-");
   }
 }
 
