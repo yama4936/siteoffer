@@ -16,6 +16,8 @@ export { ArticleHistoryError, loadArticleHistory, loadArticleRevision } from "./
 export type { ArticleImage, ArticleImageChoice } from "./content-images.ts";
 export { getArticleEditorImage, listArticleImageChoices } from "./content-images.ts";
 export * from "./content-import.ts";
+export * from "./content-legacy.ts";
+export * from "./content-legacy-path.ts";
 export * from "./content-management.ts";
 export * from "./content-published.ts";
 export * from "./content-workspace.ts";

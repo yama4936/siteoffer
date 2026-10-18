@@ -37,6 +37,11 @@ export default async function ArticleImportPage({ params }: { params: Promise<{ 
         </Link>
       </p>
       <ArticleImport companyId={companyId} companyName={company.name} />
+      <p className="my-5 text-sm">
+        <Link href={`/ops/content/${companyId}/migration`} className="text-primary underline">
+          取り込み後に旧URLの引き継ぎを確認
+        </Link>
+      </p>
       <Section title="取り込み履歴" description="直近10回の受付です。既存の記事や掲載設定は変更していません。">
         {!history.length ? (
           <p className="text-sm text-muted-foreground">取り込みはまだありません。</p>

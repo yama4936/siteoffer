@@ -37,6 +37,9 @@ export const contentEntries = pgTable(
       .references(() => companies.id),
     slug: text("slug").notNull(),
     sourceUrl: text("source_url"),
+    /** Explicit ops opt-in. Null keeps imported source metadata private and inactive. */
+    legacyPath: text("legacy_path"),
+    legacyRevision: integer("legacy_revision").notNull().default(0),
     originalPublishedAt: ts("original_published_at"),
     importId: uuid("import_id").references(() => contentImports.id),
     currentRevision: integer("current_revision").notNull().default(1),
@@ -48,6 +51,7 @@ export const contentEntries = pgTable(
   },
   (t) => [
     uniqueIndex("content_company_slug").on(t.companyId, t.slug),
+    uniqueIndex("content_company_legacy_path").on(t.companyId, t.legacyPath),
     index("content_company").on(t.companyId),
     index("content_company_updated").on(t.companyId, t.updatedAt, t.id),
   ],

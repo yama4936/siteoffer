@@ -112,6 +112,9 @@ export async function ContentWorkspacePage({
           </Link>
           {audience === "ops" && (
             <>
+              <Link className="design-button secondary" href={`/ops/content/${companyId}/migration`}>
+                旧URLの引き継ぎ
+              </Link>
               <Link className="design-button secondary" href={`/ops/content/${companyId}/import`}>
                 既存の記事を取り込む
               </Link>

@@ -16,7 +16,9 @@ const config: NextConfig = {
   // Server Function arguments may contain private drafts or login credentials.
   logging: {
     serverFunctions: false,
-    incomingRequests: { ignore: [/\/review(?:\/|$)/, /\/customer\/activate(?:\/|$)/, /\/account\/recovery(?:\/|$)/] },
+    incomingRequests: {
+      ignore: [/\/review(?:\/|$)/, /\/customer\/activate(?:\/|$)/, /\/account\/recovery(?:\/|$)/, /^\/published\//],
+    },
   },
   distDir: process.env.SITEOFFER_NEXT_DIST_DIR || ".next",
   experimental: { serverActions: { bodySizeLimit: "16mb" } },
