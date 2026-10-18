@@ -1722,3 +1722,150 @@
     flex-shrink: 0;
   }
 }
+.review-changes {
+  padding: 6px 0 24px;
+}
+.review-change-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.review-change-heading h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.review-change-help {
+  margin: 6px 0 12px;
+  color: #52647f;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.review-change-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+  margin: 20px 0 8px;
+  padding: 14px 16px;
+  background: #f0f5ff;
+  border: 1px solid #d7e2f6;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.review-change-summary strong {
+  color: #284dc4;
+}
+.review-change-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0;
+  font-size: 12px;
+}
+.review-change-group {
+  margin-top: 24px;
+}
+.review-change-group h4 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dce4f0;
+  font-size: 14px;
+}
+.review-change-group h4 span {
+  color: #52647f;
+  font-size: 12px;
+  font-weight: 400;
+}
+.review-change-item {
+  margin: 12px 0 18px;
+  min-width: 0;
+}
+.review-change-item h5 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.review-change-item dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.review-change-item dl > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dce4f0;
+  border-radius: 6px;
+  background: #f8fafd;
+}
+.review-change-item dl > div:last-child {
+  border-color: #b9d9c8;
+  background: #f1f9f5;
+}
+.review-change-item dt {
+  margin-bottom: 8px;
+  color: #52647f;
+  font-size: 11px;
+}
+.review-change-item dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.review-change-warning,
+.review-change-empty {
+  padding: 12px;
+  background: #fff8e8;
+  border: 1px solid #e4d3a4;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.review-change-sites {
+  margin-top: 24px;
+}
+.review-change-sites summary {
+  cursor: pointer;
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+@media (max-width: 700px) {
+  .review-change-item dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.review-full-section {
+  margin: 20px 0;
+  border: 1px solid #dce4f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.review-full-section > summary {
+  padding: 14px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  background: #f8fafd;
+}
+.review-full-message {
+  padding: 0 14px;
+}
+.review-full-fields {
+  margin: 0;
+  padding: 0 14px;
+}
+.review-full-field {
+  padding: 14px 0;
+  border-top: 1px solid #e7edf5;
+}
+.review-full-fields dd {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

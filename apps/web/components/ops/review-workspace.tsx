@@ -3,11 +3,12 @@
 import { ArrowRight, Check, ChevronRight, ExternalLink, FileText, Monitor, Search, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { type ReactNode, useEffect, useRef, useState, useTransition } from "react";
 import { commitReviewDraftAction, loadReviewDraftAction, saveReviewDraftAction } from "@/app/(ops)/ops/review/actions";
 import { SitePreview } from "@/components/shell/site-preview";
 import { usePersonalDraft } from "@/components/use-personal-draft";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
+import type { ReviewComparison } from "@/lib/ops/review-comparison";
 import type { ReviewDesign } from "@/lib/ops/review-design";
 import {
   EMPTY_REVIEW,
@@ -16,6 +17,7 @@ import {
   type ReviewDraftSnapshot,
   type ReviewValues,
 } from "@/lib/ops/review-draft-types";
+import { ReviewChanges } from "./review-changes";
 import { ReviewDesignPreview } from "./review-design-preview";
 
 type Item = {
@@ -64,6 +66,7 @@ type Selected = {
     hasDemo: boolean;
     note: string | null;
     design: ReviewDesign | null;
+    comparison: ReviewComparison;
   } | null;
 };
 function record(value: unknown): Record<string, unknown> {
@@ -78,11 +81,13 @@ export function ReviewWorkspace({
   selected: c,
   queue,
   initialDraft,
+  documents,
 }: {
   items: Item[];
   selected: Selected | null;
   queue: ReviewQueue;
   initialDraft: ReviewDraftSnapshot;
+  documents: ReactNode;
 }) {
   function reviewHref(companyId: string, versionId?: string | null) {
     const q = new URLSearchParams(queue.context);
@@ -90,7 +95,9 @@ export function ReviewWorkspace({
     if (versionId) q.set("version", versionId);
     return `/ops/review?${q}`;
   }
-  const [tab, setTab] = useState("compare");
+  const [tab, setTab] = useState(
+    c?.version?.comparison.status === "ready" && c.version.comparison.basis === "revision" ? "changes" : "compare",
+  );
   const [device, setDevice] = useState("desktop");
   const router = useRouter();
   const version = c?.version;
@@ -356,6 +363,7 @@ export function ReviewWorkspace({
                 {[
                   ["compare", "サイト比較"],
                   ["design", "画像案と比較"],
+                  ["changes", "前の提案との変更点"],
                   ["proposal", "提案内容"],
                   ["assets", "企業情報・素材"],
                   ["history", "履歴"],
@@ -371,7 +379,7 @@ export function ReviewWorkspace({
                   </button>
                 ))}
               </div>
-              {(tab === "compare" || tab === "design") && (
+              {(tab === "compare" || tab === "design" || tab === "changes") && (
                 <div className="device-switch">
                   <button
                     aria-label="PC表示"
@@ -397,6 +405,17 @@ export function ReviewWorkspace({
               )}
             </div>
             <div className="review-panel">
+              {tab === "changes" && version && (
+                <ReviewChanges
+                  comparison={version.comparison}
+                  currentVersion={version.version}
+                  currentPreview={preview}
+                  sourceHref={
+                    version.comparison.status === "ready" ? reviewHref(c.id, version.comparison.sourceId) : "#"
+                  }
+                  device={device}
+                />
+              )}
               {tab === "design" && (
                 <>
                   <div className="review-design-intro">
@@ -441,26 +460,12 @@ export function ReviewWorkspace({
                   </div>
                 </>
               )}
-              {tab === "proposal" && (
-                <div className="review-document">
-                  <div className="document-kicker">PROPOSAL / 第{version?.version ?? "—"}版</div>
-                  <h3>{c.name}への改善提案</h3>
-                  <p>{text(proposal.summary) || "この版の提案文章はまだありません。"}</p>
-                  {measures.map((m, i) => (
-                    <article key={text(m.title)}>
-                      <h4>
-                        {String(i + 1).padStart(2, "0")}　{text(m.title)}
-                      </h4>
-                      <dl>
-                        <dt>現在の課題</dt>
-                        <dd>{text(m.problem)}</dd>
-                        <dt>改善内容</dt>
-                        <dd>{text(m.improvement)}</dd>
-                      </dl>
-                    </article>
-                  ))}
-                </div>
-              )}
+              {tab === "proposal" &&
+                (documents || (
+                  <div className="review-document">
+                    <p>この版の資料はまだありません。</p>
+                  </div>
+                ))}
               {tab === "assets" && (
                 <div className="review-document">
                   <h3>企業情報</h3>

@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { ProposalDocument } from "@/components/ops/proposal-document";
 import { ReviewWorkspace } from "@/components/ops/review-workspace";
 import { Flash, Forbidden, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { isUuid } from "@/lib/ops/form";
+import { reviewContentSummary } from "@/lib/ops/proposal-display-fields";
 import { getCompanyDetail } from "@/lib/ops/queries";
+import { buildReviewComparison } from "@/lib/ops/review-comparison";
 import { readReviewDesign } from "@/lib/ops/review-design";
 import { EMPTY_REVIEW_DRAFT } from "@/lib/ops/review-draft-types";
 import { loadReviewDraft } from "@/lib/ops/review-drafts";
@@ -56,6 +59,7 @@ export default async function ReviewPage({
       <ReviewWorkspace
         key={`${selectedId}-${version?.id ?? "none"}`}
         initialDraft={initialDraft}
+        documents={version ? <ProposalDocument content={version.content} /> : null}
         items={inbox.value.items}
         queue={{
           view: inbox.value.view,
@@ -101,10 +105,11 @@ export default async function ReviewPage({
                       id: version.id,
                       version: version.version,
                       status: version.status,
-                      content: version.content,
+                      content: reviewContentSummary(version.content),
                       hasDemo: !!version.demoArtifactDir,
                       note: version.reviewNote,
                       design,
+                      comparison: buildReviewComparison(version, d.proposalVersions),
                     }
                   : null,
               }
