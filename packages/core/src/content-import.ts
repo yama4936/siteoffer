@@ -40,7 +40,7 @@ async function allowed(db: DbOrTx, actor: Actor | null, lock = false) {
   return !!(await (lock ? q.for("share") : q))[0];
 }
 async function plan(db: DbOrTx, source: ArticleImportSource, actor: Actor): Promise<ArticleImportPreview> {
-  const parsed = parseArticleImport(source.text, source.format);
+  const parsed = parseArticleImport(source.text, source.format, source.wordpressCategory);
   if (parsed.exportedCompanyId && parsed.exportedCompanyId !== source.companyId)
     parsed.errors.push({ row: 0, message: "別企業の書き出しです。対象企業を確認してください" });
   for (const [i, a] of parsed.articles.entries())

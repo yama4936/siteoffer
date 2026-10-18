@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fictional WXR fixture authored for SiteOffer tests. No live site was exported. -->
+<rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>架空工務店のお知らせ</title>
+    <wp:wxr_version>1.2</wp:wxr_version>
+    <item>
+      <title><![CDATA[見学会のお知らせ]]></title>
+      <link>https://wordpress-fixture.example.test/news/open-house/</link>
+      <dc:creator><![CDATA[fixture-author-not-imported]]></dc:creator>
+      <content:encoded><![CDATA[<!-- wp:paragraph --><p>木の住まいの見学会をご案内します。</p><!-- /wp:paragraph --><p>開催内容は<a href="https://wordpress-fixture.example.test/details/">こちら</a>で確認できます。</p><img src="https://wordpress-fixture.example.test/photo.jpg" alt="見学会の写真">]]></content:encoded>
+      <wp:post_id>101</wp:post_id>
+      <wp:post_name><![CDATA[open-house]]></wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <wp:post_password><![CDATA[]]></wp:post_password>
+      <wp:post_date_gmt>2026-01-14 15:00:00</wp:post_date_gmt>
+    </item>
+    <item>
+      <title><![CDATA[営業日のご案内 & ご相談について]]></title>
+      <link>https://wordpress-fixture.example.test/2026/01/営業日/</link>
+      <content:encoded><![CDATA[<h2>営業日のご案内</h2><p>お知らせの内容を確認してから掲載します。</p><ul><li>お問い合わせは既存の窓口へ</li><li>掲載内容は架空の検証用です</li></ul>]]></content:encoded>
+      <wp:post_id>202</wp:post_id>
+      <wp:post_name><![CDATA[%e5%96%b6%e6%a5%ad%e6%97%a5]]></wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <wp:post_password><![CDATA[]]></wp:post_password>
+      <wp:post_date_gmt>2026-01-15 00:00:00</wp:post_date_gmt>
+    </item>
+    <item>
+      <title>private-title-not-imported</title>
+      <content:encoded><![CDATA[private-body-not-imported]]></content:encoded>
+      <wp:post_type>post</wp:post_type><wp:status>private</wp:status>
+    </item>
+    <item>
+      <title>attachment-not-imported</title>
+      <wp:post_type>attachment</wp:post_type><wp:status>inherit</wp:status>
+    </item>
+  </channel>
+</rss>

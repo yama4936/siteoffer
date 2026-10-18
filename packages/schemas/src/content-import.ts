@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readWordPressImport } from "./content-wordpress.ts";
 export const ARTICLE_IMPORT_MAX_BYTES = 2 * 1024 * 1024;
 export const ARTICLE_IMPORT_MAX_ROWS = 100;
 export const ARTICLE_IMPORT_TEMPLATE =
@@ -67,10 +68,11 @@ export const importedArticleSchema = z.object({
   originalPublishedAt: date.nullable(),
 });
 export type ImportedArticle = z.infer<typeof importedArticleSchema>;
-export type ArticleImportSource = { companyId: string; format: "csv" | "json"; fileName: string; text: string };
+export type ArticleImportSource = z.infer<typeof articleImportSourceSchema>;
 export const articleImportSourceSchema = z.strictObject({
   companyId: z.string().uuid().toLowerCase(),
-  format: z.enum(["csv", "json"]),
+  format: z.enum(["csv", "json", "wordpress"]),
+  wordpressCategory: z.enum(["news", "blog"]).optional(),
   fileName: z
     .string()
     .trim()
@@ -136,7 +138,11 @@ function csv(text: string): string[][] {
   if (field.length || row.length || closed) line();
   return rows;
 }
-export function parseArticleImport(text: string, format: "csv" | "json"): ParsedArticleImport {
+export function parseArticleImport(
+  text: string,
+  format: ArticleImportSource["format"],
+  wordpressCategory: "news" | "blog" = "blog",
+): ParsedArticleImport {
   const result: ParsedArticleImport = { articles: [], errors: [], warnings: [], exportedCompanyId: null };
   if (utf8Length(text) > ARTICLE_IMPORT_MAX_BYTES) {
     result.errors.push({ row: 0, message: "ファイルは2MB以内にしてください" });
@@ -161,6 +167,10 @@ export function parseArticleImport(text: string, format: "csv" | "json"): Parsed
           if (r.length !== headers.length) throw Error(`CSVの${i + 2}行目で列数が一致しません`);
           return Object.fromEntries(headers.map((h, n) => [h, r[n]]));
         });
+    } else if (format === "wordpress") {
+      const imported = readWordPressImport(text, wordpressCategory);
+      raw = imported.articles;
+      result.warnings.push(...imported.warnings);
     } else {
       const data: unknown = JSON.parse(text);
       if (Array.isArray(data)) raw = data;

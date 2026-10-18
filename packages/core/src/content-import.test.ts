@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   auditEvents,
   companies,
@@ -79,6 +80,34 @@ it("取り込みは下書きだけを作り、元日付・出典と履歴を保�
   });
   expect(await db.select().from(contentImports)).toHaveLength(1);
   expect(await db.select().from(contentRevisions)).toHaveLength(1);
+});
+it("WordPressの公開投稿だけを下書きへ取り込み、再送と分類変更で既存の記事を上書きしない", async () => {
+  const s = await setup();
+  const source = {
+    companyId: s.companyId,
+    fileName: "wordpress.xml",
+    format: "wordpress" as const,
+    wordpressCategory: "news" as const,
+    text: readFileSync(new URL("../../../fixtures/content-import/wordpress.xml", import.meta.url), "utf8"),
+  };
+  const preview = must(await previewArticleImport(db, s.ops, source));
+  expect(preview.errors).toEqual([]);
+  expect(preview.newCount).toBe(2);
+  const input = { ...source, fingerprint: preview.fingerprint, requestId: randomUUID(), confirmed: true as const };
+  const saved = must(await commitArticleImport(db, clock, s.ops, input));
+  expect(saved.importedCount).toBe(2);
+  expect(must(await commitArticleImport(db, clock, s.ops, input)).alreadyRecorded).toBe(true);
+  const entries = await db.select().from(contentEntries);
+  expect(entries).toHaveLength(2);
+  expect(entries.every((e) => e.publishedRevision === null && e.legacyPath === null)).toBe(true);
+  expect(entries.find((e) => e.slug === "open-house")?.originalPublishedAt?.toISOString()).toBe(
+    "2026-01-14T15:00:00.000Z",
+  );
+  expect((await db.select().from(contentRevisions)).every((r) => r.category === "news")).toBe(true);
+  expect(must(await previewArticleImport(db, s.ops, source)).rows.every((r) => r.status === "identical")).toBe(true);
+  const changed = must(await previewArticleImport(db, s.ops, { ...source, wordpressCategory: "blog" }));
+  expect(changed.rows.every((r) => r.status === "conflict")).toBe(true);
+  expect(JSON.stringify(entries)).not.toContain("private-title");
 });
 it("既存の同一・異なる内容を区別し、掲載版も下書きも上書きしない", async () => {
   const s = await setup();

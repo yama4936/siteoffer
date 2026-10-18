@@ -16,7 +16,8 @@ export function ArticleImport({ companyId, companyName }: { companyId: string; c
     [confirmed, setConfirmed] = useState(false),
     [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null),
     [done, setDone] = useState(false),
-    [stale, setStale] = useState(false);
+    [stale, setStale] = useState(false),
+    [wordpressCategory, setWordpressCategory] = useState<"news" | "blog">("blog");
   const receipt = useRef<string | null>(null),
     sending = useRef(false);
   async function inspect(input: ArticleImportSource) {
@@ -42,14 +43,21 @@ export function ArticleImport({ companyId, companyName }: { companyId: string; c
     try {
       if (file.size > ARTICLE_IMPORT_MAX_BYTES) throw Error("ファイルは2MB以内にしてください");
       const extension = file.name.split(".").pop()?.toLowerCase();
-      if (extension !== "csv" && extension !== "json") throw Error("CSVまたはJSONファイルを選んでください");
+      if (extension !== "csv" && extension !== "json" && extension !== "xml")
+        throw Error("CSV・JSON・WordPress XMLファイルを選んでください");
       let text: string;
       try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
       } catch {
         throw Error("UTF-8で保存したファイルを選んでください。Shift-JISのCSVはUTF-8へ変換してください。");
       }
-      const input = { companyId, fileName: file.name, format: extension, text } satisfies ArticleImportSource;
+      const input = {
+        companyId,
+        fileName: file.name,
+        format: extension === "xml" ? "wordpress" : extension,
+        text,
+        ...(extension === "xml" ? { wordpressCategory } : {}),
+      } satisfies ArticleImportSource;
       setSource(input);
       await inspect(input);
     } catch (e) {
@@ -100,7 +108,7 @@ export function ArticleImport({ companyId, companyName }: { companyId: string; c
         <p>
           対象企業：<strong>{companyName}</strong>
         </p>
-        <p>UTF-8のCSV、記事のJSON配列、またはこの企業から書き出したJSONを使用できます。1回100記事・2MBまで。</p>
+        <p>UTF-8のCSV・JSON・WordPressのエクスポートXMLを使用できます。1回100記事・2MBまで。</p>
         <p>本文はテキストとして取り込みます。画像・添付ファイル・装飾・旧URLからの転送は別途確認してください。</p>
         <Button variant="outline" size="sm" type="button" onClick={template}>
           CSVテンプレートをダウンロード
@@ -116,15 +124,42 @@ export function ArticleImport({ companyId, companyName }: { companyId: string; c
               同じURL名の記事は、内容が異なっていてもスキップします。既存の記事・掲載版は変更しません。ファイル内でURL名が重複する場合や不正な行がある場合は、修正してから再確認してください。
             </p>
             <p>JSONの書き出しを戻す場合は現在の下書き版だけを読みます。過去の版・掲載設定は移行しません。</p>
+            <p>
+              WordPressでは「ツール → エクスポート → 投稿」から、公開済みの投稿を期間で分けて書き出せます。WXR
+              1.0〜1.2に対応します。公開投稿だけを下書きにし、元URLとUTC掲載日時を保持します。固定ページ・カスタム投稿・添付・非公開・予約・パスワード付き投稿は取り込みません。
+            </p>
+            <p>
+              WordPressの本文はテキストへ変換します。画像や埋め込みは確認用の印を残します。装飾・コメント・作者・カスタム項目を移行せず、外部ファイルを取得しません。日本語などのURL名はwp-投稿IDへ変換し、旧URLの引き継ぎで確認できます。
+            </p>
           </div>
         </details>
+        <label className="block font-medium">
+          WordPress投稿の取り込み先
+          <select
+            value={wordpressCategory}
+            disabled={busy || done}
+            className="ml-2 rounded border p-2"
+            onChange={(event) => {
+              const category = event.target.value === "news" ? "news" : "blog";
+              setWordpressCategory(category);
+              if (source?.format === "wordpress") {
+                const next: ArticleImportSource = { ...source, wordpressCategory: category };
+                setSource(next);
+                start(() => inspect(next));
+              }
+            }}
+          >
+            <option value="blog">ブログ</option>
+            <option value="news">お知らせ</option>
+          </select>
+        </label>
         <label htmlFor={id} className="block font-medium">
           記事ファイル
         </label>
         <input
           id={id}
           type="file"
-          accept=".csv,.json,text/csv,application/json"
+          accept=".csv,.json,.xml,text/csv,application/json,text/xml,application/xml"
           disabled={busy}
           className="block w-full min-w-0 text-sm"
           onChange={(e) => {
@@ -157,11 +192,16 @@ export function ArticleImport({ companyId, companyName }: { companyId: string; c
           <p className="text-sm">
             新しい下書き {preview.newCount}件 / 既存のためスキップ {preview.skippedCount}件
           </p>
-          {preview.warnings.map((w) => (
-            <p key={w} className="rounded-lg bg-amber-50 p-3 text-sm">
-              {w}
-            </p>
-          ))}
+          {preview.warnings.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+              <h3 className="font-semibold">取り込み時の確認事項</h3>
+              <ul className="mt-2 list-disc space-y-2 pl-5 leading-6">
+                {preview.warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {!!preview.errors.length && (
             <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
               <p className="font-semibold">修正が必要です。この状態では保存しません。</p>
