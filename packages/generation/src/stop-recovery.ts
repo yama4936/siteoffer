@@ -1,6 +1,6 @@
 import { type Clock, recordEvent } from "@siteoffer/core";
 import { type Db, type DbOrTx, generationJobs } from "@siteoffer/db";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
 import { sandboxStopReferenceSchema } from "./sandbox/types.ts";
 import type { Generator, GeneratorResult } from "./types.ts";
 
@@ -11,8 +11,23 @@ const unresolved = (kind: string) =>
     eq(generationJobs.errorCode, "sandbox_stop_unconfirmed"),
   );
 
-export async function hasUnconfirmedGenerationStop(db: DbOrTx, kind: string) {
-  const rows = await db.select({ id: generationJobs.id }).from(generationJobs).where(unresolved(kind)).limit(1);
+export async function hasUnconfirmedGenerationStop(db: DbOrTx, kind: string, now: Date) {
+  const rows = await db
+    .select({ id: generationJobs.id })
+    .from(generationJobs)
+    .where(
+      or(
+        unresolved(kind),
+        kind === "codex"
+          ? and(
+              eq(generationJobs.generator, kind),
+              eq(generationJobs.status, "running"),
+              or(isNull(generationJobs.leaseUntil), lte(generationJobs.leaseUntil, now)),
+            )
+          : undefined,
+      ),
+    )
+    .limit(1);
   return rows.length > 0;
 }
 

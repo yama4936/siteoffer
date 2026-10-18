@@ -30,7 +30,7 @@ beforeEach(async () => {
     JSON.stringify({ ...result, executionId: "11111111-1111-4111-8111-111111111111" }),
   );
   mock.spawn.mockReset().mockImplementation((_command: string, args: string[]) => {
-    const child = Object.assign(new EventEmitter(), { stderr: new EventEmitter(), kill: vi.fn() });
+    const child = Object.assign(new EventEmitter(), { pid: 414141, stderr: new EventEmitter(), kill: vi.fn() });
     queueMicrotask(async () => {
       if (mode === "spawn-error") {
         child.emit("error", new Error("test-only unavailable process"));
@@ -61,7 +61,7 @@ afterEach(async () => {
     throw Error("Unexpected test directory");
   await rm(resolved, { recursive: true, force: true });
 });
-async function run() {
+async function run(saveStopReference?: import("../src/sandbox/types.ts").SandboxRunSpec["saveStopReference"]) {
   return new DockerSandboxRunner({
     image: "test-only",
     network: "none",
@@ -70,6 +70,7 @@ async function run() {
     jobId: "test-job",
     workDir: dir,
     timeoutMs: 1000,
+    ...(saveStopReference ? { saveStopReference } : {}),
     request: {
       prompt: "test",
       outputSchema: null,
@@ -113,4 +114,40 @@ it("the isolated runtime pins the same SDK and schema library as the host", asyn
     host = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   expect(runtime.dependencies["@openai/codex-sdk"]).toBe(host.dependencies["@openai/codex-sdk"]);
   expect(runtime.dependencies.zod).toBe(host.dependencies.zod);
+});
+it("does not launch before reference persistence, then records PID and terminal evidence", async () => {
+  const references: import("../src/sandbox/types.ts").SandboxStopReference[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = run(async (ref) => {
+    references.push({ ...ref });
+    if (references.length === 1) await gate;
+  });
+  await expect.poll(() => references.length).toBe(1);
+  expect(mock.spawn).not.toHaveBeenCalled();
+  expect(references[0]).toMatchObject({ clientPid: null, clientClosed: false, stopped: false });
+  release();
+  expect((await pending).ok).toBe(true);
+  expect(references[1]).toMatchObject({ clientPid: 414141, clientClosed: false, stopped: false });
+  expect(references.at(-1)).toMatchObject({ clientPid: 414141, clientClosed: true, stopped: true });
+  expect(new Set(references.map((r) => r.executionId)).size).toBe(1);
+});
+it("a rejected initial registration never launches Docker", async () => {
+  expect(
+    await run(async () => {
+      throw Error("test-only persistence failure");
+    }),
+  ).toMatchObject({ ok: false, stopped: true });
+  expect(mock.spawn).not.toHaveBeenCalled();
+});
+it("a rejected PID registration discards the successful receipt and confirms cleanup", async () => {
+  let calls = 0;
+  expect(
+    await run(async () => {
+      if (++calls === 2) throw Error("test-only lease loss");
+    }),
+  ).toMatchObject({ ok: false, error: "aborted", stopped: true, result: null });
+  expect(mock.spawn.mock.calls.some((c) => c[1][0] === "rm")).toBe(true);
 });

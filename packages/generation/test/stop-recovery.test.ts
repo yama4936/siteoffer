@@ -85,3 +85,9 @@ it("never cleans up a live client, a different host, or a forged container name"
   expect(await recoverDockerExecution("docker", {}, { ...ref, containerName: "unrelated-container" })).toBe(false);
   expect(fake.spawn).not.toHaveBeenCalled();
 });
+it("accepts host-recorded terminal evidence from another host without running Docker there", async () => {
+  expect(
+    await recoverDockerExecution("docker", {}, { ...ref, host: "other-host-test", stopped: true, clientClosed: true }),
+  ).toBe(true);
+  expect(fake.spawn).not.toHaveBeenCalled();
+});

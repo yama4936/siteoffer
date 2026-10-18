@@ -32,6 +32,8 @@ export interface GenerateRequest<T> {
   /** 1回の試行のタイムアウト（GenerationLimits.timeoutMs）。実行場所（コンテナ）の打ち切りに使う */
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Host-only lifecycle record. It must settle before a sandbox may start. */
+  saveStopReference?: (reference: SandboxStopReference) => Promise<void>;
 }
 
 export type GeneratorErrorCode =

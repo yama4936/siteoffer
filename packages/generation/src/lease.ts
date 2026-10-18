@@ -1,6 +1,7 @@
 import { type Clock, recordEvent } from "@siteoffer/core";
 import { type DbOrTx, generationJobs } from "@siteoffer/db";
-import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lte, or } from "drizzle-orm";
+import { sandboxStopReferenceSchema } from "./sandbox/types.ts";
 
 export const GENERATION_LEASE_MS = 120_000;
 export const GENERATION_HEARTBEAT_MS = 20_000;
@@ -26,11 +27,21 @@ export async function renewGenerationLease(db: DbOrTx, clock: Clock, id: string)
   });
 }
 
-/** 期限を過ぎた未完了ジョブだけを失敗にする。成功済みの出力や同じ依頼を再実行しない。 */
+/** Expired Codex executions remain quarantined until host termination evidence is confirmed. */
 export async function recoverExpiredGenerationJobs(db: DbOrTx, clock: Clock, jobId?: string) {
   return db.transaction(async (tx) => {
     const now = clock.now();
-    const expired = and(activeGeneration(), lte(generationJobs.leaseUntil, now));
+    const expired = and(
+      activeGeneration(),
+      or(
+        lte(generationJobs.leaseUntil, now),
+        and(
+          eq(generationJobs.generator, "codex"),
+          eq(generationJobs.status, "running"),
+          isNull(generationJobs.leaseUntil),
+        ),
+      ),
+    );
     const candidates = await tx
       .select({ id: generationJobs.id })
       .from(generationJobs)
@@ -39,34 +50,46 @@ export async function recoverExpiredGenerationJobs(db: DbOrTx, clock: Clock, job
       .limit(100);
     if (!candidates.length) return [];
     // 候補取得後に延長・完了されたジョブは更新条件を再照合して除外する。
-    const closed = await tx
-      .update(generationJobs)
-      .set({
-        status: "failed",
-        errorCode: "interrupted",
-        error: GENERATION_INTERRUPTED_MESSAGE,
-        leaseUntil: null,
-        finishedAt: now,
-      })
-      .where(
-        and(
-          expired,
-          inArray(
-            generationJobs.id,
-            candidates.map((r) => r.id),
-          ),
-        ),
-      )
-      .returning({ id: generationJobs.id });
-    for (const row of closed)
+    const closed: string[] = [];
+    for (const candidate of candidates) {
+      const [row] = await tx
+        .select()
+        .from(generationJobs)
+        .where(and(expired, eq(generationJobs.id, candidate.id)))
+        .for("update");
+      if (!row) continue;
+      const proof = sandboxStopReferenceSchema.safeParse(
+        (row.outputRef as { stopReference?: unknown } | null)?.stopReference,
+      );
+      const confirmed = proof.success && proof.data.jobId === row.id && proof.data.stopped;
+      const unconfirmed = row.generator === "codex" && row.status === "running" && !confirmed;
+      const status = unconfirmed ? ("needs_review" as const) : ("failed" as const);
+      const errorCode = unconfirmed ? "sandbox_stop_unconfirmed" : "interrupted";
+      const [updated] = await tx
+        .update(generationJobs)
+        .set({
+          status,
+          errorCode,
+          error: unconfirmed
+            ? "生成処理との接続が途切れ、停止を確認できません。元の実行環境を確認するまで新しい生成を保留します。"
+            : GENERATION_INTERRUPTED_MESSAGE,
+          output: null,
+          leaseUntil: null,
+          finishedAt: now,
+        })
+        .where(and(expired, eq(generationJobs.id, candidate.id)))
+        .returning({ id: generationJobs.id });
+      if (!updated) continue;
+      closed.push(updated.id);
       await recordEvent(tx, clock, {
         actor: { kind: "system", job: "generation-recovery" },
-        action: "generation.interrupted",
+        action: unconfirmed ? "generation.stop_unconfirmed" : "generation.interrupted",
         targetType: "generation_job",
         targetId: row.id,
-        after: { status: "failed", errorCode: "interrupted" },
+        after: { status, errorCode },
       });
-    return closed.map((r) => r.id);
+    }
+    return closed;
   });
 }
 

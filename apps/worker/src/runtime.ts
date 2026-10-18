@@ -61,7 +61,7 @@ export function createWorkerRuntime(deps: WorkerDeps) {
           clock: deps.clock,
           generator: deps.generation.generator,
         });
-        if (recovered.length) deps.logger.warn("接続が途切れた生成履歴を閉じました", { recovered });
+        if (recovered.length) deps.logger.warn("生成履歴の接続切れを記録しました", { recovered });
         if (stopped.length) deps.logger.info("生成の停止を確認しました", { stopped });
         return { status: "maintenance", result: { recovered, stopped } };
       }

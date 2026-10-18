@@ -26,6 +26,7 @@
     "codex:check": "node --env-file-if-exists=.env --import tsx scripts/check-codex.ts",
     "codex:sandbox-check": "node --env-file-if-exists=.env --import tsx scripts/check-codex-sandbox.ts",
     "codex:lifecycle-check": "node --env-file-if-exists=.env --import tsx scripts/check-codex-lifecycle.ts",
+    "codex:crash-check": "node --env-file-if-exists=.env --import tsx scripts/check-codex-crash.ts",
     "codex:worker": "docker compose stop worker && pnpm dev:worker",
     "dev:worker": "node --env-file-if-exists=.env --import tsx apps/worker/src/index.ts",
     "dev": "pnpm dev:setup && docker compose up --build --detach --wait",

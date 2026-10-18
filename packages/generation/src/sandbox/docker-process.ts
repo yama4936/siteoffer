@@ -18,6 +18,7 @@ export function runDockerCommand(
   signal?: AbortSignal,
   onCancel?: () => void,
   captureOutput = false,
+  onStarted?: (pid: number | null) => void,
 ): Promise<ProcessResult> {
   if (signal?.aborted)
     return Promise.resolve({
@@ -73,6 +74,7 @@ export function runDockerCommand(
     signal?.addEventListener("abort", abort, { once: true });
     child.once("spawn", () => {
       started = true;
+      onStarted?.(child.pid ?? null);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString("utf8")).slice(0, 4096);
@@ -101,13 +103,40 @@ export async function runIsolatedContainer(
   env: Record<string, string>,
   timeoutMs: number,
   signal?: AbortSignal,
+  onStarted?: (pid: number | null) => Promise<void>,
 ) {
+  const registrationAbort = new AbortController();
+  const linked = signal ? AbortSignal.any([signal, registrationAbort.signal]) : registrationAbort.signal;
+  let registration = Promise.resolve();
+  let registrationFailed = false;
   let cancellation: Promise<boolean> | undefined;
-  const result = await runDockerCommand(dockerPath, args, env, timeoutMs, signal, () => {
-    cancellation ??= removeOwnedContainer(dockerPath, name, env);
-  });
+  const result = await runDockerCommand(
+    dockerPath,
+    args,
+    env,
+    timeoutMs,
+    linked,
+    () => {
+      cancellation ??= removeOwnedContainer(dockerPath, name, env);
+    },
+    false,
+    (pid) => {
+      if (!onStarted) return;
+      registration = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Execution registration timed out")), 10_000);
+        Promise.resolve()
+          .then(() => onStarted(pid))
+          .then(resolve, reject)
+          .finally(() => clearTimeout(timer));
+      }).catch(() => {
+        registrationFailed = true;
+        registrationAbort.abort();
+      });
+    },
+  );
+  await registration;
   if (cancellation) await cancellation;
   // Repeat after the Docker client is terminal, covering cancellation while a container was starting.
   const removed = !result.started || (await removeOwnedContainer(dockerPath, name, env));
-  return { ...result, stopped: result.closed && removed };
+  return { ...result, stopped: result.closed && removed, registrationFailed };
 }

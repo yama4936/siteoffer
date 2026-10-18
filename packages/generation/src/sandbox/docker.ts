@@ -201,6 +201,19 @@ export class DockerSandboxRunner implements SandboxRunner {
     try {
       const args = buildDockerRunArgs(this.config, { ...spec, executionId });
       await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify({ ...spec.request, executionId }));
+      await spec.saveStopReference?.(stopReference);
+      if (spec.signal?.aborted) {
+        stopReference = { ...stopReference, clientClosed: true, stopped: true };
+        await spec.saveStopReference?.(stopReference);
+        return {
+          ok: false,
+          error: "aborted",
+          message: "開始前に中断しました",
+          result: null,
+          stopped: true,
+          stopReference,
+        };
+      }
       executing = true;
       const r = await runIsolatedContainer(
         this.config.dockerPath,
@@ -209,8 +222,13 @@ export class DockerSandboxRunner implements SandboxRunner {
         this.env,
         spec.timeoutMs,
         spec.signal,
+        async (pid) => {
+          stopReference = { ...stopReference, clientPid: pid };
+          await spec.saveStopReference?.(stopReference);
+        },
       );
       stopReference = { ...stopReference, clientPid: r.pid, clientClosed: r.closed, stopped: r.stopped };
+      await spec.saveStopReference?.(stopReference);
       if (!r.stopped)
         return {
           ok: false,
@@ -221,6 +239,15 @@ export class DockerSandboxRunner implements SandboxRunner {
           stopReference,
         };
       const result = await this.readResult(spec.workDir, executionId);
+      if (r.registrationFailed)
+        return {
+          ok: false,
+          error: "aborted",
+          message: "実行情報を保存できなかったため中断しました",
+          result: null,
+          stopped: true,
+          stopReference,
+        };
       if (r.timedOut)
         return {
           ok: false,
@@ -260,6 +287,7 @@ export class DockerSandboxRunner implements SandboxRunner {
         };
       return { ok: true, result, stopped: true, stopReference };
     } catch {
+      if (!executing) stopReference = { ...stopReference, clientClosed: true, stopped: true };
       return {
         ok: false,
         error: executing ? "sandbox_stop_unconfirmed" : "sandbox_error",
@@ -268,7 +296,7 @@ export class DockerSandboxRunner implements SandboxRunner {
           : "隔離生成を開始できません。設定と作業場所を確認してください。",
         result: null,
         stopped: !executing,
-        ...(executing ? { stopReference } : {}),
+        stopReference,
       };
     }
   }

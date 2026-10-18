@@ -5,6 +5,7 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import type { z } from "zod";
 import { attemptOnce } from "./attempt.ts";
 import { type GenerationLimits, resolveLimits } from "./config.ts";
+import { saveGenerationStopReference } from "./execution-reference.ts";
 import {
   GENERATION_HEARTBEAT_MS,
   GENERATION_INTERRUPTED_MESSAGE,
@@ -216,7 +217,7 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
 
         for (let attempt = 1; attempt <= limits.maxAttempts; attempt++) {
           // Check after waiting for a slot and before every retry. A blocked request is not another orphan.
-          if (await hasUnconfirmedGenerationStop(db, generator.kind)) {
+          if (await hasUnconfirmedGenerationStop(db, generator.kind, clock.now())) {
             await db.transaction(async (tx) => {
               await updateJob(tx, clock, job.id, {
                 status: "failed",
@@ -263,8 +264,11 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
             limits.timeoutMs,
             limits.stopTimeoutMs,
             signal,
+            (reference) => saveGenerationStopReference(db, clock, job.id, attempt, reference),
           );
           const r = attempted.result;
+          if (r.stopReference?.stopped)
+            await saveGenerationStopReference(db, clock, job.id, attempt, r.stopReference).catch(() => undefined);
 
           if (r.ok) {
             const sha256 = createHash("sha256").update(JSON.stringify(r.output)).digest("hex");
@@ -352,6 +356,15 @@ export async function runGenerationJob<P extends GenerationPurpose, T = Generati
   } catch (error) {
     if (!(error instanceof GenerationLeaseLost)) throw error;
     await recoverExpiredGenerationJobs(db, clock, created.id);
+    const [current] = await db
+      .select({ errorCode: generationJobs.errorCode })
+      .from(generationJobs)
+      .where(eq(generationJobs.id, created.id));
+    if (current?.errorCode === "sandbox_stop_unconfirmed")
+      return err(
+        "sandbox_stop_unconfirmed",
+        "生成の接続が途切れ、停止確認を待っています。元の実行環境を確認してください。",
+      );
     return err("generation_failed", GENERATION_INTERRUPTED_MESSAGE);
   } finally {
     clearInterval(timer);

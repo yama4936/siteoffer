@@ -9,9 +9,10 @@ export async function recoverDockerExecution(
   raw: SandboxStopReference,
 ) {
   const parsed = sandboxStopReferenceSchema.safeParse(raw);
-  if (!parsed.success || parsed.data.host !== hostname()) return false;
+  if (!parsed.success) return false;
   const ref = parsed.data;
   if (ref.stopped) return true;
+  if (ref.host !== hostname()) return false;
   if (!ref.clientClosed) {
     if (ref.clientPid === null) return false;
     try {

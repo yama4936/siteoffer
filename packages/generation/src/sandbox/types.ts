@@ -61,6 +61,7 @@ export interface SandboxRunSpec {
   request: SandboxRequest;
   timeoutMs: number;
   signal?: AbortSignal;
+  saveStopReference?: (reference: SandboxStopReference) => Promise<void>;
 }
 
 export type SandboxRunOutcome =

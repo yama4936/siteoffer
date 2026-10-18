@@ -90,6 +90,7 @@ export class CodexGenerator implements Generator {
         timeoutMs: req.timeoutMs,
       };
       if (req.signal) spec.signal = req.signal;
+      if (req.saveStopReference) spec.saveStopReference = req.saveStopReference;
 
       stopped = false;
       const outcome = await this.runner.run(spec);

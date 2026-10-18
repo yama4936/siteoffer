@@ -76,3 +76,21 @@ it("retains the unconfirmed state if a killed Docker client never becomes termin
     stopped: false,
   });
 });
+it("bounds a stuck PID registration and confirms container cleanup before returning", async () => {
+  vi.useFakeTimers();
+  try {
+    const pending = runSiteContainer(
+      "docker",
+      ["run"],
+      name,
+      {},
+      100_000,
+      undefined,
+      () => new Promise<void>(() => {}),
+    );
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await pending).toMatchObject({ aborted: true, stopped: true, registrationFailed: true });
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { SandboxStopReference } from "./sandbox/types.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 import type { ExecutionRecord, Generator, GeneratorResult } from "./types.ts";
 
@@ -27,6 +28,7 @@ export async function attemptOnce<T>(
   timeoutMs: number,
   stopTimeoutMs: number,
   signal?: AbortSignal,
+  saveStopReference?: (reference: SandboxStopReference) => Promise<void>,
 ): Promise<{ result: GeneratorResult<T>; late?: Promise<GeneratorResult<T>> }> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -72,6 +74,7 @@ export async function attemptOnce<T>(
           attempt,
           timeoutMs,
           signal: controller.signal,
+          ...(saveStopReference ? { saveStopReference } : {}),
         }),
       )
       .catch(() => failure("sandbox_stop_unconfirmed"));
