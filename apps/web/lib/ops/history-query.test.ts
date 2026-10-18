@@ -25,6 +25,8 @@ it("date ranges are strict calendar dates in Japan time and round-trip every fil
   expect(historyHref(parseHistoryQuery({})!)).toBe("/ops/history");
 });
 it.each([
+  { view: "unknown" },
+  { view: ["all", "work"] },
   { from: "0000-01-01" },
   { from: "2026-02-29" },
   { from: "2026-13-01" },
@@ -50,6 +52,23 @@ it("action labels and record links preserve unknown operations without inventing
   expect(historyTargetLink("company", "11111111-1111-4111-8111-111111111111", "架空企業")).toContain("/ops/companies/");
   expect(historyTargetLink("company", "javascript:alert(1)", "x")).toBeNull();
   expect(historyTargetLink("company", "11111111-1111-4111-8111-111111111111", null)).toBeNull();
+});
+it("history ranges round-trip and known states retain their original codes", () => {
+  const query = parseHistoryQuery({ view: "access", actor: "ops", q: "ログイン", page: "2" })!;
+  expect(parseHistoryQuery(Object.fromEntries(historyParams(query)))).toEqual(query);
+  expect(historyHref(query, { page: 3 })).toContain("view=access");
+  expect(historyFields({ status: "running" }, { status: "succeeded" }).items[0]).toMatchObject({
+    before: "処理中（running）",
+    after: "完了（succeeded）",
+  });
+  expect(historyFields({}, { status: "new_unknown_state" }).items[0]?.after).toBe("new_unknown_state");
+  expect(historyFields({}, { note: "running" }).items[0]?.after).toBe("running");
+});
+it("missing snapshots do not invent a phantom record field, while primitive changes remain visible", () => {
+  expect(historyFields(null, { status: "running" }).items.map((field) => field.key)).toEqual(["status"]);
+  expect(historyFields({ status: "running" }, null).items.map((field) => field.key)).toEqual(["status"]);
+  expect(historyFields(null, null).items).toEqual([]);
+  expect(historyFields("old", "new").items[0]).toMatchObject({ before: "old", after: "new" });
 });
 it("bounded text presentation removes credential fields and credential URLs without changing stored values", () => {
   const secret = "test-only-hidden-value";

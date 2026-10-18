@@ -33,6 +33,40 @@ async function fixture() {
     .returning();
   return { actor, company: company!, event: event! };
 }
+it("work history excludes login/logout noise while all and access views retain every original event", async () => {
+  const s = await fixture();
+  await db.insert(auditEvents).values(
+    Array.from({ length: 45 }, (_, i) => ({
+      actorKind: i % 2 ? "sales" : "ops",
+      action: i % 2 ? "session.created" : "session.deleted",
+      targetType: "session",
+      targetId: `session-${i}`,
+      createdAt: new Date("2026-10-18T10:00:00Z"),
+    })),
+  );
+  const work = value(await readAuditHistory(db, s.actor, query()));
+  expect(work).toMatchObject({ total: 1, counts: { all: 46, access: 45, work: 1 }, query: { view: "work" } });
+  expect(work.items[0]?.id).toBe(s.event.id);
+  const access = value(await readAuditHistory(db, s.actor, query({ view: "access", page: "2" })));
+  expect(access).toMatchObject({ total: 45, pages: 3, query: { view: "access", page: 2 } });
+  expect(access.items).toHaveLength(20);
+  const all = value(await readAuditHistory(db, s.actor, query({ view: "all", page: "3" })));
+  expect(all.total).toBe(46);
+  expect(all.items.some((row) => row.id === s.event.id)).toBe(true);
+  expect(await db.select({ id: auditEvents.id }).from(auditEvents)).toHaveLength(46);
+});
+it("range counts honor the other search filters and an empty selected range does not claim no records exist", async () => {
+  const s = await fixture();
+  await db.insert(auditEvents).values([
+    { actorKind: "ops", actorId: s.actor.userId, action: "session.created", targetType: "session", targetId: "ops" },
+    { actorKind: "sales", action: "session.deleted", targetType: "session", targetId: "sales" },
+  ]);
+  const selected = value(await readAuditHistory(db, s.actor, query({ view: "access", actor: "ops" })));
+  expect(selected).toMatchObject({ total: 1, counts: { work: 1, access: 1, all: 2 } });
+  const empty = value(await readAuditHistory(db, s.actor, query({ view: "work", q: "ログイン" })));
+  expect(empty).toMatchObject({ total: 0, counts: { work: 0, access: 1, all: 1 } });
+  expect(value(await readAuditHistory(db, s.actor, query({ view: "all", q: "ログイン" }))).total).toBe(1);
+});
 it("finds records beyond 200, pages stable ties without bodies and keeps all query filters", async () => {
   const s = await fixture();
   await db.insert(auditEvents).values(

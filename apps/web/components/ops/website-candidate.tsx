@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/select";
-import { OFFICIAL_SITE_LABEL } from "@/lib/ops/format";
+import { fmtDate, OFFICIAL_SITE_LABEL } from "@/lib/ops/format";
 import type { listSiteSearchCandidates } from "@/lib/ops/website-candidate";
 
 type Candidates = Extract<Awaited<ReturnType<typeof listSiteSearchCandidates>>, { ok: true }>["value"];
@@ -73,7 +73,7 @@ export function WebsiteCandidate(props: Props) {
                   {candidate.reason || "企業との一致は未確認です"}
                 </p>
                 <p className="mt-2 break-all text-xs text-muted-foreground">
-                  {candidate.provider} · {candidate.fetchedAt}
+                  {candidate.provider} · {fmtDate(candidate.fetchedAt)}
                 </p>
                 {candidate.sourceUrl && (
                   <p className="mt-1 break-all text-xs text-muted-foreground">検索の出典：{candidate.sourceUrl}</p>

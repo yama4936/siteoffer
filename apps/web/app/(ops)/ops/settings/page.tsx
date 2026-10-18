@@ -29,7 +29,11 @@ export default async function SettingsPage({
   };
   const db = getDb();
   const actor = await getCurrentActor();
-  const historyQuery = parseHistoryQuery({ targetType: filter.targetType, action: filter.actionPrefix });
+  const historyQuery = parseHistoryQuery({
+    targetType: filter.targetType,
+    action: filter.actionPrefix,
+    view: filter.actionPrefix?.startsWith("session.") ? "all" : undefined,
+  });
   if (!historyQuery) notFound();
   const [settings, users, events] = await Promise.all([
     getSettingsForOps(db, actor),
@@ -164,8 +168,12 @@ export default async function SettingsPage({
         </Table>
       </Section>
 
-      <Section title="操作履歴" description="最近の20件です。過去の操作は全件検索から探せます。">
+      <Section
+        title="操作履歴"
+        description="通常は案件・設定の最近20件を表示します。ログイン・ログアウトを含む全記録は、履歴の検索画面で表示範囲を選べます。"
+      >
         <form className={inlineFormClass} method="get" action="/ops/history">
+          <input type="hidden" name="view" value="all" />
           <Input
             name="targetType"
             placeholder="対象の種類（例：settings, company）"

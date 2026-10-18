@@ -1,6 +1,6 @@
 import { type Actor, err, ok } from "@siteoffer/core";
 import { auditEvents, companies, type DbOrTx, users } from "@siteoffer/db";
-import { and, count, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, lt, not, or, sql } from "drizzle-orm";
 import { isUuid } from "./form.ts";
 import { historyFields, historyMatchingActions } from "./history-presentation.ts";
 import { type HistoryQuery, historyDate, parseHistoryQuery } from "./history-query.ts";
@@ -58,13 +58,15 @@ export async function readAuditHistory(db: DbOrTx, actor: Actor | null, input: H
         q.from ? gte(auditEvents.createdAt, historyDate(q.from)!) : undefined,
         q.to ? lt(auditEvents.createdAt, new Date(historyDate(q.to)!.getTime() + 86_400_000)) : undefined,
       );
+      const access = inArray(auditEvents.action, ["session.created", "session.deleted"]);
       const [found] = await tx
-        .select({ total: count() })
+        .select({ total: count(), access: sql<number>`count(*) filter(where ${access})`.mapWith(Number) })
         .from(auditEvents)
         .leftJoin(users, eq(users.id, auditEvents.actorId))
         .leftJoin(companies, joinCompany)
         .where(condition);
-      const total = found!.total,
+      const counts = { all: found!.total, access: found!.access, work: found!.total - found!.access };
+      const total = counts[q.view],
         pages = Math.max(1, Math.ceil(total / 20)),
         page = Math.min(q.page, pages);
       const rows = await tx
@@ -72,13 +74,14 @@ export async function readAuditHistory(db: DbOrTx, actor: Actor | null, input: H
         .from(auditEvents)
         .leftJoin(users, eq(users.id, auditEvents.actorId))
         .leftJoin(companies, joinCompany)
-        .where(condition)
+        .where(and(condition, q.view === "all" ? undefined : q.view === "access" ? access : not(access)))
         .orderBy(desc(auditEvents.createdAt), desc(auditEvents.id))
         .limit(20)
         .offset((page - 1) * 20);
       return ok({
         query: { ...q, page },
         total,
+        counts,
         pages,
         items: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
       });

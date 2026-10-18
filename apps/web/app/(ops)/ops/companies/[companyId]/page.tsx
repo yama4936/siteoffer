@@ -299,7 +299,7 @@ export default async function CompanyPage({
                   <ReturnTo path={here} />
                   <input type="hidden" name="companyId" value={c.id} />
                   <input type="hidden" name="proposalVersionId" value={latest?.id ?? ""} />
-                  <NativeSelect name="productTermsId" defaultValue="" aria-label="販売条件・報酬条件の版">
+                  <NativeSelect name="productTermsId" defaultValue="" aria-label="販売条件・報酬条件の版" required>
                     <option value="">販売条件・報酬条件の版を選ぶ</option>
                     {terms.value.map((t) => {
                       const ready = isTermsReadyForSales(t);
@@ -312,7 +312,12 @@ export default async function CompanyPage({
                     })}
                   </NativeSelect>
                   <div>
-                    <Button type="submit" size="sm" variant="success">
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant="success"
+                      disabled={baseIssues.length > 0 || readyTerms.length === 0}
+                    >
                       営業可能にする
                     </Button>
                   </div>

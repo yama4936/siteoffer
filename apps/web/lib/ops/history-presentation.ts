@@ -101,6 +101,7 @@ const FIELDS: Record<string, string> = {
   reason: "理由",
   createdAt: "作成日時",
   updatedAt: "更新日時",
+  expiresAt: "有効期限",
   websiteId: "サイトID",
   companyId: "企業ID",
   version: "版",
@@ -119,7 +120,29 @@ const FIELDS: Record<string, string> = {
   updated: "更新した件数",
   skipped: "見送った件数",
   failed: "失敗した件数",
+  error: "エラー",
+  limit: "件数上限",
 };
+const STATES: Record<string, string> = {
+  queued: "開始待ち",
+  running: "処理中",
+  succeeded: "完了",
+  failed: "失敗",
+  confirmed: "確認済み",
+  candidate: "候補あり",
+  needs_review: "確認待ち",
+  not_found: "見つかっていない",
+  approved: "承認済み",
+  rejected: "承認見送り",
+  active: "有効",
+  suspended: "利用停止",
+};
+const fieldValue = (key: string, value: unknown) =>
+  typeof value === "string" &&
+  ["status", "officialSiteStatus", "pipelineStatus"].includes(key) &&
+  Object.hasOwn(STATES, value)
+    ? `${STATES[value]}（${value}）`
+    : historyValue(value);
 /** Bounded, text-only view. It is not a raw audit export or a complete deep diff. */
 export function historyValue(value: unknown, depth = 0): unknown {
   if (value === null) return null;
@@ -165,16 +188,17 @@ export function historyValue(value: unknown, depth = 0): unknown {
 export function historyFields(before: unknown, after: unknown) {
   const object = (value: unknown): value is Record<string, unknown> =>
     !!value && typeof value === "object" && !Array.isArray(value);
-  const a = object(before) ? before : { 記録: before },
-    b = object(after) ? after : { 記録: after };
+  if (before === null && after === null) return { omitted: 0, items: [] };
+  const a = object(before) ? before : before === null && object(after) ? {} : { 記録: before },
+    b = object(after) ? after : after === null && object(before) ? {} : { 記録: after };
   const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])];
   return {
     omitted: Math.max(0, keys.length - 30),
     items: keys.slice(0, 30).map((key) => ({
       key,
       label: Object.hasOwn(FIELDS, key) ? FIELDS[key]! : key,
-      before: secretKey(key) ? "[非表示]" : Object.hasOwn(a, key) ? historyValue(a[key]) : "（項目の記録なし）",
-      after: secretKey(key) ? "[非表示]" : Object.hasOwn(b, key) ? historyValue(b[key]) : "（項目の記録なし）",
+      before: secretKey(key) ? "[非表示]" : Object.hasOwn(a, key) ? fieldValue(key, a[key]) : "（項目の記録なし）",
+      after: secretKey(key) ? "[非表示]" : Object.hasOwn(b, key) ? fieldValue(key, b[key]) : "（項目の記録なし）",
     })),
   };
 }

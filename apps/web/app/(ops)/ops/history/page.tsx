@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/page";
 import { NativeSelect } from "@/components/ui/select";
 import { getDb } from "@/lib/db";
 import { readAuditHistory } from "@/lib/ops/history";
-import { HISTORY_ACTORS, parseHistoryQuery } from "@/lib/ops/history-query";
+import { HISTORY_ACTORS, HISTORY_VIEWS, parseHistoryQuery } from "@/lib/ops/history-query";
 import { getCurrentActor } from "@/lib/session";
 
 export default async function HistoryPage({
@@ -46,6 +46,16 @@ export default async function HistoryPage({
             />
           </Label>
           <Label className="grid gap-1">
+            表示する履歴
+            <NativeSelect name="view" defaultValue={data.query.view}>
+              {Object.entries(HISTORY_VIEWS).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </NativeSelect>
+          </Label>
+          <Label className="grid gap-1">
             操作した人
             <NativeSelect name="actor" defaultValue={data.query.actor}>
               <option value="">すべて</option>
@@ -56,7 +66,7 @@ export default async function HistoryPage({
               ))}
             </NativeSelect>
           </Label>
-          <div className="grid grid-cols-2 gap-2 min-w-0">
+          <div className="grid gap-3 sm:grid-cols-2 min-w-0 md:col-span-2">
             <Label className="grid min-w-0 gap-1">
               開始日
               <Input className="min-w-0" type="date" name="from" defaultValue={data.query.from} />
@@ -66,26 +76,34 @@ export default async function HistoryPage({
               <Input className="min-w-0" type="date" name="to" defaultValue={data.query.to} />
             </Label>
           </div>
-          <Label className="grid gap-1">
-            対象の種類（任意）
-            <Input
-              name="targetType"
-              maxLength={120}
-              defaultValue={data.query.targetType}
-              placeholder="例：company、settings"
-            />
-          </Label>
-          <Label className="grid gap-1">
-            対象ID（完全一致）
-            <Input name="targetId" maxLength={300} defaultValue={data.query.targetId} />
-          </Label>
-          <Label className="grid gap-1">
-            操作コード（前方一致）
-            <Input name="action" maxLength={120} defaultValue={data.query.action} placeholder="例：discovery." />
-          </Label>
+          <details
+            className="rounded-lg border p-3 md:col-span-2"
+            open={!!(data.query.targetType || data.query.targetId || data.query.action)}
+          >
+            <summary className="cursor-pointer text-sm font-medium">詳細条件（対象の種類・ID・操作コード）</summary>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <Label className="grid gap-1">
+                対象の種類（任意）
+                <Input
+                  name="targetType"
+                  maxLength={120}
+                  defaultValue={data.query.targetType}
+                  placeholder="例：company、settings"
+                />
+              </Label>
+              <Label className="grid gap-1">
+                対象ID（完全一致）
+                <Input name="targetId" maxLength={300} defaultValue={data.query.targetId} />
+              </Label>
+              <Label className="grid gap-1">
+                操作コード（前方一致）
+                <Input name="action" maxLength={120} defaultValue={data.query.action} placeholder="例：discovery." />
+              </Label>
+            </div>
+          </details>
         </fieldset>
         <p className="text-xs text-muted-foreground">
-          日付は日本時間です。終了日当日の操作も含みます。検索対象は操作名・担当者・企業名・IDで、変更本文は検索しません。
+          案件・設定の操作にはログイン・ログアウトを含めません。「すべての操作」へ切り替えると全記録を探せます。日付は日本時間で終了日も含みます。変更本文は検索しません。
         </p>
         <div className="flex flex-wrap gap-4 items-center">
           <Button type="submit">検索する</Button>

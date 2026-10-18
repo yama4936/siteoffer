@@ -3,13 +3,13 @@ import { EmptyState } from "@/components/ui/page";
 import { fmtDate } from "@/lib/ops/format";
 import type { HistoryPage } from "@/lib/ops/history";
 import { HISTORY_TARGETS, historyActionLabel, historyTargetLink } from "@/lib/ops/history-presentation";
-import { HISTORY_ACTORS, historyHref, historyParams } from "@/lib/ops/history-query";
+import { HISTORY_ACTORS, HISTORY_VIEWS, historyHref, historyParams } from "@/lib/ops/history-query";
 
 export function HistoryList({ data, compact = false }: { data: HistoryPage; compact?: boolean }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        {data.total.toLocaleString("ja-JP")}件
+        {HISTORY_VIEWS[data.query.view]} ·{data.total.toLocaleString("ja-JP")}件
         {data.total > 0
           ? `中 ${(data.query.page - 1) * 20 + 1}〜${(data.query.page - 1) * 20 + data.items.length}件`
           : ""}{" "}
@@ -19,7 +19,21 @@ export function HistoryList({ data, compact = false }: { data: HistoryPage; comp
         担当者名・企業名は現在の登録内容です。操作時点の値は、その操作に保存された項目で確認してください。
       </p>
       {!data.items.length ? (
-        <EmptyState>条件に一致する操作はありません。検索語や期間を変更してください。</EmptyState>
+        <EmptyState>
+          {data.counts.all > 0 ? (
+            <>
+              現在の表示範囲には操作がありません。同じ検索条件で、別の範囲に{data.counts.all}件あります。
+              <Link
+                href={historyHref(data.query, { view: "all", page: 1 })}
+                className="mt-2 block text-primary underline"
+              >
+                すべての操作から確認する
+              </Link>
+            </>
+          ) : (
+            "条件に一致する操作はありません。検索語や期間を変更してください。"
+          )}
+        </EmptyState>
       ) : (
         <ol className="divide-y rounded-xl border bg-white">
           {data.items.map((item) => {

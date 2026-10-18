@@ -78,6 +78,13 @@ export default async function HistoryEventPage({
       <p className="mb-4 text-sm text-muted-foreground">
         最大30項目を表示します。長い値・深い階層・一部の機密項目は省略します。完全な差分表示ではありません。元の操作記録は変更しません。
       </p>
+      {!event.fields.items.length && (
+        <p className="rounded-lg border bg-white p-4 text-sm">
+          {event.beforeOmitted || event.afterOmitted
+            ? "本文は表示上限を超えたため省略しています。元の操作記録は残っています。"
+            : "変更前後の本文は記録されていません。操作コードと対象の情報を確認してください。"}
+        </p>
+      )}
       <ol className="space-y-3">
         {event.fields.items.map((field) => (
           <li key={field.key} className="min-w-0 rounded-xl border bg-white p-4">
@@ -111,6 +118,7 @@ export default async function HistoryEventPage({
           <Link
             href={historyHref({
               ...query,
+              view: "all",
               page: 1,
               q: "",
               action: "",

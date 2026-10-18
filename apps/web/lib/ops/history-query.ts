@@ -1,4 +1,5 @@
 export type HistoryQuery = {
+  view: "work" | "access" | "all";
   q: string;
   action: string;
   targetType: string;
@@ -8,7 +9,18 @@ export type HistoryQuery = {
   to: string;
   page: number;
 };
-const defaults = { q: "", action: "", targetType: "", targetId: "", actor: "", from: "", to: "", page: "1" };
+const defaults = {
+  view: "work",
+  q: "",
+  action: "",
+  targetType: "",
+  targetId: "",
+  actor: "",
+  from: "",
+  to: "",
+  page: "1",
+};
+export const HISTORY_VIEWS = { work: "案件・設定の操作", access: "ログイン・ログアウト", all: "すべての操作" } as const;
 export const HISTORY_ACTORS: Record<string, string> = {
   ops: "運営",
   sales: "営業",
@@ -38,6 +50,7 @@ export function parseHistoryQuery(input: Record<string, unknown>): HistoryQuery 
     values[key] = raw.trim();
   }
   if (
+    !Object.hasOwn(HISTORY_VIEWS, values.view) ||
     !/^[1-9]\d*$/.test(values.page) ||
     !Number.isSafeInteger(Number(values.page)) ||
     Number(values.page) > 2147483647 ||
@@ -47,7 +60,7 @@ export function parseHistoryQuery(input: Record<string, unknown>): HistoryQuery 
     (values.from && values.to && values.from > values.to)
   )
     return null;
-  return { ...values, page: Number(values.page) };
+  return { ...values, view: values.view as HistoryQuery["view"], page: Number(values.page) };
 }
 export function historyParams(value: HistoryQuery) {
   const params = new URLSearchParams();
