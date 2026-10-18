@@ -67,6 +67,17 @@ export interface WorkerCapabilities {
   generationStopRecovery?: 1;
   /** Absent on older workers. Search connectivity is not proved by configuration. */
   siteSearch?: { provider: "fixture" | "none" | "tavily" | "unknown"; maxPerRun: number };
+  /** Public preparation snapshot; absent on older workers. Never includes paths or credentials. */
+  preparation?: {
+    auditCollector: "python" | "fixture" | "unknown";
+    generationInput: "default" | "fixture" | "unknown";
+    decision: {
+      status: "configured" | "pending" | "invalid";
+      threshold: number | null;
+      criticalFlagsTrigger: boolean | null;
+      demo: boolean;
+    };
+  };
 }
 export interface WorkerLaneProgress {
   phase: IntakePhase;

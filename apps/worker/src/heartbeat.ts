@@ -9,6 +9,7 @@ import {
 } from "@siteoffer/db";
 import { eq, lt } from "drizzle-orm";
 import type { WorkerDeps } from "./deps.ts";
+import { readWorkerPreparation } from "./preparation.ts";
 
 export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intakeIntervalMs = 5000) {
   const id = randomUUID();
@@ -49,7 +50,11 @@ export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intak
   let stopped = false;
   let pending: Promise<void> = Promise.resolve();
   const beat = async () => {
-    const snapshot = { heartbeatAt: deps.clock.now(), capabilities, progress: { ...progress } };
+    const snapshot = {
+      heartbeatAt: deps.clock.now(),
+      capabilities: { ...capabilities, preparation: await readWorkerPreparation(deps) },
+      progress: { ...progress },
+    };
     await deps.db
       .insert(workerRuntimes)
       .values({ id, mode, providers: Object.keys(deps.discovery.providers), ...snapshot })

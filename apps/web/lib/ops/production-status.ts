@@ -3,6 +3,7 @@ import { type DbOrTx, generationJobs, users, workerRuntimes } from "@siteoffer/d
 import { and, desc, eq } from "drizzle-orm";
 import { isUuid } from "./form";
 import { assessWorkers } from "./processing";
+import { productionPreparation } from "./production-preparation";
 
 type ImageState = ReturnType<typeof assessWorkers>["image"];
 
@@ -43,5 +44,5 @@ export async function getProductionStatusForOps(db: DbOrTx, clock: Clock, actor:
     now,
     stopped.map((row) => row.generator),
   );
-  return ok({ image, site, checkedAt: now.toISOString() });
+  return ok({ image, site, preparation: productionPreparation(runtimes, now), checkedAt: now.toISOString() });
 }

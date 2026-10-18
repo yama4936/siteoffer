@@ -29,6 +29,8 @@ export const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () 
 /** ワーカーの処理が使う部品。設定（config.ts）から組み立てる。テストでは個別に差し替える */
 export interface WorkerDeps {
   discoveryOnly?: boolean;
+  /** Supplied by the same factory that constructs the collector and input builder. */
+  preparation?: { auditCollector: "python" | "fixture"; generationInput: "default" | "fixture" };
   db: Db;
   clock: Clock;
   queue: JobQueue;

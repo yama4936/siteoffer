@@ -20,6 +20,9 @@ export function ProductionModeNotice({ status }: { status: Production }) {
           {status.site.label}
         </p>
         <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{status.site.detail}</p>
+        <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {status.preparation.map((item) => `${item.title}：${item.label}`).join(" ／ ")}
+        </p>
       </div>
       <Link
         className="shrink-0 text-primary text-sm underline underline-offset-4"
@@ -53,6 +56,25 @@ export function ProductionSettings({ status, imageRequest }: { status: Productio
             デザイン画像を用意する
           </Link>
         </div>
+      </div>
+      <div className="rounded-xl border bg-card p-5">
+        <h3 className="font-medium text-sm">診断から制作へ進むための準備</h3>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          ワーカーが実際に使う設定の通知です。実接続・成果物の品質・営業開始の承認を示すものではありません。
+        </p>
+        <dl className="mt-4 divide-y">
+          {status.preparation.map((item) => (
+            <div key={item.id} className="grid min-w-0 gap-2 py-4 sm:grid-cols-[10rem_1fr]">
+              <dt className="font-medium text-sm">{item.title}</dt>
+              <dd className="min-w-0 text-sm">
+                <strong className={item.status === "configured" ? "text-primary" : "text-amber-800"}>
+                  {item.label}
+                </strong>
+                <p className="mt-1 break-words text-muted-foreground leading-relaxed">{item.detail}</p>
+              </dd>
+            </div>
+          ))}
+        </dl>
       </div>
       <Link href="/ops/processing" className="inline-block text-primary text-sm underline">
         待機中の依頼・停止確認・稼働通知を見る

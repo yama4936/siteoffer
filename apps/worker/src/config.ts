@@ -262,6 +262,7 @@ export function buildWorkerDeps(
   return {
     ...base,
     discoveryOnly: config.discoveryOnly,
+    preparation: { auditCollector: config.auditCollector.kind, generationInput: config.generationInput },
     discovery: {
       providers,
       ...(config.siteSearch === "fixture"
