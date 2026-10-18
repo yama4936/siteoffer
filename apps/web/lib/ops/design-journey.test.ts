@@ -37,6 +37,19 @@ describe("design journey", () => {
     ] as const)
       expect(designJourney({ ...base, design: { ...design, status } })).toMatchObject({ step, href, waiting: false });
   });
+  it.each(["unavailable", "unknown", "attention"])("explains %s image intake on the waiting version", (status) => {
+    const imageAvailability = { status, label: "受付の確認が必要", detail: "設定・稼働を確認してください。" };
+    expect(designJourney({ ...base, design: { ...design, status: "queued" }, imageAvailability })).toMatchObject({
+      step: 1,
+      href: "#design-queue",
+      waiting: true,
+      description: expect.stringContaining("制作条件を保ったまま"),
+    });
+    // A missing heartbeat is never evidence that an API request which already started can be cancelled.
+    expect(designJourney({ ...base, design: { ...design, status: "generating" }, imageAvailability }).href).toBe(
+      "/ops/processing?company=company-one",
+    );
+  });
   it("a build request without a proposal is waiting, never completed", () => {
     expect(designJourney({ ...base, design: { ...design, buildRequestedAt: new Date() } })).toMatchObject({
       step: 3,

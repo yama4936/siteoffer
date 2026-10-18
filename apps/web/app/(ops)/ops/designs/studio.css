@@ -575,3 +575,38 @@
   color: #24487d;
   text-decoration: underline;
 }
+
+.design-worker-status {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid #dae1ed;
+  border-radius: 10px;
+  background: #fff;
+  scroll-margin-top: 24px;
+}
+.design-worker-status h3 {
+  font-size: 13px;
+  font-weight: 700;
+}
+.design-worker-copy {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #52627b;
+}
+.design-availability.attention h3 {
+  color: #854d0e;
+}
+.design-queue-switch {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #dae1ed;
+}
+.design-queue-switch button {
+  margin-top: 10px;
+}
+@media (max-width: 640px) {
+  .design-queue-switch button {
+    width: 100%;
+  }
+}

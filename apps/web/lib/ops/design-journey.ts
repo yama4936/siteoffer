@@ -8,9 +8,17 @@ export type DesignJourneyInput = {
   configured: boolean;
   design?: Design;
   proposal?: Proposal;
+  imageAvailability?: { status: string; label: string; detail: string };
 };
 export const DESIGN_STEPS = ["制作条件", "画像を用意", "画像を確認", "サイトを制作", "提案を引き継ぐ"] as const;
-export function designJourney({ companyId, canCreate, configured, design: d, proposal: p }: DesignJourneyInput) {
+export function designJourney({
+  companyId,
+  canCreate,
+  configured,
+  design: d,
+  proposal: p,
+  imageAvailability,
+}: DesignJourneyInput) {
   const company = `/ops/companies/${companyId}`;
   const processing = `/ops/processing?${new URLSearchParams({ company: companyId })}`;
   const review = `/ops/review?${new URLSearchParams({ company: companyId, ...(p ? { version: p.id } : {}) })}`;
@@ -48,6 +56,15 @@ export function designJourney({ companyId, canCreate, configured, design: d, pro
       "制作条件はこの版に保存済みです。画像を取り込むと、デザイン提案PDFの出力と承認へ進めます。",
       "画像を選ぶ",
       "#design-upload",
+    );
+  if (d.status === "queued" && imageAvailability && imageAvailability.status !== "ready")
+    return state(
+      1,
+      "画像生成の受付状況を確認",
+      `${imageAvailability.label}。${imageAvailability.detail} 開始前の依頼は、制作条件を保ったまま画像の取り込みへ切り替えられます。`,
+      "受付状況・画像の取り込みへ",
+      "#design-queue",
+      true,
     );
   if (["queued", "generating"].includes(d.status))
     return state(

@@ -25,6 +25,7 @@ export * from "./content-workspace.ts";
 export * from "./contract/index.ts";
 export * from "./delivery/index.ts";
 export * from "./design.ts";
+export * from "./design-input-switch.ts";
 export * from "./domain-preference/index.ts";
 export * from "./image-assets.ts";
 export * from "./image-submissions.ts";

@@ -5,6 +5,7 @@ import {
   requestDesignBuild,
   retryDesignBuild,
   reviewDesign,
+  switchDesignToImport,
   systemClock,
 } from "@siteoffer/core";
 import { normalizeDesignImage } from "@siteoffer/generation/images";
@@ -105,6 +106,15 @@ export async function uploadDesignAction(fd: FormData) {
     const image = await normalizeDesignImage(Buffer.from(await file.arrayBuffer()));
     await attachDesignImage(getDb(), systemClock, actor, id, image);
     return id;
+  });
+}
+export async function switchDesignInputAction(fd: FormData) {
+  return run(fd, async (actor) => {
+    const designId = value(fd, "designId");
+    const companyId = value(fd, "companyId");
+    if (!isUuid(designId)) throw new DesignError("デザインIDが不正です");
+    await switchDesignToImport(getDb(), systemClock, actor, { designId, companyId });
+    return designId;
   });
 }
 export async function reviewDesignAction(fd: FormData) {

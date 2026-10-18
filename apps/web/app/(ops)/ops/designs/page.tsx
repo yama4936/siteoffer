@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { DEFAULT_DESIGN_BRIEF, DESIGN_LABELS, type DesignBrief } from "@siteoffer/core";
-import { designBriefDrafts, designVersions, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
+import { DEFAULT_DESIGN_BRIEF, DESIGN_LABELS, type DesignBrief, systemClock } from "@siteoffer/core";
+import {
+  designBriefDrafts,
+  designVersions,
+  proposals,
+  proposalVersions,
+  siteAudits,
+  workerRuntimes,
+} from "@siteoffer/db";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { ArrowRight, Palette } from "lucide-react";
 import Image from "next/image";
@@ -10,12 +17,14 @@ import { DesignBriefForm } from "@/components/ops/design-brief-form";
 import { DesignRefresh, DesignSubmit } from "@/components/ops/design-controls";
 import { DesignCompanyPicker, DesignHistory } from "@/components/ops/design-index";
 import { DesignJourney } from "@/components/ops/design-journey";
+import { DesignWorkerStatus } from "@/components/ops/design-worker-status";
 import { Flash, first } from "@/components/ops/ui";
 import { getDb } from "@/lib/db";
 import { loadDesignDraft } from "@/lib/ops/design-drafts";
 import { readDesignIndex } from "@/lib/ops/design-index";
 import { designIndexHref, parseDesignIndexQuery } from "@/lib/ops/design-index-query";
 import { isUuid } from "@/lib/ops/form";
+import { assessWorkers } from "@/lib/ops/processing";
 import { requireUser } from "@/lib/session";
 import { buildDesignAction, retryDesignBuildAction, reviewDesignAction, uploadDesignAction } from "./actions";
 import "./studio.css";
@@ -122,7 +131,8 @@ export default async function DesignPage({
     minute: "2-digit",
     timeZone: "Asia/Tokyo",
   });
-  const configured = !!(process.env.SITEOFFER_IMAGE_MODEL && process.env.OPENAI_API_KEY);
+  const configured = !!(process.env.SITEOFFER_IMAGE_MODEL?.trim() && process.env.OPENAI_API_KEY?.trim());
+  const availability = assessWorkers(await db.select().from(workerRuntimes), systemClock.now());
   const busy =
     selected?.status === "queued" ||
     selected?.status === "generating" ||
@@ -150,7 +160,9 @@ export default async function DesignPage({
         configured={configured}
         design={selected}
         proposal={proposal}
+        imageAvailability={availability.image}
       />
+      <DesignWorkerStatus image={availability.image} companyId={companyId} design={selected} />
       <div className={`design-grid ${selected?.imageSha256 ? "" : "no-design-image"}`}>
         <section id="design-brief" tabIndex={-1} className="design-card design-brief">
           <h2>
