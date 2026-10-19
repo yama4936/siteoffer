@@ -11,6 +11,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "vitest run",
+    "test:http": "node --import tsx apps/worker/local-smoke.ts",
     "test:postgres:audits": "node --import tsx apps/worker/test/postgres-audits.ts",
     "test:postgres:sales": "node --import tsx apps/worker/test/postgres-sales.ts",
     "test:postgres:content": "node --import tsx apps/worker/test/postgres-content.ts",

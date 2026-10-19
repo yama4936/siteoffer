@@ -3,9 +3,11 @@ import path from "node:path";
 import { type Actor, fixedClock, ok } from "@siteoffer/core";
 import { auditEvents, type Db, findings, generationJobs, siteAudits } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
+import type { ExecutionRecord } from "@siteoffer/generation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureCollector, parseCollectRun } from "../src/collect.ts";
 import { createGenerationEvaluationGenerator } from "../src/generation-adapter.ts";
+import type { EvaluationGenerator } from "../src/generator.ts";
 import { createPythonRunner } from "../src/python.ts";
 import { type AuditDeps, runSiteAudit } from "../src/service.ts";
 import { COLLECTED_FIXTURE, evaluationFixture, fixedGenerator, seedWebsite, tempOptions } from "./helpers.ts";
@@ -132,34 +134,73 @@ describe("診断の中断", () => {
     },
   );
 
-  it("生成アダプター経由の中断で生成履歴も failed / aborted に閉じる", async () => {
+  it.each([
+    { label: "停止確認済み", cooperative: true, status: "failed", errorCode: "aborted" },
+    { label: "停止未確認", cooperative: false, status: "needs_review", errorCode: "sandbox_stop_unconfirmed" },
+  ])("生成アダプター経由の中断を $label として記録し、自動再試行しない", async ({ cooperative, status, errorCode }) => {
     const { site } = await seedWebsite(db);
     const controller = new AbortController();
     const entered = deferred<void>();
+    const stopped = deferred<void>();
+    const returned = deferred<void>();
     let generatorSignal: AbortSignal | undefined;
-    deps.generator = createGenerationEvaluationGenerator({
+    let calls = 0;
+    let adapterRun: ReturnType<EvaluationGenerator["generate"]> | null = null;
+    const record: ExecutionRecord = {
+      generator: "mock",
+      requestedModel: null,
+      responseModel: null,
+      sdkVersion: null,
+      cliVersion: null,
+      promptVersion: "cancellation-test",
+      threadId: null,
+      requestId: null,
+      usage: null,
+    };
+    const adapter = createGenerationEvaluationGenerator({
       db,
       clock,
+      limits: { stopTimeoutMs: 20, maxAttempts: 3 },
       generator: {
         kind: "mock",
         requestedModel: null,
         promptVersion: () => "cancellation-test",
         async generate(request) {
+          calls++;
           generatorSignal = request.signal;
+          if (cooperative) request.signal?.addEventListener("abort", () => stopped.resolve(), { once: true });
           entered.resolve();
-          return new Promise(() => {});
+          await stopped.promise;
+          returned.resolve();
+          return { ok: false, error: "aborted", message: "検証用の生成を終了した", record };
         },
       },
     });
+    deps.generator = {
+      generate(input) {
+        adapterRun = adapter.generate(input);
+        return adapterRun;
+      },
+    };
     const pending = runSiteAudit(db, clock, deps, { websiteId: site.id, actor, signal: controller.signal });
-    await entered.promise;
-    controller.abort();
-    expect(await pending).toMatchObject({ ok: true, value: { status: "failed" } });
-    expect(generatorSignal?.aborted).toBe(true);
-    await vi.waitFor(async () => {
+    try {
+      await entered.promise;
+      controller.abort();
+      expect(await pending).toMatchObject({ ok: true, value: { status: "failed" } });
+      expect(generatorSignal?.aborted).toBe(true);
+      expect(adapterRun).not.toBeNull();
+      await adapterRun;
       const [job] = await db.select().from(generationJobs);
-      expect(job).toMatchObject({ status: "failed", errorCode: "aborted", leaseUntil: null });
-    });
+      expect(job).toMatchObject({ status, errorCode, leaseUntil: null, attempts: 1, output: null });
+      expect(calls).toBe(1);
+      expect((await db.select().from(auditEvents)).some((e) => e.action === "generation.succeeded")).toBe(false);
+    } finally {
+      controller.abort();
+      stopped.resolve();
+      await returned.promise;
+      await adapterRun;
+      await pending;
+    }
   });
 
   it("予期しない例外も診断を閉じ、内部エラーの内容を表示しない", async () => {

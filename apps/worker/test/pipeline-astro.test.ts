@@ -28,7 +28,10 @@ it("収集 → 診断（create）→ 生成 → Astroでデモをビルド・検
   const results = await drainWithDesignApproval(env);
   const last = results.at(-1)!;
   if (last.outcome.status !== "succeeded") throw new Error(JSON.stringify(last.outcome));
-  expect(results.map((r) => r.outcome.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+  expect(
+    results.map((r) => r.outcome.status),
+    JSON.stringify(results.filter((r) => r.outcome.status !== "succeeded")),
+  ).toEqual(["succeeded", "succeeded", "succeeded"]);
 
   const [c] = await env.db.select().from(companies).where(eq(companies.name, "株式会社あおば印刷"));
   expect(c!.pipelineStatus).toBe("in_review");
