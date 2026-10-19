@@ -55,6 +55,31 @@ it("会社情報の検査結果を次の試行へ渡し、再検査に通った�
   expect(runner.calls).toHaveLength(2);
 });
 
+it("全角の無根拠な実績を採用せず、数値検査の規則で一度修正して保存する", async () => {
+  const bad = structuredClone(loadCodexFixture("proposal_text")) as { summary: string };
+  bad.summary = "年間５００件の施工実績があります。";
+  const runner = new NoopSandboxRunner([
+    { finalResponse: JSON.stringify(bad) },
+    { finalResponse: JSON.stringify(loadCodexFixture("proposal_text")) },
+  ]);
+  const input = fixtureInput(),
+    before = structuredClone(input),
+    request = { idempotencyKey: "correct-numeric-claim", companyId: null, purpose: "proposal_text" as const, input };
+  const result = await runGenerationJob(
+    { db, clock, generator: new CodexGenerator(runner), limits: { maxAttempts: 2 } },
+    request,
+  );
+  expect(result.ok).toBe(true);
+  expect(runner.calls).toHaveLength(2);
+  expect(runner.calls[1]!.request.prompt).toContain('"unsupported_claim"');
+  expect(runner.calls[1]!.request.prompt).not.toContain("５００件");
+  expect(input).toEqual(before);
+  const [job] = await db.select().from(generationJobs);
+  expect(job).toMatchObject({ status: "succeeded", attempts: 2, output: loadCodexFixture("proposal_text") });
+  expect((await runGenerationJob({ db, clock, generator: new CodexGenerator(runner) }, request)).ok).toBe(true);
+  expect(runner.calls).toHaveLength(2);
+});
+
 it("途中の実行エラーを指示にせず、直近の検査結果と同じ確認情報を維持する", async () => {
   const runner = new NoopSandboxRunner([
     { finalResponse: "PRIVATE_INVALID_JSON" },

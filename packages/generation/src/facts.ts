@@ -1,3 +1,4 @@
+import { foldNumericWidth, numericClaims } from "./numeric-claims.ts";
 import { type GenerationInput, type GenerationPurpose, markerRegex, NEEDS_REVIEW_MARKERS } from "./schemas.ts";
 import { checkSiteFacts } from "./site-facts.ts";
 
@@ -31,17 +32,6 @@ const CLAIM_CHECK: Record<GenerationPurpose, { numericClaims: boolean; claimWord
   delivery_site: { numericClaims: true, claimWords: true },
 };
 
-/** 料金・件数・年数・割合などの主張に当たる数値表現 */
-const NUMERIC_CLAIM_PATTERNS: RegExp[] = [
-  /[¥￥]\s*\d[\d,]*/g,
-  /\d[\d,.]*\s*(?:万|千|百)?円/g,
-  /\d[\d,]*\s*(?:件|社|名|人|棟|台|店舗|拠点)/g,
-  /(?:創業|設立|創立)\s*\d+\s*年/g,
-  /\d+\s*年(?:の実績|以上)/g,
-  /\d+(?:\.\d+)?\s*[%％]/g,
-  /(?:No\.?\s*1|ナンバーワン|第\s*1\s*位|1位)/gi,
-];
-
 /** サイト掲載物で、確認済み事実に同じ語がない限り使ってはいけない語 */
 const CLAIM_WORDS = [
   "受賞",
@@ -60,8 +50,7 @@ const CLAIM_WORDS = [
 
 /** 照合用の正規化：全角英数字→半角、空白・桁区切りを除く */
 export function normalizeForMatch(s: string): string {
-  return s
-    .replace(/[０-９Ａ-Ｚａ-ｚ％]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+  return foldNumericWidth(s)
     .replace(/[\s,，、]/g, "")
     .toLowerCase();
 }
@@ -98,10 +87,10 @@ export function checkFacts(purpose: GenerationPurpose, input: GenerationInput, o
   const needsReview = input.facts.filter((f) => f.status === "needs_review");
   const confirmedText = normalizeForMatch(confirmed.map((f) => f.value).join("\n"));
   // 数値の根拠には確認済み事実と外部データ（既存サイトの観測）を使う
-  const supportText = normalizeForMatch(
-    [...confirmed.map((f) => f.value), ...input.externalData.map((d) => d.content), JSON.stringify(input.context)].join(
-      "\n",
-    ),
+  const supportClaims = new Set(
+    [...confirmed.map((f) => f.value), ...input.externalData.map((d) => d.content), JSON.stringify(input.context)]
+      .flatMap(numericClaims)
+      .map(normalizeForMatch),
   );
 
   for (const { path, text } of walkStrings(output)) {
@@ -128,12 +117,9 @@ export function checkFacts(purpose: GenerationPurpose, input: GenerationInput, o
     }
 
     if (policy.numericClaims) {
-      for (const re of NUMERIC_CLAIM_PATTERNS) {
-        for (const m of text.matchAll(re)) {
-          const claim = normalizeForMatch(m[0]);
-          if (!supportText.includes(claim)) {
-            violations.push({ kind: "unsupported_claim", path, detail: `入力に根拠のない数値表現「${m[0]}」` });
-          }
+      for (const claim of numericClaims(text)) {
+        if (!supportClaims.has(normalizeForMatch(claim))) {
+          violations.push({ kind: "unsupported_claim", path, detail: `入力に根拠のない数値表現「${claim}」` });
         }
       }
     }
