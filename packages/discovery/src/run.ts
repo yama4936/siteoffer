@@ -18,6 +18,8 @@ export interface DiscoveryProviders {
   search?: SearchProvider;
   searchLimit?: number;
   signal?: AbortSignal;
+  /** Guard short DB writes with the worker's current execution ownership. Never run external calls inside it. */
+  withOwnership?: DiscoveryWrite;
   /** 第三者サイトとして扱う追加ドメイン */
   thirdPartyDomains?: readonly string[];
 }
@@ -34,7 +36,10 @@ export interface DiscoveryRunSummary {
   failures: DiscoveryFailure[];
 }
 
-export type RunDiscoveryError = "job_not_found" | "job_already_running" | "provider_mismatch";
+export type RunDiscoveryError = "job_not_found" | "job_already_running" | "provider_mismatch" | "job_superseded";
+
+type DiscoveryWrite = <T>(write: (tx: DbOrTx) => Promise<T>) => Promise<T>;
+class DiscoverySuperseded extends Error {}
 
 /** 再収集で営業可能へ戻さない営業抑止（8.1） */
 export const PROTECTED_SUPPRESSIONS = ["do_not_contact", "excluded", "existing_customer"] as const;
@@ -58,6 +63,21 @@ export async function runDiscovery(
   jobId: string,
   providers: DiscoveryProviders,
 ): Promise<Result<DiscoveryRunSummary, RunDiscoveryError>> {
+  try {
+    return await runDiscoveryAttempt(db, clock, jobId, providers);
+  } catch (error) {
+    if (error instanceof DiscoverySuperseded)
+      return err("job_superseded", "収集の実行状態が変更されたため、古い試行の反映を止めました");
+    throw error;
+  }
+}
+
+async function runDiscoveryAttempt(
+  db: DbOrTx,
+  clock: Clock,
+  jobId: string,
+  providers: DiscoveryProviders,
+): Promise<Result<DiscoveryRunSummary, RunDiscoveryError>> {
   const [job] = await db.select().from(discoveryJobs).where(eq(discoveryJobs.id, jobId));
   if (!job) return err("job_not_found", `収集ジョブがない：${jobId}`);
   if (job.status === "running") return err("job_already_running", "このジョブは実行中");
@@ -69,20 +89,42 @@ export async function runDiscovery(
   }
 
   const startedAt = clock.now();
-  await db.transaction(async (tx) => {
-    await tx
+  const transact: DiscoveryWrite = providers.withOwnership ?? ((write) => db.transaction(write));
+  const attempt = job.attempts + 1;
+  const claimed = await transact(async (tx) => {
+    const [row] = await tx
       .update(discoveryJobs)
-      .set({ status: "running", startedAt, finishedAt: null, attempts: job.attempts + 1, error: null })
-      .where(eq(discoveryJobs.id, jobId));
+      .set({ status: "running", startedAt, finishedAt: null, attempts: attempt, error: null })
+      .where(
+        and(
+          eq(discoveryJobs.id, jobId),
+          eq(discoveryJobs.status, job.status),
+          eq(discoveryJobs.attempts, job.attempts),
+        ),
+      )
+      .returning({ id: discoveryJobs.id });
+    if (!row) return false;
     await recordEvent(tx, clock, {
       actor: SYSTEM_ACTOR,
       action: "discovery.job_started",
       targetType: "discovery_job",
       targetId: jobId,
       before: { status: job.status },
-      after: { status: "running", attempt: job.attempts + 1 },
+      after: { status: "running", attempt },
     });
+    return true;
   });
+  if (!claimed) return err("job_already_running", "他の実行が先に収集の状態を変更しました");
+  const write: DiscoveryWrite = (change) =>
+    transact(async (tx) => {
+      const [current] = await tx
+        .select({ status: discoveryJobs.status, attempts: discoveryJobs.attempts })
+        .from(discoveryJobs)
+        .where(eq(discoveryJobs.id, jobId))
+        .for("update");
+      if (current?.status !== "running" || current.attempts !== attempt) throw new DiscoverySuperseded();
+      return change(tx);
+    });
 
   const failures: DiscoveryFailure[] = [];
   let searched = 0;
@@ -92,7 +134,7 @@ export async function runDiscovery(
     (!Number.isSafeInteger(providers.searchLimit) || providers.searchLimit < 1 || providers.searchLimit > 1000)
   )
     return finish(
-      db,
+      write,
       clock,
       jobId,
       "failed",
@@ -110,6 +152,7 @@ export async function runDiscovery(
             findOfficialSite: async (query, context) => {
               if (providers.signal?.aborted)
                 return Promise.resolve(err("search_failed" as const, "検索が中断されました"));
+              await write(async () => {});
               if (blockedSearch) return blockedSearch;
               if (searched >= (providers.searchLimit ?? 1000))
                 return Promise.resolve(err("search_rate_limited" as const, "この試行の検索回数の上限に達しました"));
@@ -127,17 +170,19 @@ export async function runDiscovery(
 
   const parsed = discoveryCriteriaSchema.safeParse(job.criteria);
   if (!parsed.success) {
-    return finish(db, clock, jobId, "failed", counts, null, failures, `収集条件が不正：${parsed.error.message}`);
+    return finish(write, clock, jobId, "failed", counts, null, failures, `収集条件が不正：${parsed.error.message}`);
   }
   const criteria = parsed.data;
 
   let provided: Awaited<ReturnType<DiscoveryProvider["discover"]>>;
+  await write(async () => {});
   try {
     provided = await providers.companies.discover(criteria, { clock, signal: providers.signal });
   } catch (e) {
+    if (e instanceof DiscoverySuperseded) throw e;
     const reason = `取得元で例外：${(e as Error).message.slice(0, 500)}`;
     failures.push({ externalId: null, stage: "provider", reason });
-    return finish(db, clock, jobId, "failed", counts, criteria.limit, failures, reason);
+    return finish(write, clock, jobId, "failed", counts, criteria.limit, failures, reason);
   }
   if (!provided.ok) {
     failures.push({
@@ -145,7 +190,7 @@ export async function runDiscovery(
       stage: "provider",
       reason: `${provided.error}: ${provided.message ?? ""}`.trim(),
     });
-    return finish(db, clock, jobId, "failed", counts, criteria.limit, failures, provided.message ?? provided.error);
+    return finish(write, clock, jobId, "failed", counts, criteria.limit, failures, provided.message ?? provided.error);
   }
 
   const candidates = provided.value.slice(0, criteria.limit);
@@ -153,27 +198,29 @@ export async function runDiscovery(
 
   for (const cand of candidates) {
     if (providers.signal?.aborted)
-      return finish(db, clock, jobId, "failed", counts, criteria.limit, failures, "収集が中断されました");
+      return finish(write, clock, jobId, "failed", counts, criteria.limit, failures, "収集が中断されました");
     const area = checkArea(criteria, cand);
     if (area) {
       counts.skipped++;
       failures.push({ externalId: cand.externalId, stage: "candidate", reason: area });
       continue;
     }
+    await write(async () => {});
     try {
-      const outcome = await processCandidate(db, clock, jobId, cand, limited, failures);
+      const outcome = await processCandidate(db, write, clock, jobId, cand, limited, failures);
       counts[outcome]++;
     } catch (e) {
+      if (e instanceof DiscoverySuperseded) throw e;
       counts.failed++;
       failures.push({ externalId: cand.externalId, stage: "save", reason: (e as Error).message.slice(0, 500) });
     }
   }
 
   if (providers.signal?.aborted)
-    return finish(db, clock, jobId, "failed", counts, criteria.limit, failures, "収集が中断されました");
+    return finish(write, clock, jobId, "failed", counts, criteria.limit, failures, "収集が中断されました");
   const status = counts.found > 0 && counts.failed === counts.found ? "failed" : "succeeded";
   return finish(
-    db,
+    write,
     clock,
     jobId,
     status,
@@ -267,6 +314,7 @@ async function findCompanyBySites(db: DbOrTx, cand: CompanyCandidate, sites: Jud
 
 async function processCandidate(
   db: DbOrTx,
+  write: DiscoveryWrite,
   clock: Clock,
   jobId: string,
   cand: CompanyCandidate,
@@ -278,7 +326,7 @@ async function processCandidate(
   // 営業抑止の企業は、検索も更新もしない（状態を戻さない）。出典の記録だけ更新する
   if (existing && (PROTECTED_SUPPRESSIONS as readonly string[]).includes(existing.suppression)) {
     const company = existing;
-    await db.transaction(async (tx) => {
+    await write(async (tx) => {
       await upsertCompanySource(tx, clock, jobId, cand, company.id);
     });
     failures.push({ externalId: cand.externalId, stage: "candidate", reason: `suppressed: ${company.suppression}` });
@@ -306,7 +354,7 @@ async function processCandidate(
 
   if (!existing && judgement) existing = await findCompanyBySites(db, cand, judgement.sites);
 
-  return db.transaction(async (tx) => {
+  return write(async (tx) => {
     // 確度：検索できなかったときは、新規なら確認待ち、既存なら据え置き
     const judged: OfficialSiteStatusValue = judgement?.status ?? (providers.search ? "needs_review" : "not_found");
     const now = clock.now();
@@ -509,7 +557,7 @@ function snapshot(c: CompanyRow) {
 }
 
 async function finish(
-  db: DbOrTx,
+  write: DiscoveryWrite,
   clock: Clock,
   jobId: string,
   status: "succeeded" | "failed",
@@ -518,7 +566,7 @@ async function finish(
   failures: DiscoveryFailure[],
   error: string | null,
 ): Promise<Result<DiscoveryRunSummary, RunDiscoveryError>> {
-  await db.transaction(async (tx) => {
+  await write(async (tx) => {
     await tx
       .update(discoveryJobs)
       .set({
