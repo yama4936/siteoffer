@@ -5,6 +5,7 @@ export const REVIEW_CHECKS = [
   ["links", "リンク・問い合わせ導線", "メニュー・ボタン・フォームの動作"],
   ["continuity", "既存機能の引き継ぎ", "ブログ・お知らせなどの更新機能"],
 ] as const;
+export type ReviewCheckKey = (typeof REVIEW_CHECKS)[number][0];
 export type ReviewValues = {
   note: string;
   company: boolean;

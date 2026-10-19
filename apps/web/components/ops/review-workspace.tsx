@@ -1,23 +1,26 @@
 "use client";
 
-import { ArrowRight, Check, ChevronRight, ExternalLink, FileText, Monitor, Search, Smartphone } from "lucide-react";
+import { ArrowRight, ChevronRight, ExternalLink, FileText, Monitor, Search, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useRef, useState, useTransition } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState, useTransition } from "react";
 import { commitReviewDraftAction, loadReviewDraftAction, saveReviewDraftAction } from "@/app/(ops)/ops/review/actions";
 import { SitePreview } from "@/components/shell/site-preview";
 import { usePersonalDraft } from "@/components/use-personal-draft";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
+import { reviewCheckGuide } from "@/lib/ops/review-check-guide";
 import type { ReviewComparison } from "@/lib/ops/review-comparison";
 import type { ReviewDesign } from "@/lib/ops/review-design";
 import {
   EMPTY_REVIEW,
   REVIEW_CHECKS,
+  type ReviewCheckKey,
   type ReviewCommitInput,
   type ReviewDraftSnapshot,
   type ReviewValues,
 } from "@/lib/ops/review-draft-types";
 import { ReviewChanges } from "./review-changes";
+import { ReviewCheckGuidance, ReviewChecklist } from "./review-checklist";
 import { ReviewDesignPreview } from "./review-design-preview";
 
 type Item = {
@@ -99,6 +102,16 @@ export function ReviewWorkspace({
     c?.version?.comparison.status === "ready" && c.version.comparison.basis === "revision" ? "changes" : "compare",
   );
   const [device, setDevice] = useState("desktop");
+  const checkId = useId();
+  const [checkGuide, setCheckGuide] = useState<{ key: ReviewCheckKey } | null>(null);
+  const guideRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (checkGuide) guideRef.current?.focus();
+  }, [checkGuide]);
+  function openTab(next: string) {
+    setCheckGuide(null);
+    setTab(next);
+  }
   const router = useRouter();
   const version = c?.version;
   const confirmed = version?.note?.startsWith("確認済み：") ? version.note.split("\n")[0] : "";
@@ -373,7 +386,7 @@ export function ReviewWorkspace({
                     type="button"
                     aria-pressed={tab === id}
                     className={tab === id ? "active" : ""}
-                    onClick={() => setTab(id!)}
+                    onClick={() => openTab(id!)}
                   >
                     {title}
                   </button>
@@ -405,6 +418,16 @@ export function ReviewWorkspace({
               )}
             </div>
             <div className="review-panel">
+              {checkGuide && (
+                <section ref={guideRef} tabIndex={-1} className="review-check-guide" aria-label="確認項目の案内">
+                  <ReviewCheckGuidance
+                    check={checkGuide.key}
+                    hasDesign={!!version?.design}
+                    hasDemo={!!version?.hasDemo}
+                    returnTargetId={`${checkId}-${checkGuide.key}-row`}
+                  />
+                </section>
+              )}
               {tab === "changes" && version && (
                 <ReviewChanges
                   comparison={version.comparison}
@@ -531,25 +554,18 @@ export function ReviewWorkspace({
           <aside className="review-inspector">
             <h2>営業前の確認</h2>
             <p>内容を確認して営業へ引き継ぎます</p>
-            <div className="review-checks">
-              {REVIEW_CHECKS.map(([key, title, description]) => (
-                <label key={title} className={draft.values[key] ? "checked" : ""}>
-                  <input
-                    type="checkbox"
-                    checked={draft.values[key]}
-                    disabled={locked}
-                    onChange={(e) => change({ [key]: e.target.checked })}
-                  />
-                  <span className="check-icon">
-                    <Check size={16} />
-                  </span>
-                  <span>
-                    <strong>{title}</strong>
-                    <small>{description}</small>
-                  </span>
-                </label>
-              ))}
-            </div>
+            <ReviewChecklist
+              values={draft.values}
+              locked={locked}
+              canOpen={!!version}
+              readOnly={!canReview}
+              idPrefix={checkId}
+              onChange={(key, value) => change({ [key]: value })}
+              onOpen={(key) => {
+                setTab(reviewCheckGuide(key, !!version?.design).tab);
+                setCheckGuide({ key });
+              }}
+            />
             <div className="review-note">
               <label htmlFor="review-note">確認メモ</label>
               <textarea
@@ -685,7 +701,7 @@ export function ReviewWorkspace({
               <strong>
                 {version ? `第${version.version}版${version.isLatest ? "を確認中" : "の履歴"}` : "制作準備中"}
               </strong>
-              <button type="button" onClick={() => setTab("history")}>
+              <button type="button" onClick={() => openTab("history")}>
                 変更履歴
               </button>
             </div>
