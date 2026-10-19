@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 
 process.chdir(fileURLToPath(new URL("..", import.meta.url)));
 const authFile = path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json");
@@ -13,6 +14,7 @@ if (!existsSync(".env"))
   throw new Error("先に pnpm dev:setup でアプリのローカル設定を用意してください。既存デモのデータは変更していません。");
 
 let env = readFileSync(".env", "utf8");
+const existing = parseEnv(env);
 const values = {
   SITEOFFER_GENERATOR: "codex",
   SITEOFFER_CODEX_AUTH_FILE: authFile.replaceAll("\\", "/"),
@@ -20,7 +22,7 @@ const values = {
   SITEOFFER_SITE_BUILDER: "docker",
   SITEOFFER_SITE_BUILD_IMAGE: "siteoffer-site:local",
   SITEOFFER_SITE_BUILD_USER: `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
-  SITEOFFER_CODEX_NETWORK: "bridge",
+  SITEOFFER_CODEX_NETWORK: existing.SITEOFFER_CODEX_NETWORK?.trim() || "bridge",
   SITEOFFER_CODEX_USER: `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
   SITEOFFER_DISCOVERY_PROVIDERS: "fixture",
   SITEOFFER_AUDIT_COLLECTOR: "fixture",

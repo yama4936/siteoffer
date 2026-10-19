@@ -114,7 +114,7 @@ WindowsではDocker Desktopを起動してください。空白・日本語を�
 
 生成モデルの選定は引き続き未決です。`SITEOFFER_CODEX_MODEL` が空ならCLIの既定を使い、応答のモデルIDが取得できなければ不明として記録します。
 国税庁・検索・サイト収集は引き続き架空フィクスチャ設定で、評価閾値も `null` のままです。
-ローカルの生成ネットワークはDockerの `bridge` です。送信先をOpenAIだけに限定するプロキシは未実装です。
+ローカルの生成ネットワークは既定でDockerの `bridge` です。送信先を絞る場合は、[出口プロキシの手順](docker/README.md#生成用コンテナのネットワーク送信先の制限)で内部専用ネットワークとSquidを準備し、`SITEOFFER_CODEX_HTTPS_PROXY=http://siteoffer-codex-proxy:3128`を明示します。プロキシ利用時は`demo:doctor`と各生成の開始前に内部専用bridgeであることを確認し、不明・外部へ直接出られるネットワークでは開始しません。通常のプロキシ環境変数や`NO_PROXY`はCodexへ引き継ぎません。隔離したTLS取得元・SDKの代替CLI・実Docker起動で検証していますが、本物のOpenAIへの接続・認証と許可先の妥当性は別途確認が必要です。
 認証共有の公式説明：[Codex Authentication](https://learn.chatgpt.com/docs/auth)。
 
 ## デザイン画像から提案資料・サイト制作へ進む

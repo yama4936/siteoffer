@@ -21,6 +21,7 @@ import {
 import {
   CodexGenerator,
   ConcurrencyLimiter,
+  codexProxyUrl,
   DEFAULT_GENERATION_LIMITS,
   DockerSandboxRunner,
   type Generator,
@@ -41,7 +42,15 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 export type GeneratorConfig =
   | { kind: "mock" }
-  | { kind: "codex"; image: string; network: string; codexAuthFile: string; model: string | null; user?: string };
+  | {
+      kind: "codex";
+      image: string;
+      network: string;
+      codexAuthFile: string;
+      model: string | null;
+      user?: string;
+      httpsProxy?: string;
+    };
 
 export type DiscoveryProviderName = "fixture" | "nta";
 
@@ -98,6 +107,14 @@ export function resolveWorkerConfig(
     const image = v("SITEOFFER_CODEX_IMAGE");
     const network = v("SITEOFFER_CODEX_NETWORK");
     const codexAuthFile = v("SITEOFFER_CODEX_AUTH_FILE");
+    let httpsProxy: string | undefined;
+    try {
+      httpsProxy = codexProxyUrl(v("SITEOFFER_CODEX_HTTPS_PROXY"));
+    } catch {
+      problems.push(
+        "SITEOFFER_CODEX_HTTPS_PROXY は認証情報・パス・クエリを含まないhttp://ホスト:ポートで指定してください。",
+      );
+    }
     const missing = [
       !image && "SITEOFFER_CODEX_IMAGE",
       !network && "SITEOFFER_CODEX_NETWORK",
@@ -112,6 +129,7 @@ export function resolveWorkerConfig(
         codexAuthFile: codexAuthFile!,
         model: v("SITEOFFER_CODEX_MODEL") ?? null,
         user: v("SITEOFFER_CODEX_USER"),
+        ...(httpsProxy ? { httpsProxy } : {}),
       };
   } else if (genKind !== "mock") {
     problems.push(`SITEOFFER_GENERATOR は mock か codex（${genKind}）`);
@@ -232,6 +250,7 @@ export function createGenerator(config: GeneratorConfig, env: NodeJS.ProcessEnv 
     {
       image: config.image,
       network: config.network,
+      ...(config.httpsProxy ? { httpsProxy: config.httpsProxy } : {}),
       codexAuthFile: config.codexAuthFile,
       ...(config.user ? { user: config.user } : {}),
     },

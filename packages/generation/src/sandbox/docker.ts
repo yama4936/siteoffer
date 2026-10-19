@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { runIsolatedContainer } from "./docker-process.ts";
+import { CODEX_PROXY_ENV, codexProxyUrl, isInternalProxyNetwork } from "./environment.ts";
 import { recoverDockerExecution } from "./stop-recovery.ts";
 import {
   SANDBOX_REQUEST_FILE,
@@ -30,6 +32,8 @@ export interface DockerSandboxConfig {
    * 送信先を限定したネットワーク（出口プロキシ付き等）を指定する。host は拒否する。
    */
   network: string;
+  /** Explicit HTTP CONNECT proxy on the selected internal Docker network; no proxy credentials. */
+  httpsProxy?: string;
   cpus: number;
   memoryMb: number;
   pidsLimit: number;
@@ -85,6 +89,9 @@ export function buildDockerRunArgs(
 ): string[] {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(spec.jobId)) throw new Error("生成ジョブの識別子が不正です");
   if (config.network === "host") throw new Error("生成コンテナに host ネットワークは使わない");
+  const proxy = codexProxyUrl(config.httpsProxy);
+  if (proxy && !/^[a-z0-9][a-z0-9_.-]{0,127}$/i.test(config.network))
+    throw new Error("生成用プロキシには内部専用のDockerネットワーク名が必要です。");
   if (!/^\d+:\d+$/.test(config.user)) throw new Error("実行ユーザーは数値のUID:GIDで指定する");
   if (!path.isAbsolute(spec.workDir)) throw new Error("作業ディレクトリは絶対パスで指定する");
   if (!path.isAbsolute(config.codexAuthFile)) throw new Error("Codex認証ファイルは絶対パスで指定する");
@@ -156,6 +163,7 @@ export function buildDockerRunArgs(
     `CODEX_HOME=${CONTAINER_CODEX_HOME}`,
     "--env",
     `SITEOFFER_TIMEOUT_MS=${spec.timeoutMs}`,
+    ...(proxy ? ["--env", `${CODEX_PROXY_ENV}=${proxy}`] : []),
     config.image,
     ...config.entryCommand,
   ];
@@ -198,8 +206,20 @@ export class DockerSandboxRunner implements SandboxRunner {
       stopped: false,
     };
     let executing = false;
+    let checkingProxyNetwork = false;
     try {
       const args = buildDockerRunArgs(this.config, { ...spec, executionId });
+      if (codexProxyUrl(this.config.httpsProxy)) {
+        checkingProxyNetwork = true;
+        const { execFile } = await import("node:child_process");
+        const { stdout } = await promisify(execFile)(
+          this.config.dockerPath,
+          ["network", "inspect", "--format", "{{json .}}", this.config.network],
+          { env: this.env, timeout: 5000, maxBuffer: 16384, windowsHide: true, signal: spec.signal },
+        );
+        if (!isInternalProxyNetwork(stdout)) throw new Error("生成用プロキシには内部専用のbridgeが必要です。");
+        checkingProxyNetwork = false;
+      }
       await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify({ ...spec.request, executionId }));
       await spec.saveStopReference?.(stopReference);
       if (spec.signal?.aborted) {
@@ -293,7 +313,9 @@ export class DockerSandboxRunner implements SandboxRunner {
         error: executing ? "sandbox_stop_unconfirmed" : "sandbox_error",
         message: executing
           ? "生成の終了を確認できません。停止確認が済むまで再試行を停止します。"
-          : "隔離生成を開始できません。設定と作業場所を確認してください。",
+          : checkingProxyNetwork
+            ? "生成用プロキシの内部専用ネットワークを確認できません。管理者はpnpm demo:doctorで設定を確認してください。"
+            : "隔離生成を開始できません。設定と作業場所を確認してください。",
         result: null,
         stopped: !executing,
         stopReference,

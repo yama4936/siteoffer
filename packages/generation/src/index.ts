@@ -15,6 +15,7 @@ export {
   type DockerSandboxConfig,
   DockerSandboxRunner,
 } from "./sandbox/docker.ts";
+export { codexProxyUrl, isInternalProxyNetwork } from "./sandbox/environment.ts";
 export { type NoopResponse, NoopSandboxRunner } from "./sandbox/noop.ts";
 export type {
   SandboxRequest,

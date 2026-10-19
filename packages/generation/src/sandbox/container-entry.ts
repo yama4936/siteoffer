@@ -11,6 +11,7 @@ import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
 import { prepareChatGptAuth } from "./auth.ts";
 import { runCodexTurn } from "./codex-turn.ts";
+import { buildCodexProcessEnv } from "./environment.ts";
 import {
   SANDBOX_EVENTS_FILE,
   SANDBOX_REQUEST_FILE,
@@ -20,8 +21,6 @@ import {
 } from "./types.ts";
 import { readCodexVersions } from "./versions.ts";
 
-/** Codex CLIに渡してよい環境変数（コンテナ内の値） */
-const CODEX_ENV_ALLOWLIST = ["PATH", "HOME", "CODEX_HOME", "LANG", "TZ"] as const;
 const MAX_ERROR_LENGTH = 2000;
 
 async function main(): Promise<number> {
@@ -65,11 +64,7 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const env: Record<string, string> = {};
-  for (const k of CODEX_ENV_ALLOWLIST) {
-    const v = process.env[k];
-    if (v !== undefined) env[k] = v;
-  }
+  const env = buildCodexProcessEnv(process.env);
   const codex = new Codex({ env });
   const result = await runCodexTurn(parsed.data, {
     codex,

@@ -11,6 +11,7 @@ const source = {
   SITEOFFER_CODEX_AUTH_FILE: "/private/test-auth.json",
   SITEOFFER_CODEX_IMAGE: "siteoffer-codex:test",
   SITEOFFER_CODEX_NETWORK: "test-egress",
+  SITEOFFER_CODEX_HTTPS_PROXY: "http://proxy:3128",
   SITEOFFER_CODEX_MODEL: "explicit-test-model",
   SITEOFFER_CODEX_USER: "1001:1001",
   SITEOFFER_SITE_BUILDER: "local",
@@ -56,6 +57,7 @@ it("passes only Codex launch settings to the worker, leaving paid API keys blank
     "SITEOFFER_CODEX_AUTH_FILE",
     "SITEOFFER_CODEX_MODEL",
     "SITEOFFER_CODEX_USER",
+    "SITEOFFER_CODEX_HTTPS_PROXY",
   ])
     expect(publicEnv[key]).toBe("");
   expect(worker).toMatchObject({
@@ -68,6 +70,7 @@ it("passes only Codex launch settings to the worker, leaving paid API keys blank
     SITEOFFER_EVAL_CONFIG: "config/site-evaluation.json",
     SITEOFFER_CODEX_MODEL: "explicit-test-model",
     SITEOFFER_CODEX_USER: "1001:1001",
+    SITEOFFER_CODEX_HTTPS_PROXY: "http://proxy:3128",
     OPENAI_API_KEY: "",
     CODEX_API_KEY: "",
   });
@@ -77,7 +80,7 @@ it("passes only Codex launch settings to the worker, leaving paid API keys blank
     expect(config.value).toMatchObject({
       generationInput: "default",
       discoveryProviders: [],
-      generator: { kind: "codex", model: "explicit-test-model" },
+      generator: { kind: "codex", model: "explicit-test-model", httpsProxy: "http://proxy:3128" },
       siteBuild: { kind: "docker" },
       auditCollector: { kind: "python" },
     });

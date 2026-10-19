@@ -33,6 +33,16 @@ function flagValues(args: string[], flag: string): string[] {
 describe("DockerSandboxRunner の引数", () => {
   const args = buildDockerRunArgs(config, spec);
 
+  it("passes only the explicit proxy marker and rejects malformed proxy settings", () => {
+    const values = flagValues(buildDockerRunArgs({ ...config, httpsProxy: "http://proxy:3128/" }, spec), "--env");
+    expect(values).toContain("SITEOFFER_CODEX_HTTPS_PROXY=http://proxy:3128");
+    expect(values.some((value) => /^(HTTP_PROXY|HTTPS_PROXY|NO_PROXY|ALL_PROXY)=/.test(value))).toBe(false);
+    expect(() => buildDockerRunArgs({ ...config, httpsProxy: "http://user:password@proxy" }, spec)).toThrow();
+    expect(() =>
+      buildDockerRunArgs({ ...config, network: "container:other", httpsProxy: "http://proxy:3128" }, spec),
+    ).toThrow();
+  });
+
   it("使い捨て・資源の上限・権限の制限が入る", () => {
     expect(args[0]).toBe("run");
     expect(args).toContain("--rm");

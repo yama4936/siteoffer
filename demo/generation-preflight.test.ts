@@ -46,6 +46,25 @@ it("checks only metadata and reports the limits of each successful check", async
   expect(JSON.stringify(result)).toContain("実行品質は未検証");
   expect(JSON.stringify(result)).not.toContain("test-auth-file");
 });
+
+it.each([true, false])("requires the actual internal flag when a proxy was selected: %s", async (internal) => {
+  const deps = fake();
+  const command = deps.command.getMockImplementation()!;
+  deps.command.mockImplementation(async (cmd, args) =>
+    args[0] === "network" ? JSON.stringify({ Driver: "bridge", Internal: internal }) : command(cmd, args),
+  );
+  const result = await generationPreflight({ ...env, SITEOFFER_CODEX_HTTPS_PROXY: "http://proxy:3128" }, deps);
+  expect(result.find((check) => check.name === "生成ネットワーク")?.ok).toBe(internal);
+});
+
+it("rejects proxy credentials as invalid worker configuration without printing their value", async () => {
+  const result = await generationPreflight(
+    { ...env, SITEOFFER_CODEX_HTTPS_PROXY: "http://test-user:private-password@proxy" },
+    fake(),
+  );
+  expect(result.find((check) => check.name === "実生成の構成")?.ok).toBe(false);
+  expect(JSON.stringify(result)).not.toContain("private-password");
+});
 it.each(["host", "none", "--invalid", "bad\nnetwork"])("rejects unsafe or unusable networks: %s", async (network) => {
   const deps = fake();
   const result = await generationPreflight({ ...env, SITEOFFER_CODEX_NETWORK: network }, deps);

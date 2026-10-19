@@ -15,6 +15,7 @@ try {
   const runner = new DockerSandboxRunner({
     image,
     network,
+    ...(process.env.SITEOFFER_CODEX_HTTPS_PROXY ? { httpsProxy: process.env.SITEOFFER_CODEX_HTTPS_PROXY } : {}),
     codexAuthFile,
     user: process.env.SITEOFFER_CODEX_USER ?? "1000:1000",
   });

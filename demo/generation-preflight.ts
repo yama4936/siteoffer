@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { resolveWorkerConfig } from "../apps/worker/src/config.ts";
 import { DEFAULT_SITE_BUILD_IMAGE } from "../apps/worker/src/site-builder-docker.ts";
+import { isInternalProxyNetwork } from "../packages/generation/src/sandbox/environment.ts";
 import { runtimeLabelsMatch, runtimeSourceFingerprint } from "../scripts/runtime-fingerprint.ts";
 
 export interface PreflightCheck {
@@ -118,16 +119,25 @@ export async function generationPreflight(
       `未作成または現在のソースと一致しません。pnpm ${kind === "codex" ? "codex:build" : "site:build"}で再ビルドしてください。自動取得・設定変更はしません。`,
     );
   const network = env.SITEOFFER_CODEX_NETWORK?.trim() || "";
+  const proxyConfigured = !!env.SITEOFFER_CODEX_HTTPS_PROXY?.trim();
   await check(
     "生成ネットワーク",
-    async () =>
-      /^[a-z0-9][a-z0-9_.-]{0,127}$/i.test(network) &&
-      !["host", "none"].includes(network) &&
-      !["host", "null", ""].includes(
+    async () => {
+      if (!/^[a-z0-9][a-z0-9_.-]{0,127}$/i.test(network) || ["host", "none"].includes(network)) return false;
+      if (proxyConfigured)
+        return isInternalProxyNetwork(
+          await deps.command("docker", ["network", "inspect", "--format", "{{json .}}", network]),
+        );
+      return !["host", "null", ""].includes(
         await deps.command("docker", ["network", "inspect", "--format", "{{.Driver}}", network]),
-      ),
-    "指定ネットワークが存在（送信先制限・到達性は未検証）",
-    "host・none以外の、準備済みの生成ネットワークを設定してください。",
+      );
+    },
+    proxyConfigured
+      ? "プロキシ用の内部専用bridgeを確認（プロキシ到達性・送信先制限は未検証）"
+      : "指定ネットワークが存在（送信先制限・到達性は未検証）",
+    proxyConfigured
+      ? "プロキシ利用にはInternal=trueのbridgeが必要です。送信先を制限しないネットワークでは起動しません。"
+      : "host・none以外の、準備済みの生成ネットワークを設定してください。",
   );
   await check(
     "Python",
