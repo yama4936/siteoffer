@@ -6,7 +6,6 @@ import {
   type Actor,
   authorizeUser,
   DEFAULT_SETTINGS,
-  getRewardSummary,
   getSetting,
   listOpsConsultations,
   ok,
@@ -29,17 +28,16 @@ import {
   generationJobs,
   imageAssetFiles,
   imageAssets,
-  payments,
   productTerms,
   proposals,
   proposalVersions,
-  rewards,
   siteAudits,
   users,
   websites,
 } from "@siteoffer/db";
 import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import { EDITABLE_SETTINGS, latestProposalVersions } from "./commands";
+import { attachContractFinancials } from "./contract-financials";
 import { requireOps } from "./guard";
 
 type Company = typeof companies.$inferSelect;
@@ -375,18 +373,7 @@ export async function listContractsOverview(db: DbOrTx, actor: Actor | null, fil
     .where(filter.id ? eq(contracts.id, filter.id) : undefined)
     .orderBy(desc(contracts.reportedAt))
     .limit(LIST_LIMIT);
-  const ids = rows.map((r) => r.c.id);
-  const pays = ids.length ? await db.select().from(payments).where(inArray(payments.contractId, ids)) : [];
-  const rws = ids.length ? await db.select().from(rewards).where(inArray(rewards.contractId, ids)) : [];
-  const summaries = new Map<string, Awaited<ReturnType<typeof getRewardSummary>>>();
-  for (const rw of rws) summaries.set(rw.contractId, await getRewardSummary(db, rw.id));
-  return ok(
-    rows.map((r) => ({
-      ...r,
-      payments: pays.filter((p) => p.contractId === r.c.id),
-      reward: summaries.get(r.c.id) ?? null,
-    })),
-  );
+  return ok(await attachContractFinancials(db, rows));
 }
 
 // ───────────── 5. 制作・ドメイン希望 ─────────────
