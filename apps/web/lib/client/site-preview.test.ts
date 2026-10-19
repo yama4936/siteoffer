@@ -1,27 +1,48 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { observeSitePreview, PREVIEW_LOAD_TIMEOUT_MS, type PreviewLoadState } from "./site-preview";
+import { loadSitePreview, PREVIEW_LOAD_TIMEOUT_MS, type PreviewLoadState } from "./site-preview";
 
 class Frame extends EventTarget {
   document: Pick<Document, "URL" | "readyState"> | null = { URL: "about:blank", readyState: "complete" };
   crossOrigin = false;
+  navigations: string[] = [];
+  navigate?: (url: string) => void;
+  set src(url: string) {
+    this.navigations.push(url);
+    this.navigate?.(url);
+  }
   get contentDocument(): Document | null {
     if (this.crossOrigin) throw new DOMException("Cross-origin fixture", "SecurityError");
     return this.document as Document | null;
   }
 }
 const observe = (frame: Frame, changed: (state: PreviewLoadState) => void) =>
-  observeSitePreview(frame as unknown as HTMLIFrameElement, changed);
+  loadSitePreview(frame as unknown as HTMLIFrameElement, "https://app.example.test/preview", changed);
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-it("recognizes an already loaded document even if its load event preceded hydration", () => {
+it("observes a cached document that finishes synchronously when navigation starts", () => {
   const frame = new Frame();
-  frame.document = { URL: "https://app.example.test/preview", readyState: "complete" };
+  frame.navigate = (url) => {
+    frame.document = { URL: url, readyState: "complete" };
+    frame.dispatchEvent(new Event("load"));
+  };
   const changed = vi.fn();
   const close = observe(frame, changed);
+  expect(frame.navigations).toEqual(["https://app.example.test/preview"]);
   expect(changed.mock.calls.map(([state]) => state)).toEqual(["loading", "loaded"]);
   vi.advanceTimersByTime(PREVIEW_LOAD_TIMEOUT_MS * 2);
   expect(changed).toHaveBeenCalledTimes(2);
+  close();
+});
+
+it("does not count an old completed document as completion of the requested navigation", () => {
+  const frame = new Frame(),
+    changed = vi.fn();
+  frame.document = { URL: "https://app.example.test/old-version", readyState: "complete" };
+  const close = observe(frame, changed);
+  expect(changed.mock.calls.map(([state]) => state)).toEqual(["loading"]);
+  vi.advanceTimersByTime(PREVIEW_LOAD_TIMEOUT_MS);
+  expect(changed).toHaveBeenLastCalledWith("unavailable");
   close();
 });
 
@@ -54,15 +75,30 @@ it("waits for actual document completion and cancels the pending deadline after 
   close();
 });
 
-it("uses only the load event when the external document cannot be inspected", () => {
+it("catches even a synchronous cached load when the external document cannot be inspected", () => {
   const frame = new Frame(),
     changed = vi.fn();
   frame.crossOrigin = true;
+  frame.navigate = () => frame.dispatchEvent(new Event("load"));
   const close = observe(frame, changed);
-  expect(changed).toHaveBeenLastCalledWith("loading");
-  frame.dispatchEvent(new Event("load"));
-  expect(changed).toHaveBeenLastCalledWith("loaded");
+  expect(changed.mock.calls.map(([state]) => state)).toEqual(["loading", "loaded"]);
+  vi.advanceTimersByTime(PREVIEW_LOAD_TIMEOUT_MS * 2);
+  expect(changed).toHaveBeenCalledTimes(2);
   close();
+});
+
+it("offers recovery if the browser rejects starting the navigation", () => {
+  const frame = new Frame(),
+    changed = vi.fn();
+  frame.navigate = () => {
+    throw new DOMException("Navigation rejected", "SecurityError");
+  };
+  const close = observe(frame, changed);
+  expect(changed.mock.calls.map(([state]) => state)).toEqual(["loading", "unavailable"]);
+  close();
+  frame.dispatchEvent(new Event("load"));
+  vi.advanceTimersByTime(PREVIEW_LOAD_TIMEOUT_MS * 2);
+  expect(changed).toHaveBeenCalledTimes(2);
 });
 
 it("reports an explicit load error immediately and permits a later successful navigation", () => {
@@ -84,7 +120,10 @@ it("does not let a discarded preview's events or deadline alter its replacement"
   close();
   const replacement = new Frame(),
     replacementChanged = vi.fn();
-  replacement.document = { URL: "https://app.example.test/new-version", readyState: "complete" };
+  replacement.navigate = (url) => {
+    replacement.document = { URL: url, readyState: "complete" };
+    replacement.dispatchEvent(new Event("load"));
+  };
   const closeReplacement = observe(replacement, replacementChanged);
   oldFrame.document = { URL: "https://app.example.test/old-version", readyState: "complete" };
   oldFrame.dispatchEvent(new Event("load"));

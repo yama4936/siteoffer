@@ -1,7 +1,7 @@
 "use client";
 import { ExternalLink, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { observeSitePreview, type PreviewLoadState } from "@/lib/client/site-preview";
+import { loadSitePreview, type PreviewLoadState } from "@/lib/client/site-preview";
 
 function PreviewViewport({ title, url, device, retry }: { title: string; url: string; device: string; retry(): void }) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -10,8 +10,8 @@ function PreviewViewport({ title, url, device, retry }: { title: string; url: st
   const [status, setStatus] = useState<PreviewLoadState>("loading");
   useEffect(() => {
     const target = frame.current;
-    if (target) return observeSitePreview(target, setStatus);
-  }, []);
+    if (target) return loadSitePreview(target, url, setStatus);
+  }, [url]);
   useEffect(() => {
     if (!viewport.current) return;
     const observer = new ResizeObserver(([entry]) => {
@@ -23,12 +23,11 @@ function PreviewViewport({ title, url, device, retry }: { title: string; url: st
   const frameWidth = device === "mobile" ? 390 : 1024;
   const scale = Math.min(1, Math.max(1, width) / frameWidth);
   return (
-    <div className="site-viewport" ref={viewport}>
+    <div className="site-viewport" ref={viewport} aria-busy={status === "loading"}>
       <iframe
         ref={frame}
         title={title}
         style={{ width: frameWidth, height: 460 / scale, transform: `scale(${scale})`, transformOrigin: "top left" }}
-        src={url}
         loading="eager"
         sandbox="allow-same-origin"
         referrerPolicy="no-referrer"
