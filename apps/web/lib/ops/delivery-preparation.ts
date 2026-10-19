@@ -17,6 +17,7 @@ import {
   imageAssets,
   proposals,
   proposalVersions,
+  runReadQueries,
   users,
 } from "@siteoffer/db";
 import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
@@ -36,24 +37,26 @@ export async function getDeliveryPreparation(db: DbOrTx, actor: Actor | null, de
   const source = await loadDeliveryInputSource(db, delivery.id);
   if (!source) return err("not_found");
   const { company, contract, proposal, audit, design } = source;
-  const [domain, assets, articles] = await Promise.all([
-    findDomainPreferenceForContract(db, company.id, contract.assignmentId),
-    db
-      .select({
-        total: sql<number>`count(*)::int`,
-        production: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null)::int`,
-        ready: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null and ${imageAssets.placement}<>'reference' and ${imageAssetFiles.assetId} is not null)::int`,
-      })
-      .from(imageAssets)
-      .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
-      .where(eq(imageAssets.companyId, company.id)),
-    db
-      .select({
-        total: sql<number>`count(*)::int`,
-        published: sql<number>`count(*) filter(where ${contentEntries.publishedRevision} is not null)::int`,
-      })
-      .from(contentEntries)
-      .where(eq(contentEntries.companyId, company.id)),
+  const [domain, assets, articles] = await runReadQueries(db, [
+    () => findDomainPreferenceForContract(db, company.id, contract.assignmentId),
+    () =>
+      db
+        .select({
+          total: sql<number>`count(*)::int`,
+          production: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null)::int`,
+          ready: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null and ${imageAssets.placement}<>'reference' and ${imageAssetFiles.assetId} is not null)::int`,
+        })
+        .from(imageAssets)
+        .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
+        .where(eq(imageAssets.companyId, company.id)),
+    () =>
+      db
+        .select({
+          total: sql<number>`count(*)::int`,
+          published: sql<number>`count(*) filter(where ${contentEntries.publishedRevision} is not null)::int`,
+        })
+        .from(contentEntries)
+        .where(eq(contentEntries.companyId, company.id)),
   ]);
   const brief = design?.brief && typeof design.brief === "object" ? (design.brief as Record<string, unknown>) : {};
   const [build] = delivery.currentBuildId

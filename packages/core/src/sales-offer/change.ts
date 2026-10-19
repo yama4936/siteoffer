@@ -7,6 +7,7 @@ import {
   productTerms,
   proposals,
   proposalVersions,
+  runReadQueries,
   salesOfferChanges,
   salesOffers,
   shareLinks,
@@ -287,8 +288,9 @@ export async function getOfferChangeContext(db: DbOrTx, actor: Actor | null, ass
     .where(eq(salesOfferChanges.assignmentId, a.id))
     .orderBy(desc(salesOfferChanges.createdAt), desc(salesOfferChanges.id))
     .limit(20);
-  const history = await Promise.all(
-    rows.map(async (change) => ({
+  const history = await runReadQueries(
+    db,
+    rows.map((change) => async () => ({
       change,
       before: await getSalesOffer(db, a.companyId, change.fromOfferId),
       after: await getSalesOffer(db, a.companyId, change.toOfferId),

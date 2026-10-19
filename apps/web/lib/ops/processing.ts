@@ -9,6 +9,7 @@ import {
   discoveryJobs,
   proposalHandoffs,
   proposalVersions,
+  runReadQueries,
   users,
   workerRuntimes,
 } from "@siteoffer/db";
@@ -142,28 +143,32 @@ export async function getProcessingOverview(
     isNull(proposalHandoffs.sentAt),
     companyId ? eq(proposalHandoffs.companyId, companyId) : undefined,
   );
-  const [dc, ic, sc, bc, hc] = await Promise.all([
-    companyId
-      ? Promise.resolve([{ total: 0 }])
-      : db.select({ total: count() }).from(discoveryJobs).where(discoveryWhere),
-    db
-      .select({ total: count() })
-      .from(designVersions)
-      .innerJoin(companies, eq(companies.id, designVersions.companyId))
-      .where(imageWhere),
-    db
-      .select({ total: count() })
-      .from(designVersions)
-      .innerJoin(companies, eq(companies.id, designVersions.companyId))
-      .where(siteWhere),
-    db
-      .select({ total: count() })
-      .from(deliveries)
-      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
-      .innerJoin(companies, eq(companies.id, contracts.companyId))
-      .leftJoin(deliveryBuilds, currentDeliveryBuild)
-      .where(deliveryWhere),
-    db.select({ total: count() }).from(proposalHandoffs).where(handoffWhere),
+  const [dc, ic, sc, bc, hc] = await runReadQueries(db, [
+    () =>
+      companyId
+        ? Promise.resolve([{ total: 0 }])
+        : db.select({ total: count() }).from(discoveryJobs).where(discoveryWhere),
+    () =>
+      db
+        .select({ total: count() })
+        .from(designVersions)
+        .innerJoin(companies, eq(companies.id, designVersions.companyId))
+        .where(imageWhere),
+    () =>
+      db
+        .select({ total: count() })
+        .from(designVersions)
+        .innerJoin(companies, eq(companies.id, designVersions.companyId))
+        .where(siteWhere),
+    () =>
+      db
+        .select({ total: count() })
+        .from(deliveries)
+        .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+        .innerJoin(companies, eq(companies.id, contracts.companyId))
+        .leftJoin(deliveryBuilds, currentDeliveryBuild)
+        .where(deliveryWhere),
+    () => db.select({ total: count() }).from(proposalHandoffs).where(handoffWhere),
   ]);
   const pagination = (total: number, requested: number | undefined) => {
     const pages = Math.max(1, Math.ceil(total / PROCESSING_LIMIT));
@@ -176,99 +181,105 @@ export async function getProcessingOverview(
     deliveries: pagination(bc[0]?.total ?? 0, requestedPages.deliveries),
     handoffs: pagination(hc[0]?.total ?? 0, requestedPages.handoffs),
   };
-  const [runtime, discovery, images, sites, deliveryRows, company, handoffs] = await Promise.all([
-    db.select().from(workerRuntimes).orderBy(desc(workerRuntimes.heartbeatAt)),
-    companyId
-      ? Promise.resolve([])
-      : db
-          .select({
-            id: discoveryJobs.id,
-            provider: discoveryJobs.provider,
-            status: discoveryJobs.status,
-            createdAt: discoveryJobs.createdAt,
-            startedAt: discoveryJobs.startedAt,
-            total,
-          })
-          .from(discoveryJobs)
-          .where(discoveryWhere)
-          .orderBy(asc(discoveryJobs.createdAt), asc(discoveryJobs.id))
-          .limit(PROCESSING_LIMIT)
-          .offset((paging.discovery.page - 1) * PROCESSING_LIMIT),
-    db
-      .select({
-        id: designVersions.id,
-        companyId: companies.id,
-        companyName: companies.name,
-        version: designVersions.version,
-        status: designVersions.status,
-        since: sql<Date>`coalesce(${designVersions.startedAt}, ${designVersions.createdAt})`.mapWith(
-          designVersions.createdAt,
-        ),
-        total,
-      })
-      .from(designVersions)
-      .innerJoin(companies, eq(companies.id, designVersions.companyId))
-      .where(imageWhere)
-      .orderBy(asc(designVersions.createdAt), asc(designVersions.id))
-      .limit(PROCESSING_LIMIT)
-      .offset((paging.images.page - 1) * PROCESSING_LIMIT),
-    db
-      .select({
-        id: designVersions.id,
-        companyId: companies.id,
-        companyName: companies.name,
-        version: designVersions.version,
-        status: proposalState,
-        since: designVersions.buildRequestedAt,
-        total,
-      })
-      .from(designVersions)
-      .innerJoin(companies, eq(companies.id, designVersions.companyId))
-      .where(siteWhere)
-      .orderBy(asc(designVersions.buildRequestedAt), asc(designVersions.id))
-      .limit(PROCESSING_LIMIT)
-      .offset((paging.sites.page - 1) * PROCESSING_LIMIT),
-    db
-      .select({
-        id: deliveries.id,
-        companyId: companies.id,
-        companyName: companies.name,
-        status: deliveryBuilds.status,
-        leaseUntil: deliveryBuilds.leaseUntil,
-        since:
-          sql<Date>`case when ${deliveryBuilds.status} = 'running' and (${deliveryNeedsAttention(now)}) then coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}, ${deliveries.updatedAt}) else coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}, ${deliveries.updatedAt}) end`.mapWith(
-            deliveries.updatedAt,
+  const [runtime, discovery, images, sites, deliveryRows, company, handoffs] = await runReadQueries(db, [
+    () => db.select().from(workerRuntimes).orderBy(desc(workerRuntimes.heartbeatAt)),
+    () =>
+      companyId
+        ? Promise.resolve([])
+        : db
+            .select({
+              id: discoveryJobs.id,
+              provider: discoveryJobs.provider,
+              status: discoveryJobs.status,
+              createdAt: discoveryJobs.createdAt,
+              startedAt: discoveryJobs.startedAt,
+              total,
+            })
+            .from(discoveryJobs)
+            .where(discoveryWhere)
+            .orderBy(asc(discoveryJobs.createdAt), asc(discoveryJobs.id))
+            .limit(PROCESSING_LIMIT)
+            .offset((paging.discovery.page - 1) * PROCESSING_LIMIT),
+    () =>
+      db
+        .select({
+          id: designVersions.id,
+          companyId: companies.id,
+          companyName: companies.name,
+          version: designVersions.version,
+          status: designVersions.status,
+          since: sql<Date>`coalesce(${designVersions.startedAt}, ${designVersions.createdAt})`.mapWith(
+            designVersions.createdAt,
           ),
-        total,
-      })
-      .from(deliveries)
-      .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
-      .innerJoin(companies, eq(companies.id, contracts.companyId))
-      .leftJoin(deliveryBuilds, currentDeliveryBuild)
-      .where(deliveryWhere)
-      .orderBy(asc(deliveries.updatedAt), asc(deliveries.id))
-      .limit(PROCESSING_LIMIT)
-      .offset((paging.deliveries.page - 1) * PROCESSING_LIMIT),
-    companyId
-      ? db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId))
-      : Promise.resolve([]),
-    db
-      .select({
-        id: proposalHandoffs.sourceStepKey,
-        companyId: companies.id,
-        companyName: companies.name,
-        since: proposalHandoffs.createdAt,
-        nextAttemptAt: proposalHandoffs.nextAttemptAt,
-        state: sql<
-          "sending" | "retry" | "pending"
-        >`case when ${proposalHandoffs.leaseUntil} > ${now} then 'sending' when ${proposalHandoffs.attempts} > 0 then 'retry' else 'pending' end`,
-      })
-      .from(proposalHandoffs)
-      .innerJoin(companies, eq(companies.id, proposalHandoffs.companyId))
-      .where(handoffWhere)
-      .orderBy(asc(proposalHandoffs.createdAt), asc(proposalHandoffs.sourceStepKey))
-      .limit(PROCESSING_LIMIT)
-      .offset((paging.handoffs.page - 1) * PROCESSING_LIMIT),
+          total,
+        })
+        .from(designVersions)
+        .innerJoin(companies, eq(companies.id, designVersions.companyId))
+        .where(imageWhere)
+        .orderBy(asc(designVersions.createdAt), asc(designVersions.id))
+        .limit(PROCESSING_LIMIT)
+        .offset((paging.images.page - 1) * PROCESSING_LIMIT),
+    () =>
+      db
+        .select({
+          id: designVersions.id,
+          companyId: companies.id,
+          companyName: companies.name,
+          version: designVersions.version,
+          status: proposalState,
+          since: designVersions.buildRequestedAt,
+          total,
+        })
+        .from(designVersions)
+        .innerJoin(companies, eq(companies.id, designVersions.companyId))
+        .where(siteWhere)
+        .orderBy(asc(designVersions.buildRequestedAt), asc(designVersions.id))
+        .limit(PROCESSING_LIMIT)
+        .offset((paging.sites.page - 1) * PROCESSING_LIMIT),
+    () =>
+      db
+        .select({
+          id: deliveries.id,
+          companyId: companies.id,
+          companyName: companies.name,
+          status: deliveryBuilds.status,
+          leaseUntil: deliveryBuilds.leaseUntil,
+          since:
+            sql<Date>`case when ${deliveryBuilds.status} = 'running' and (${deliveryNeedsAttention(now)}) then coalesce(${deliveryBuilds.leaseUntil}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}, ${deliveries.updatedAt}) else coalesce(${deliveryBuilds.finishedAt}, ${deliveryBuilds.startedAt}, ${deliveryBuilds.createdAt}, ${deliveries.updatedAt}) end`.mapWith(
+              deliveries.updatedAt,
+            ),
+          total,
+        })
+        .from(deliveries)
+        .innerJoin(contracts, eq(contracts.id, deliveries.contractId))
+        .innerJoin(companies, eq(companies.id, contracts.companyId))
+        .leftJoin(deliveryBuilds, currentDeliveryBuild)
+        .where(deliveryWhere)
+        .orderBy(asc(deliveries.updatedAt), asc(deliveries.id))
+        .limit(PROCESSING_LIMIT)
+        .offset((paging.deliveries.page - 1) * PROCESSING_LIMIT),
+    () =>
+      companyId
+        ? db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId))
+        : Promise.resolve([]),
+    () =>
+      db
+        .select({
+          id: proposalHandoffs.sourceStepKey,
+          companyId: companies.id,
+          companyName: companies.name,
+          since: proposalHandoffs.createdAt,
+          nextAttemptAt: proposalHandoffs.nextAttemptAt,
+          state: sql<
+            "sending" | "retry" | "pending"
+          >`case when ${proposalHandoffs.leaseUntil} > ${now} then 'sending' when ${proposalHandoffs.attempts} > 0 then 'retry' else 'pending' end`,
+        })
+        .from(proposalHandoffs)
+        .innerJoin(companies, eq(companies.id, proposalHandoffs.companyId))
+        .where(handoffWhere)
+        .orderBy(asc(proposalHandoffs.createdAt), asc(proposalHandoffs.sourceStepKey))
+        .limit(PROCESSING_LIMIT)
+        .offset((paging.handoffs.page - 1) * PROCESSING_LIMIT),
   ]);
   if (companyId && !company.length) return err("not_found");
   const stops = await loadGenerationStops(db, requestedPages.stops);

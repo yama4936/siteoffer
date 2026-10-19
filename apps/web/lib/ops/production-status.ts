@@ -1,5 +1,5 @@
 import { type Actor, type Clock, err, ok } from "@siteoffer/core";
-import { type DbOrTx, generationJobs, users, workerRuntimes } from "@siteoffer/db";
+import { type DbOrTx, generationJobs, runReadQueries, users, workerRuntimes } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
 import { isUuid } from "./form";
 import { assessWorkers } from "./processing";
@@ -32,12 +32,15 @@ export async function getProductionStatusForOps(db: DbOrTx, clock: Clock, actor:
     .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")));
   if (!user) return err("forbidden");
   const now = clock.now();
-  const [runtimes, stopped] = await Promise.all([
-    db.select().from(workerRuntimes).orderBy(desc(workerRuntimes.heartbeatAt)),
-    db
-      .selectDistinct({ generator: generationJobs.generator })
-      .from(generationJobs)
-      .where(and(eq(generationJobs.status, "needs_review"), eq(generationJobs.errorCode, "sandbox_stop_unconfirmed"))),
+  const [runtimes, stopped] = await runReadQueries(db, [
+    () => db.select().from(workerRuntimes).orderBy(desc(workerRuntimes.heartbeatAt)),
+    () =>
+      db
+        .selectDistinct({ generator: generationJobs.generator })
+        .from(generationJobs)
+        .where(
+          and(eq(generationJobs.status, "needs_review"), eq(generationJobs.errorCode, "sandbox_stop_unconfirmed")),
+        ),
   ]);
   const { image, site } = assessWorkers(
     runtimes,

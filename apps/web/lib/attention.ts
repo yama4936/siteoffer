@@ -8,7 +8,7 @@ import {
   ok,
   systemClock,
 } from "@siteoffer/core";
-import { companies, type DbOrTx } from "@siteoffer/db";
+import { companies, type DbOrTx, runReadQueries } from "@siteoffer/db";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AttentionItem, AttentionSummary } from "./attention-model";
 import { emptyWorkFilters } from "./ops/work-filters";
@@ -49,9 +49,9 @@ export async function getWorkspaceAttention(db: DbOrTx, actor: Actor | null, clo
     async (tx) => {
       const authorized = await authorizeConsultationActor(tx, actor);
       if (!authorized.ok) return authorized;
-      const [assigned, consultations] = await Promise.all([
-        listMyAssignments(tx, actor),
-        listConsultationCases(tx, actor, { status: "all", unread: true }),
+      const [assigned, consultations] = await runReadQueries(db, [
+        () => listMyAssignments(tx, actor),
+        () => listConsultationCases(tx, actor, { status: "all", unread: true }),
       ]);
       if (!assigned.ok) return assigned;
       if (!consultations.ok) return consultations;
