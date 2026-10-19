@@ -8,6 +8,7 @@ import {
   type ReadQuery,
   recordDemoGenerationMode,
 } from "./generation-pending.ts";
+import { generationWorkReadiness } from "./generation-work-readiness.ts";
 
 const fromDb = createRequire(new URL("../packages/db/package.json", import.meta.url));
 const { sql } = fromDb("drizzle-orm") as typeof import("../packages/db/node_modules/drizzle-orm/index.js");
@@ -88,4 +89,26 @@ it("records a return to mock only after all intake, generation and queue work is
   expect(await lastDemoGenerationMode(query)).toBe("mock");
   await prepareDemoGenerationMode(query, "codex");
   expect(await lastDemoGenerationMode(query)).toBe("codex");
+});
+
+it("業務0件でも新しい稼働通知がある間は方式切替を止め、通知の期限後に再確認する", async () => {
+  const isolated = await createTestDb();
+  const read: ReadQuery = async (text) => {
+    const result = (await isolated.db.execute(sql.raw(text))) as { rows: Record<string, unknown>[] };
+    return { rows: result.rows };
+  };
+  try {
+    await read(
+      `insert into worker_runtimes (id,providers,mode,heartbeat_at) values ('00000000-0000-4000-8000-000000000099','[]','demo',now())`,
+    );
+    expect(generationWorkReadiness(await pendingGenerationWork(read)).map((row) => row.ok)).toEqual([true, false]);
+    await expect(prepareDemoGenerationMode(read, "codex")).rejects.toThrow("稼働通知");
+    expect(await lastDemoGenerationMode(read)).toBeNull();
+    await read(`update worker_runtimes set heartbeat_at=now()-interval '1 minute'`);
+    expect(generationWorkReadiness(await pendingGenerationWork(read)).every((row) => row.ok)).toBe(true);
+    await prepareDemoGenerationMode(read, "codex");
+    expect(await lastDemoGenerationMode(read)).toBe("codex");
+  } finally {
+    await isolated.close();
+  }
 });

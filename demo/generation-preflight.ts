@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { resolveWorkerConfig } from "../apps/worker/src/config.ts";
 import { DEFAULT_SITE_BUILD_IMAGE } from "../apps/worker/src/site-builder-docker.ts";
 import { isInternalProxyNetwork } from "../packages/generation/src/sandbox/environment.ts";
-import { runtimeLabelsMatch, runtimeSourceFingerprint } from "../scripts/runtime-fingerprint.ts";
+import { type RuntimeKind, runtimeLabelsMatch, runtimeSourceFingerprint } from "../scripts/runtime-fingerprint.ts";
 
 export interface PreflightCheck {
   name: string;
@@ -48,6 +48,60 @@ const local: PreflightDeps = {
   },
 };
 
+async function inspectRuntimeImage(
+  kind: RuntimeKind,
+  name: string,
+  image: string,
+  deps: PreflightDeps,
+): Promise<PreflightCheck> {
+  const setting = kind === "codex" ? "SITEOFFER_CODEX_IMAGE" : "SITEOFFER_SITE_BUILD_IMAGE";
+  const build = `pnpm ${kind === "codex" ? "codex:build" : "site:build"}`;
+  const result = (ok: boolean, message: string): PreflightCheck => ({ name, ok, message });
+  if (!image)
+    return result(
+      false,
+      `${setting}が未設定です。使用するイメージのタグを指定してください。作成が必要な場合は${build}を使えます。自動選択・設定変更はしません。`,
+    );
+  if (!/^[a-z0-9][a-z0-9./_:@-]{0,254}$/i.test(image))
+    return result(
+      false,
+      `${setting}のタグの形式を確認してください。指定値は表示せず、Dockerへの照会も行っていません。`,
+    );
+  let fingerprint: string;
+  try {
+    fingerprint = await runtimeSourceFingerprint(kind);
+  } catch {
+    return result(
+      false,
+      "現在の制作ソースを確認できません。ファイルと読み取り権限を確認してください。イメージの古さは未確認です。",
+    );
+  }
+  let raw: string;
+  try {
+    raw = await deps.command("docker", ["image", "inspect", "--format", "{{json .Config.Labels}}", image]);
+  } catch {
+    return result(
+      false,
+      `指定したイメージを参照できません。Dockerへの接続と${setting}のタグを確認してください。作成が必要な場合は${build}を使えます。ソースの一致は未確認です。`,
+    );
+  }
+  let labels: unknown;
+  try {
+    labels = JSON.parse(raw);
+  } catch {
+    return result(
+      false,
+      `取得したイメージの記録を読み取れません。Dockerと指定タグを確認してください。作り直す場合は${build}を使えます。`,
+    );
+  }
+  return runtimeLabelsMatch(labels, kind, fingerprint)
+    ? result(true, "イメージと現在の制作ソースが一致（実行品質は未検証）")
+    : result(
+        false,
+        `イメージの種類・ソースの記録が未確認、または現在の制作ソースと一致しません。${build}で再ビルドしてください。自動取得・設定変更はしません。`,
+      );
+}
+
 /** Metadata checks only: no auth contents, containers, image pulls, model or external HTTP calls. */
 export async function generationPreflight(
   env: NodeJS.ProcessEnv,
@@ -87,7 +141,9 @@ export async function generationPreflight(
     "認証ファイル",
     () => (mountable ? deps.readableFile(auth) : Promise.resolve(false)),
     "通常ファイルの存在・読み取り権限を確認（ログインの有効性は未検証）",
-    "AUTH_FILEに、読み取り可能な通常ファイルの絶対パスを設定してください。",
+    !auth
+      ? "SITEOFFER_CODEX_AUTH_FILEが未設定です。読み取り可能な認証ファイルの絶対パスを指定してください。内容や秘密値は表示しません。"
+      : "SITEOFFER_CODEX_AUTH_FILEに、読み取り可能な通常ファイルの絶対パスを設定してください。内容や秘密値は表示しません。",
   );
   const user = env.SITEOFFER_CODEX_USER?.trim() || "1000:1000";
   checks.push({
@@ -105,19 +161,7 @@ export async function generationPreflight(
     ["codex", "生成イメージ", env.SITEOFFER_CODEX_IMAGE?.trim() || ""],
     ["site", "ビルドイメージ", env.SITEOFFER_SITE_BUILD_IMAGE?.trim() || DEFAULT_SITE_BUILD_IMAGE],
   ] as const)
-    await check(
-      name,
-      async () => {
-        if (!image || !/^[a-z0-9][a-z0-9./_:@-]{0,254}$/i.test(image)) return false;
-        const fingerprint = await runtimeSourceFingerprint(kind);
-        const labels = JSON.parse(
-          await deps.command("docker", ["image", "inspect", "--format", "{{json .Config.Labels}}", image]),
-        );
-        return runtimeLabelsMatch(labels, kind, fingerprint);
-      },
-      "イメージと現在の制作ソースが一致（実行品質は未検証）",
-      `未作成または現在のソースと一致しません。pnpm ${kind === "codex" ? "codex:build" : "site:build"}で再ビルドしてください。自動取得・設定変更はしません。`,
-    );
+    checks.push(await inspectRuntimeImage(kind, name, image, deps));
   const network = env.SITEOFFER_CODEX_NETWORK?.trim() || "";
   const proxyConfigured = !!env.SITEOFFER_CODEX_HTTPS_PROXY?.trim();
   await check(
@@ -135,9 +179,11 @@ export async function generationPreflight(
     proxyConfigured
       ? "プロキシ用の内部専用bridgeを確認（プロキシ到達性・送信先制限は未検証）"
       : "指定ネットワークが存在（送信先制限・到達性は未検証）",
-    proxyConfigured
-      ? "プロキシ利用にはInternal=trueのbridgeが必要です。送信先を制限しないネットワークでは起動しません。"
-      : "host・none以外の、準備済みの生成ネットワークを設定してください。",
+    !network
+      ? "SITEOFFER_CODEX_NETWORKが未設定です。準備した生成ネットワークの名前を指定してください。ネットワークの作成や接続変更は行っていません。"
+      : proxyConfigured
+        ? "プロキシ利用にはInternal=trueのbridgeが必要です。送信先を制限しないネットワークでは起動しません。"
+        : "host・none以外の、準備済みの生成ネットワークを設定してください。",
   );
   await check(
     "Python",

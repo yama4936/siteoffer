@@ -115,3 +115,45 @@ it.each([
   expect(result.find((check) => check.name === "ビルドイメージ")?.message).toContain("pnpm site:build");
   expect(JSON.stringify(result)).not.toContain(labels);
 });
+
+it("イメージ名の未設定と不正な形式を、ソースの古さと区別する", async () => {
+  for (const image of ["", "private\ninvalid-image"]) {
+    const deps = fake();
+    const result = await generationPreflight({ ...env, SITEOFFER_CODEX_IMAGE: image }, deps);
+    const check = result.find((row) => row.name === "生成イメージ")!;
+    expect(check.ok).toBe(false);
+    expect(check.message).toContain("SITEOFFER_CODEX_IMAGE");
+    expect(check.message).toContain(image ? "形式" : "未設定");
+    expect(deps.command.mock.calls.some(([, args]) => args[0] === "image" && args.at(-1) === image)).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("private");
+  }
+});
+
+it("Docker参照の失敗を、確認できたソースの不一致として案内しない", async () => {
+  const deps = fake(),
+    command = deps.command.getMockImplementation()!;
+  deps.command.mockImplementation(async (cmd, args) => {
+    if (args[0] === "image") throw Error("private-daemon-error");
+    return command(cmd, args);
+  });
+  const result = await generationPreflight(env, deps);
+  for (const name of ["生成イメージ", "ビルドイメージ"]) {
+    const check = result.find((row) => row.name === name)!;
+    expect(check.ok).toBe(false);
+    expect(check.message).toContain("参照できません");
+    expect(check.message).not.toContain("ソースと一致しません");
+  }
+  expect(JSON.stringify(result)).not.toContain("private-daemon-error");
+});
+
+it("認証参照とネットワークが未設定なら完全な設定名を示し、照会しない", async () => {
+  const deps = fake();
+  const result = await generationPreflight(
+    { ...env, SITEOFFER_CODEX_AUTH_FILE: "", SITEOFFER_CODEX_NETWORK: "" },
+    deps,
+  );
+  expect(result.find((row) => row.name === "認証ファイル")?.message).toContain("SITEOFFER_CODEX_AUTH_FILEが未設定");
+  expect(result.find((row) => row.name === "生成ネットワーク")?.message).toContain("SITEOFFER_CODEX_NETWORKが未設定");
+  expect(deps.readableFile).not.toHaveBeenCalled();
+  expect(deps.command.mock.calls.some(([, args]) => args[0] === "network")).toBe(false);
+});

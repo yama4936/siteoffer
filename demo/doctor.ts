@@ -3,6 +3,7 @@ import path from "node:path";
 import { demoGenerationEnv, demoPublicEnv, resolveDemoMode } from "./generation-mode.ts";
 import { inspectPendingGenerationWork } from "./generation-pending.ts";
 import { generationPreflight, type PreflightCheck, printPreflightChecks } from "./generation-preflight.ts";
+import { generationWorkReadiness } from "./generation-work-readiness.ts";
 import { DEMO_DATABASE_URL, DEMO_PATHS, REPO_ROOT } from "./paths.ts";
 import { assertResumeProfile } from "./resume.ts";
 
@@ -20,17 +21,10 @@ async function main() {
   }
   checks.push(...(await generationPreflight(env)));
   try {
-    const pending = (await inspectPendingGenerationWork(DEMO_DATABASE_URL)).filter((row) => row.n > 0);
-    checks.push({
-      name: "未完了処理・稼働通知",
-      ok: pending.length === 0,
-      message: pending.length
-        ? pending.map((row) => `${row.kind} ${row.n}件`).join("、")
-        : "未完了の受付・制作・キュー・工程・稼働通知は0件",
-    });
+    checks.push(...generationWorkReadiness(await inspectPendingGenerationWork(DEMO_DATABASE_URL)));
   } catch {
     checks.push({
-      name: "未完了処理・稼働通知",
+      name: "未完了業務・稼働状況",
       ok: false,
       message: "DBに接続して件数を確認できません。同じDEMO_DB_PORTで稼働中に確認するか、起動時の再確認が必要です。",
     });
