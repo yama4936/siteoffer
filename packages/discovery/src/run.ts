@@ -1,6 +1,6 @@
 import { type Actor, type Clock, err, ok, type Result, recordEvent } from "@siteoffer/core";
 import { companies, type DbOrTx, discoveryJobs, discoverySources, websites } from "@siteoffer/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { type JudgedSite, judgeOfficialSite, mergeOfficialSiteStatus, type OfficialSiteJudgement } from "./judge.ts";
 import type { DiscoveryProvider, SearchProvider } from "./providers/types.ts";
 import {
@@ -313,6 +313,35 @@ async function findCompanyBySites(db: DbOrTx, cand: CompanyCandidate, sites: Jud
   return null;
 }
 
+/** All collection writers take overlapping identities in the same actual lock order. */
+async function lockCandidateIdentity(tx: DbOrTx, cand: CompanyCandidate, sites: JudgedSite[] = []) {
+  const keys = [JSON.stringify(["discovery-identity", "source", cand.provider, cand.externalId])];
+  if (cand.corporateNumber) keys.push(JSON.stringify(["discovery-identity", "corporate", cand.corporateNumber]));
+  for (const site of sites) {
+    if (site.normalizedUrl) keys.push(JSON.stringify(["discovery-identity", "site", site.normalizedUrl]));
+  }
+  // Sort the database hashes themselves, so even a hash collision cannot reverse the lock order.
+  const hashes = await tx.execute(sql`select distinct hashtext(value) as identity_key
+    from unnest(array[${sql.join(
+      keys.map((key) => sql`${key}`),
+      sql`, `,
+    )}]::text[]) as identity_value(value)
+    order by identity_key`);
+  for (const row of (hashes as { rows: { identity_key: number }[] }).rows)
+    await tx.execute(sql`select pg_advisory_xact_lock(${Number(row.identity_key)})`);
+}
+
+function conflictingIdentity(company: CompanyRow, cand: CompanyCandidate) {
+  return !!(company.corporateNumber && cand.corporateNumber && company.corporateNumber !== cand.corporateNumber);
+}
+function identityConflict(cand: CompanyCandidate, failures: DiscoveryFailure[]) {
+  failures.push({
+    externalId: cand.externalId,
+    stage: "candidate",
+    reason: "identity_conflict: 同じ取得元のIDに異なる法人番号が記録されています。企業情報と出典を確認してください",
+  });
+}
+
 async function processCandidate(
   db: DbOrTx,
   write: DiscoveryWrite,
@@ -325,13 +354,27 @@ async function processCandidate(
   let existing = await findExistingCompany(db, cand);
 
   // 営業抑止の企業は、検索も更新もしない（状態を戻さない）。出典の記録だけ更新する
-  if (existing && (PROTECTED_SUPPRESSIONS as readonly string[]).includes(existing.suppression)) {
+  if (
+    existing &&
+    ((PROTECTED_SUPPRESSIONS as readonly string[]).includes(existing.suppression) ||
+      conflictingIdentity(existing, cand))
+  ) {
     const company = existing;
-    await write(async (tx) => {
-      await upsertCompanySource(tx, clock, jobId, cand, company.id);
+    const skipped = await write(async (tx) => {
+      await lockCandidateIdentity(tx, cand);
+      const [latest] = await tx.select().from(companies).where(eq(companies.id, company.id)).for("update");
+      if (!latest) throw Error("保存先の企業が変更されました。再収集してください");
+      existing = latest;
+      if (conflictingIdentity(latest, cand)) {
+        identityConflict(cand, failures);
+        return true;
+      }
+      if (!(PROTECTED_SUPPRESSIONS as readonly string[]).includes(latest.suppression)) return false;
+      await upsertCompanySource(tx, clock, jobId, cand, latest.id);
+      failures.push({ externalId: cand.externalId, stage: "candidate", reason: `suppressed: ${latest.suppression}` });
+      return true;
     });
-    failures.push({ externalId: cand.externalId, stage: "candidate", reason: `suppressed: ${company.suppression}` });
-    return "skipped";
+    if (skipped) return "skipped";
   }
 
   let judgement: OfficialSiteJudgement | null = null;
@@ -359,20 +402,28 @@ async function processCandidate(
 
   const observed = existing;
   return write(async (tx) => {
+    await lockCandidateIdentity(tx, cand, judgement?.sites);
     // The external search may have outlived an operator decision or another collection.
     // Lock and reread before applying any of its facts or site judgements.
-    const match = observed ?? (await findExistingCompany(tx, cand));
+    const match =
+      (await findExistingCompany(tx, cand)) ?? (judgement ? await findCompanyBySites(tx, cand, judgement.sites) : null);
+    existing = null;
     if (match) {
       const [latest] = await tx.select().from(companies).where(eq(companies.id, match.id)).for("update");
       if (!latest) throw Error("保存先の企業が変更されました。再収集してください");
       existing = latest;
+      if (conflictingIdentity(latest, cand)) {
+        identityConflict(cand, failures);
+        return "skipped";
+      }
       if ((PROTECTED_SUPPRESSIONS as readonly string[]).includes(latest.suppression)) {
         await upsertCompanySource(tx, clock, jobId, cand, latest.id);
         failures.push({ externalId: cand.externalId, stage: "candidate", reason: `suppressed: ${latest.suppression}` });
         return "skipped";
       }
     }
-    const reviewChanged = observed && existing && observed.officialSiteStatus !== existing.officialSiteStatus;
+    const baseline = observed?.id === existing?.id ? observed : null;
+    const reviewChanged = baseline && existing && baseline.officialSiteStatus !== existing.officialSiteStatus;
     // 確度：検索できなかったときは、新規なら確認待ち、既存なら据え置き
     const judged: OfficialSiteStatusValue = judgement?.status ?? (providers.search ? "needs_review" : "not_found");
     const now = clock.now();
@@ -392,7 +443,7 @@ async function processCandidate(
           addressSourceUrl: cand.addressSourceUrl,
           industry: cand.industry,
           representativePhone: cand.representativePhone,
-          officialSiteStatus: judged,
+          officialSiteStatus: providers.search ? "needs_review" : "not_found",
           createdAt: now,
           updatedAt: now,
         })
@@ -400,7 +451,7 @@ async function processCandidate(
       company = row!;
       outcome = "created";
     } else {
-      const patch = companyPatch(existing, cand, observed);
+      const patch = companyPatch(existing, cand, baseline);
       company = existing;
       outcome = "skipped";
       if (Object.keys(patch).length > 0) {
