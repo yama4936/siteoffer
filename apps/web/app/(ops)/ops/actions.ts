@@ -19,7 +19,6 @@ import {
   confirmDomainPreferenceByOps,
   createDiscoveryJobByOps,
   createImageAsset,
-  createProductTermsVersion,
   excludeCandidate,
   extendAssignmentByOps,
   liftSuppressionByOps,
@@ -259,30 +258,6 @@ export async function liftSuppressionAction(fd: FormData) {
 }
 
 // 4. 商品条件・契約確認・入金・報酬
-
-export async function createProductTermsAction(fd: FormData) {
-  const rewardType = str(fd, "rewardType");
-  const rewardValue = optInt(fd, "rewardValue");
-  const rewardRule =
-    rewardType === "fixed" && rewardValue !== null
-      ? { type: "fixed", amount: rewardValue }
-      : rewardType === "rate" && rewardValue !== null
-        ? { type: "rate", basisPoints: rewardValue }
-        : null;
-  await run(
-    fd,
-    (d, a) =>
-      createProductTermsVersion(d, a, {
-        version: str(fd, "version"),
-        name: str(fd, "name"),
-        scopeText: str(fd, "scope"),
-        price: optInt(fd, "price"),
-        monthlyFee: optInt(fd, "monthlyFee"),
-        rewardRule,
-      }),
-    "販売条件・報酬条件の版を作成しました",
-  );
-}
 
 export async function setProductTermsActiveAction(fd: FormData) {
   const active = str(fd, "active") === "true";

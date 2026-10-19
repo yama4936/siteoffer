@@ -62,6 +62,7 @@ import {
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { isUuid } from "./form.ts";
 import { type OpsActor, requireOps } from "./guard.ts";
+import { PRODUCT_TERMS_MAX_AMOUNT } from "./product-terms-draft.ts";
 import { type SellableIssue, sellableIssues } from "./sellable.ts";
 import { reviewOfficialWebsite } from "./website-candidate.ts";
 
@@ -842,6 +843,7 @@ export async function createProductTermsVersion(
 ): Promise<Result<typeof productTerms.$inferSelect, string>> {
   const ops = requireOps(actor);
   if (!ops.ok) return ops;
+  if (!isUuid(ops.value.userId)) return err("forbidden");
   const auth = authorizeUser(ops.value, "manage", { type: "productTerms" });
   if (!auth.ok) return auth;
   const version = input.version.trim();
@@ -851,14 +853,23 @@ export async function createProductTermsVersion(
     ["価格", input.price],
     ["月額", input.monthlyFee],
   ] as const) {
-    if (v !== null && (!Number.isSafeInteger(v) || v < 0)) return err("invalid_input", `${label}は0以上の整数（円）`);
+    if (v !== null && (!Number.isSafeInteger(v) || v < 0 || v > PRODUCT_TERMS_MAX_AMOUNT))
+      return err("invalid_input", `${label}は0〜2,147,483,647の整数（円）`);
   }
   if (input.rewardRule !== null) {
     const rule = parseRewardRule(input.rewardRule);
     if (!rule.ok) return err("invalid_input", "報酬条件が不正です（定額は0以上の整数、割合は0〜10000の万分率）");
+    if (rule.value.type === "fixed" && rule.value.amount > PRODUCT_TERMS_MAX_AMOUNT)
+      return err("invalid_input", "報酬額は2,147,483,647円以下で入力してください");
   }
   try {
     return await inTx(db, async (tx) => {
+      const [operator] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, ops.value.userId), eq(users.role, "ops"), eq(users.status, "active")))
+        .for("share");
+      if (!operator) throw new Abort("forbidden");
       const [row] = await tx
         .insert(productTerms)
         .values({

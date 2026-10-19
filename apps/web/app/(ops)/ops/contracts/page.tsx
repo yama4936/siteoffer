@@ -3,17 +3,17 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type * as React from "react";
 import { ContractLedgerControls, ContractLedgerPagination } from "@/components/ops/contract-ledger-controls";
+import { ProductTermsForm } from "@/components/ops/product-terms-form";
 import { Flash, Forbidden, Json, ReturnTo } from "@/components/ops/ui";
-import { detailsClass, inlineFormClass, StatusBadge, stackFormClass, summaryClass } from "@/components/ops/ui-parts-2";
+import { detailsClass, inlineFormClass, StatusBadge, summaryClass } from "@/components/ops/ui-parts-2";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Field, Label } from "@/components/ui/label";
+import { Label } from "@/components/ui/label";
 import { EmptyState, PageHeader, Section } from "@/components/ui/page";
 import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
 import { getDb } from "@/lib/db";
 import { getContractsLedger } from "@/lib/ops/contract-ledger";
 import { contractLedgerHref, parseContractLedgerFilters } from "@/lib/ops/contract-ledger-filters";
@@ -33,7 +33,6 @@ import {
   adjustRewardAction,
   cancelRewardAction,
   confirmContractAction,
-  createProductTermsAction,
   markRewardPaidAction,
   recordPaymentAction,
   rejectContractAction,
@@ -89,99 +88,66 @@ export default async function ContractsPage({
             title="販売条件・報酬条件の版"
             description={
               <>
-                販売価格・報酬額は未決です。既存の版は書き換えず、新しい版を作ります。完了した契約は完了時の写しで固定され、後の変更の影響を受けません（AC-16）。
+                条件を変更するときは、新しい版を作ります。完了した契約は完了時の内容で固定され、後の変更の影響を受けません。
                 価格・報酬条件が未設定の版は保存できますが、その版では営業可能にできません。無効化は新しい担当確保を止め、すでに引き継いだ商談の条件は維持します。
               </>
             }
           >
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>版</TableHead>
-                  <TableHead>名称</TableHead>
-                  <TableHead>範囲</TableHead>
-                  <TableHead className="text-right">販売価格</TableHead>
-                  <TableHead className="text-right">月額</TableHead>
-                  <TableHead>報酬条件</TableHead>
-                  <TableHead>営業に使えるか</TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {terms.value.map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="whitespace-nowrap font-medium">{t.version}</TableCell>
-                    <TableCell>{t.name}</TableCell>
-                    <TableCell className="min-w-48">
-                      <Json value={t.scope} />
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-right tabular-nums">{yen(t.price)}</TableCell>
-                    <TableCell className="whitespace-nowrap text-right tabular-nums">
-                      {t.monthlyFee === null ? "—" : yen(t.monthlyFee)}
-                    </TableCell>
-                    <TableCell>{rewardRuleText(t.rewardRule)}</TableCell>
-                    <TableCell>
-                      {isTermsReadyForSales(t) ? (
-                        <Badge variant="success">使える</Badge>
-                      ) : (
-                        <Badge variant="warning" className="whitespace-normal">
-                          使えない（{termsIssueText(t)}）
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <form action={setProductTermsActiveAction} className={inlineFormClass}>
-                        <ReturnTo path={here} />
-                        <input type="hidden" name="productTermsId" value={t.id} />
-                        <input type="hidden" name="active" value={t.active ? "false" : "true"} />
-                        <Button type="submit" size="xs" variant="outline">
-                          {t.active ? "無効にする" : "有効にする"}
-                        </Button>
-                      </form>
-                    </TableCell>
+            <details className={detailsClass}>
+              <summary className={summaryClass}>登録済みの条件（{terms.value.length}件）</summary>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>版</TableHead>
+                    <TableHead>名称</TableHead>
+                    <TableHead>範囲</TableHead>
+                    <TableHead className="text-right">販売価格</TableHead>
+                    <TableHead className="text-right">月額</TableHead>
+                    <TableHead>報酬条件</TableHead>
+                    <TableHead>営業に使えるか</TableHead>
+                    <TableHead>操作</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {terms.value.map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="whitespace-nowrap font-medium">{t.version}</TableCell>
+                      <TableCell>{t.name}</TableCell>
+                      <TableCell className="min-w-48">
+                        <Json value={t.scope} />
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-right tabular-nums">{yen(t.price)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right tabular-nums">
+                        {t.monthlyFee === null ? "—" : yen(t.monthlyFee)}
+                      </TableCell>
+                      <TableCell>{rewardRuleText(t.rewardRule)}</TableCell>
+                      <TableCell>
+                        {isTermsReadyForSales(t) ? (
+                          <Badge variant="success">使える</Badge>
+                        ) : (
+                          <Badge variant="warning" className="whitespace-normal">
+                            使えない（{termsIssueText(t)}）
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <form action={setProductTermsActiveAction} className={inlineFormClass}>
+                          <ReturnTo path={here} />
+                          <input type="hidden" name="productTermsId" value={t.id} />
+                          <input type="hidden" name="active" value={t.active ? "false" : "true"} />
+                          <Button type="submit" size="xs" variant="outline">
+                            {t.active ? "無効にする" : "有効にする"}
+                          </Button>
+                        </form>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </details>
             <details className={detailsClass}>
               <summary className={summaryClass}>新しい版を作成する</summary>
-              <form action={createProductTermsAction} className={stackFormClass}>
-                <ReturnTo path={here} />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="版（一意。例：2026-10-a）" htmlFor="terms-version">
-                    <Input id="terms-version" name="version" required />
-                  </Field>
-                  <Field label="名称" htmlFor="terms-name">
-                    <Input id="terms-name" name="name" required />
-                  </Field>
-                </div>
-                <Field label="提供範囲（ページ数・修正回数・納期など）" htmlFor="terms-scope">
-                  <Textarea id="terms-scope" name="scope" rows={3} />
-                </Field>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="販売価格（円・空欄は未設定）" htmlFor="terms-price">
-                    <Input id="terms-price" name="price" inputMode="numeric" className="tabular-nums" />
-                  </Field>
-                  <Field label="月額（円・任意）" htmlFor="terms-monthly">
-                    <Input id="terms-monthly" name="monthlyFee" inputMode="numeric" className="tabular-nums" />
-                  </Field>
-                </div>
-                <Field label="報酬条件の種類" htmlFor="terms-reward-type">
-                  <NativeSelect id="terms-reward-type" name="rewardType" defaultValue="">
-                    <option value="">未設定</option>
-                    <option value="fixed">定額（円）</option>
-                    <option value="rate">販売価格に対する割合（万分率。1000 = 10%）</option>
-                  </NativeSelect>
-                </Field>
-                <Field label="報酬条件の値" htmlFor="terms-reward-value">
-                  <Input id="terms-reward-value" name="rewardValue" inputMode="numeric" className="tabular-nums" />
-                </Field>
-                <div>
-                  <Button type="submit" size="sm">
-                    版を作成
-                  </Button>
-                </div>
-              </form>
+              <ProductTermsForm />
             </details>
           </Section>
         </div>
