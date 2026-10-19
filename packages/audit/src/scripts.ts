@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { err, ok, type Result } from "@siteoffer/core";
+import { isReadableDiagnosticText } from "@siteoffer/schemas";
 import type { Json } from "./collect.ts";
 import { type AuditOptions, scriptPaths } from "./config.ts";
 import type { PythonRunner } from "./python.ts";
@@ -93,17 +94,24 @@ export async function runDecide(
 }
 
 export function parseDecideOutput(stdout: string): Result<DecideResult, "decide_failed"> {
-  let raw: Json;
+  let parsed: unknown;
   try {
-    raw = JSON.parse(stdout) as Json;
+    parsed = JSON.parse(stdout);
   } catch {
     return err("decide_failed", "decide.py の出力がJSONでない");
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return err("decide_failed", "decide.py の出力形式が不正です");
+  const raw = parsed as Json;
   const map: Record<string, Decision> = { create: "create", skip: "skip", pending: "hold" };
-  const decision = typeof raw.decision === "string" ? map[raw.decision] : undefined;
-  if (!decision) return err("decide_failed", `decide.py の decision が不明: ${String(raw.decision)}`);
-  const reasons = Array.isArray(raw.reasons) ? raw.reasons.map(String) : [];
-  return ok({ decision, reasons, raw });
+  const decision = typeof raw.decision === "string" && Object.hasOwn(map, raw.decision) ? map[raw.decision] : undefined;
+  if (!decision) return err("decide_failed", "decide.py の判定値を確認できません");
+  if (!Array.isArray(raw.reasons) || raw.reasons.length === 0 || !raw.reasons.every(isReadableDiagnosticText))
+    return err(
+      "decide_failed",
+      "decide.py の判定理由が欠落しているか、文字を正しく読み取れません。保存時の原資料と実行環境を確認してください",
+    );
+  return ok({ decision, reasons: [...raw.reasons], raw });
 }
 
 export async function readRubricVersion(options: AuditOptions): Promise<string> {

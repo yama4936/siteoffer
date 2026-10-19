@@ -96,8 +96,12 @@ describe("parseDecideOutput", () => {
   });
 
   it("create / skip はそのまま。不明な判定やJSON以外は失敗", () => {
-    expect(parseDecideOutput('{"decision":"create","reasons":[]}')).toMatchObject({ value: { decision: "create" } });
-    expect(parseDecideOutput('{"decision":"skip","reasons":[]}')).toMatchObject({ value: { decision: "skip" } });
+    expect(parseDecideOutput('{"decision":"create","reasons":["保存された判定理由"]}')).toMatchObject({
+      value: { decision: "create" },
+    });
+    expect(parseDecideOutput('{"decision":"skip","reasons":["保存された判定理由"]}')).toMatchObject({
+      value: { decision: "skip" },
+    });
     expect(parseDecideOutput('{"decision":"maybe"}')).toMatchObject({ ok: false, error: "decide_failed" });
     expect(parseDecideOutput("not json")).toMatchObject({ ok: false, error: "decide_failed" });
   });

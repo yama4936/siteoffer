@@ -1,4 +1,5 @@
 import type { findings as findingsTable, siteAudits } from "@siteoffer/db";
+import { isReadableDiagnosticText } from "@siteoffer/schemas";
 import { FindingSections } from "@/components/audit/finding-sections";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -45,7 +46,7 @@ export function AuditView({ audit, findings }: { audit: Audit; findings: Finding
   return (
     <div className="space-y-4">
       <div className="rounded-xl border bg-card p-4 shadow-xs">
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 [&_dd]:break-words [&_dt]:text-muted-foreground [&_dt]:text-xs">
+        <dl className="grid items-start gap-x-6 gap-y-3 text-sm sm:grid-cols-2 [&_dd]:break-words [&_dt]:text-muted-foreground [&_dt]:text-xs">
           <div className="grid gap-1">
             <dt>状態</dt>
             <dd>
@@ -86,7 +87,23 @@ export function AuditView({ audit, findings }: { audit: Audit; findings: Finding
               ) : (
                 "—"
               )}
-              {audit.decisionReason ? <div className="mt-1 text-muted-foreground">{audit.decisionReason}</div> : null}
+              {audit.decisionReason ? (
+                isReadableDiagnosticText(audit.decisionReason) ? (
+                  <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{audit.decisionReason}</div>
+                ) : (
+                  <section
+                    aria-label="判定理由の記録を確認"
+                    className="mt-2 space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+                  >
+                    <p className="font-medium">判定理由の文字を正しく読み取れません。</p>
+                    <p>保存時の原資料を確認してください。保存済みの文章はそのまま保持しています。</p>
+                    <details>
+                      <summary className="cursor-pointer underline">保存されている原文を表示</summary>
+                      <p className="mt-2 break-all whitespace-pre-wrap text-xs">{audit.decisionReason}</p>
+                    </details>
+                  </section>
+                )
+              ) : null}
             </dd>
           </div>
           <div className="grid gap-1">
