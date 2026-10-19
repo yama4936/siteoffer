@@ -126,6 +126,9 @@ export function CompanyDirectory({ data, filters }: { data: CompanyDirectoryPage
       </div>
       <p className="sales-candidate-note">
         掲載企業は、運営が調査して用意した営業候補です。企業からの発注や成約を保証するものではありません。
+        <Link href="/sources" className="inline-flex min-h-11 items-center underline underline-offset-4">
+          企業情報の出典を確認
+        </Link>
       </p>
     </div>
   );

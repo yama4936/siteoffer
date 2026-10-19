@@ -143,6 +143,12 @@ export default async function DiscoveryPage({
             <strong className="font-medium text-warning-foreground"> このページに処理中のジョブがあります。</strong>
           ) : null}
         </p>
+        <Link
+          href="/sources"
+          className="inline-flex min-h-11 items-center text-primary text-sm underline underline-offset-4"
+        >
+          企業情報の出典を確認
+        </Link>
         <DiscoveryJobFilters query={query} />
         <DiscoveryIndexPagination query={query} kind="jobs" {...jobs} />
         <DiscoveryJobCards data={index.value} />
