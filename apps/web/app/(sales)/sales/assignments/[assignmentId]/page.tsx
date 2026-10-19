@@ -3,6 +3,7 @@ import { EXISTING_DOMAIN_REVIEW_NOTICE, NEW_DOMAIN_AVAILABILITY_NOTICE } from "@
 import { ChevronRight, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ActivityHistory } from "@/components/activity-history";
 import { OfferChanges } from "@/components/offer-changes";
 import { ActivityForm } from "@/components/sales/activity-form";
 import { ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
@@ -13,13 +14,13 @@ import { ExternalLink, TermsTable } from "@/components/sales/views";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { DescriptionList, EmptyState, Muted, PageHeader } from "@/components/ui/page";
+import { DescriptionList, Muted, PageHeader } from "@/components/ui/page";
+import { parseActivityHistoryQuery } from "@/lib/activity-history-types";
 import { getDb } from "@/lib/db";
 import { getOfferChangeView } from "@/lib/offer-changes";
 import { emptyActivity } from "@/lib/sales/activity-draft-types";
 import { loadActivityDraft } from "@/lib/sales/activity-drafts";
 import {
-  activityKindLabel,
   DOMAIN_INTENTS,
   DOMAIN_MANAGERS,
   formatDate,
@@ -42,10 +43,18 @@ import {
 export const metadata = { title: "担当案件 | SiteOffer" };
 
 /** 担当案件の詳細：活動記録、次回対応、運営相談、ドメイン希望、成約報告、契約確認状況 */
-export default async function AssignmentDetailPage({ params }: { params: Promise<{ assignmentId: string }> }) {
+export default async function AssignmentDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ assignmentId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await requireUser("sales");
   const { assignmentId } = await params;
-  const r = await getMyAssignmentDetail(getDb(), user.actor, assignmentId);
+  const filters = parseActivityHistoryQuery(await searchParams);
+  if (!filters) notFound();
+  const r = await getMyAssignmentDetail(getDb(), user.actor, assignmentId, filters);
   if (!r.ok) notFound();
   const d = r.value;
   const a = d.assignment;
@@ -78,7 +87,7 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
         <a href="#activity-history" className={buttonVariants({ variant: "outline", size: "sm" })}>
           活動履歴を見る
         </a>
-        {d.activities.some((x) => x.consultOps) && (
+        {d.activityHistory.hasConsultations && (
           <Link
             href={`/sales/consultations?assignment=${a.id}`}
             className={buttonVariants({ variant: "outline", size: "sm" })}
@@ -191,43 +200,14 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
               defaults={emptyActivity(new Date())}
               requestKey={randomUUID()}
               nextActionLabel={formatDateTime(a.nextActionAt)}
-              previousNote={d.activities.find((x) => !!x.note)?.note ?? null}
+              previousNote={d.activityHistory.latestNote}
             />
           )}
         </SectionCard>
       )}
 
       <SectionCard id="activity-history" title="活動履歴">
-        {d.activities.length === 0 ? (
-          <EmptyState>活動の記録はまだありません。</EmptyState>
-        ) : (
-          <ol className="relative space-y-4 border-l pl-5">
-            {d.activities.map((x) => (
-              <li key={x.id} className="relative space-y-1 text-sm">
-                <span
-                  aria-hidden="true"
-                  className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-card bg-primary"
-                />
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <strong className="font-semibold">{activityKindLabel(x.kind)}</strong>{" "}
-                  <span className="text-muted-foreground text-xs">{formatDateTime(x.occurredAt)}</span>
-                  {x.consultOps && (
-                    <Link href={`/sales/consultations?focus=${x.id}`} className="text-primary underline">
-                      相談の回答・状況を見る
-                    </Link>
-                  )}
-                </div>
-                {x.note && <p className="whitespace-pre-wrap leading-relaxed">{x.note}</p>}
-                {x.nextActionMode === "clear" && (
-                  <div className="text-muted-foreground text-xs">次回対応日を解除しました</div>
-                )}
-                {x.nextActionAt && (
-                  <div className="text-muted-foreground text-xs">次回対応日：{formatDateTime(x.nextActionAt)}</div>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
+        <ActivityHistory key={a.id} initial={d.activityHistory} />
       </SectionCard>
 
       <SectionCard title="ドメイン希望の聞き取り">

@@ -122,6 +122,13 @@ export default async function AssignmentsPage({
                     次回 {fmtDate(a.nextActionAt)}
                   </TableCell>
                   <TableCell className="min-w-96">
+                    <Link
+                      href={`/ops/assignments/${a.id}/history`}
+                      prefetch={false}
+                      className="mb-3 inline-flex min-h-11 items-center text-primary text-sm underline"
+                    >
+                      活動履歴を確認 →
+                    </Link>
                     {active ? (
                       <div className="grid gap-2">
                         <Link href={`/ops/assignments/${a.id}/conditions`} className="text-primary text-sm underline">

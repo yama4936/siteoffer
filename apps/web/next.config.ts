@@ -17,7 +17,15 @@ const config: NextConfig = {
   logging: {
     serverFunctions: false,
     incomingRequests: {
-      ignore: [/\/review(?:\/|$)/, /\/customer\/activate(?:\/|$)/, /\/account\/recovery(?:\/|$)/, /^\/published\//],
+      ignore: [
+        /\/review(?:\/|$)/,
+        /\/customer\/activate(?:\/|$)/,
+        /\/account\/recovery(?:\/|$)/,
+        /^\/published\//,
+        /^\/activity-history\//,
+        /\/sales\/assignments(?:\/|\?|$)/,
+        /\/ops\/assignments\/[^/]+\/history(?:\/|\?|$)/,
+      ],
     },
   },
   distDir: process.env.SITEOFFER_NEXT_DIST_DIR || ".next",

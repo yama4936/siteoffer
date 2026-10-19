@@ -14,7 +14,6 @@ import {
   hasSalesContract,
   isActiveStatus,
   isTermsReadyForSales,
-  listActivities,
   listAssignments,
   loadCompanyProfile,
   ok,
@@ -41,6 +40,12 @@ import {
 } from "@siteoffer/db";
 import { type CallScript, callScriptSchema, type ProposalText, proposalTextSchema } from "@siteoffer/schemas";
 import { and, asc, desc, eq, ilike, inArray, not, or, sql } from "drizzle-orm";
+import { ActivityHistoryError, readActivityHistory } from "../activity-history";
+import {
+  type ActivityHistoryFilters,
+  type ActivityHistoryPage,
+  DEFAULT_ACTIVITY_HISTORY,
+} from "../activity-history-types";
 import { type CompanyListFilter, type DirectoryQuery, normalizeDirectoryFilter } from "./directory-query";
 
 export { COMPANY_SORTS, type CompanyListFilter, type CompanySort, parseCompanySort } from "./directory-query";
@@ -635,6 +640,7 @@ export async function listMyAssignments(
 }
 
 export interface AssignmentDetail {
+  activityHistory: ActivityHistoryPage;
   assignment: {
     id: string;
     status: string;
@@ -657,6 +663,7 @@ export interface AssignmentDetail {
     recontactAfter: Date | null;
   };
   sites: { url: string; domain: string }[];
+  /** Selected page only; counts, search and all-record metadata live in activityHistory. */
   activities: {
     id: string;
     kind: string;
@@ -704,6 +711,7 @@ export async function getMyAssignmentDetail(
   db: DbOrTx,
   actor: Actor | null,
   assignmentId: string,
+  historyFilters: ActivityHistoryFilters = DEFAULT_ACTIVITY_HISTORY,
 ): Promise<Result<AssignmentDetail, QueryError>> {
   const user = requireUser(actor);
   if (!user.ok) return user;
@@ -712,8 +720,13 @@ export async function getMyAssignmentDetail(
   if (!a) return err("not_found");
   if (!can(user.value, "read", { type: "assignment", ownerUserId: a.userId })) return err("not_found");
 
-  const activities = await listActivities(db, user.value, a.id);
-  if (!activities.ok) return err("not_found");
+  let activityHistory: ActivityHistoryPage;
+  try {
+    activityHistory = await readActivityHistory(db, user.value, a.id, historyFilters);
+  } catch (error) {
+    if (error instanceof ActivityHistoryError) return err("not_found");
+    throw error;
+  }
 
   const [company] = await db.select().from(companies).where(eq(companies.id, a.companyId));
   if (!company) return err("not_found");
@@ -743,6 +756,7 @@ export async function getMyAssignmentDetail(
   const terms = bound ? [offerTerms(bound)] : [];
 
   return ok({
+    activityHistory,
     assignment: {
       id: a.id,
       status: a.status,
@@ -763,12 +777,12 @@ export async function getMyAssignmentDetail(
       recontactAfter: company.recontactAfter,
     },
     sites,
-    activities: activities.value.map((x) => ({
+    activities: activityHistory.items.map((x) => ({
       id: x.id,
       kind: x.kind,
-      occurredAt: x.occurredAt,
+      occurredAt: new Date(x.occurredAt),
       note: x.note,
-      nextActionAt: x.nextActionAt,
+      nextActionAt: x.nextActionAt ? new Date(x.nextActionAt) : null,
       consultOps: x.consultOps,
       nextActionMode: x.nextActionMode,
     })),

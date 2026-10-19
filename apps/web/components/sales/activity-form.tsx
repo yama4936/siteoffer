@@ -15,6 +15,7 @@ import {
   suggestedFollowUp,
 } from "@/lib/sales/activity-draft-types";
 import { ACTIVITY_KINDS, activityKindLabel } from "@/lib/sales/labels";
+import { preservesActivityHistory } from "./activity-history-navigation";
 
 export function ActivityForm({
   assignmentId,
@@ -32,8 +33,11 @@ export function ActivityForm({
   previousNote: string | null;
 }) {
   const router = useRouter();
-  const draft = usePersonalDraft(initial, defaults, (revision, values) =>
-    saveActivityDraftAction(assignmentId, revision, values),
+  const draft = usePersonalDraft(
+    initial,
+    defaults,
+    (revision, values) => saveActivityDraftAction(assignmentId, revision, values),
+    (target) => preservesActivityHistory(target, assignmentId),
   );
   const [busy, setBusy] = useState(false),
     [confirmEnd, setConfirmEnd] = useState(false),
