@@ -9,6 +9,7 @@ import {
   type DiscoveryFailure,
   discoveryCriteriaSchema,
   type OfficialSiteStatusValue,
+  type SiteCandidate,
 } from "./schemas.ts";
 
 export interface DiscoveryProviders {
@@ -334,6 +335,7 @@ async function processCandidate(
   }
 
   let judgement: OfficialSiteJudgement | null = null;
+  let searchResults: SiteCandidate[] | null = null;
   if (providers.search) {
     const found = await providers.search.findOfficialSite(
       {
@@ -346,6 +348,7 @@ async function processCandidate(
       { clock },
     );
     if (found.ok) {
+      searchResults = found.value;
       judgement = judgeOfficialSite(cand, found.value, { thirdPartyDomains: providers.thirdPartyDomains ?? [] });
     } else {
       failures.push({ externalId: cand.externalId, stage: "search", reason: `${found.error}: ${found.message ?? ""}` });
@@ -354,7 +357,22 @@ async function processCandidate(
 
   if (!existing && judgement) existing = await findCompanyBySites(db, cand, judgement.sites);
 
+  const observed = existing;
   return write(async (tx) => {
+    // The external search may have outlived an operator decision or another collection.
+    // Lock and reread before applying any of its facts or site judgements.
+    const match = observed ?? (await findExistingCompany(tx, cand));
+    if (match) {
+      const [latest] = await tx.select().from(companies).where(eq(companies.id, match.id)).for("update");
+      if (!latest) throw Error("保存先の企業が変更されました。再収集してください");
+      existing = latest;
+      if ((PROTECTED_SUPPRESSIONS as readonly string[]).includes(latest.suppression)) {
+        await upsertCompanySource(tx, clock, jobId, cand, latest.id);
+        failures.push({ externalId: cand.externalId, stage: "candidate", reason: `suppressed: ${latest.suppression}` });
+        return "skipped";
+      }
+    }
+    const reviewChanged = observed && existing && observed.officialSiteStatus !== existing.officialSiteStatus;
     // 確度：検索できなかったときは、新規なら確認待ち、既存なら据え置き
     const judged: OfficialSiteStatusValue = judgement?.status ?? (providers.search ? "needs_review" : "not_found");
     const now = clock.now();
@@ -382,7 +400,7 @@ async function processCandidate(
       company = row!;
       outcome = "created";
     } else {
-      const patch = companyPatch(existing, cand);
+      const patch = companyPatch(existing, cand, observed);
       company = existing;
       outcome = "skipped";
       if (Object.keys(patch).length > 0) {
@@ -396,8 +414,11 @@ async function processCandidate(
       }
     }
 
+    // Evidence must match the facts actually kept, including concurrent corrections.
+    if (searchResults)
+      judgement = judgeOfficialSite(company, searchResults, { thirdPartyDomains: providers.thirdPartyDomains ?? [] });
     // 公式サイトの保存。他社の正規化URLとぶつかるものは保存しない
-    let status = judged;
+    let status = judgement?.status ?? judged;
     if (judgement && judgement.sites.length > 0) {
       const saved = await saveWebsites(tx, company.id, judgement.sites);
       if (saved.added > 0 && outcome === "skipped") outcome = "updated";
@@ -406,7 +427,7 @@ async function processCandidate(
       }
       if (saved.kept === 0) status = "needs_review";
     }
-    if (judgement || outcome === "created") {
+    if (!reviewChanged && (judgement || outcome === "created")) {
       const merged = mergeOfficialSiteStatus(company.officialSiteStatus, status);
       if (merged !== company.officialSiteStatus) {
         const [row] = await tx
@@ -439,7 +460,11 @@ async function processCandidate(
 }
 
 /** 既存企業に反映する差分。所在地は出典付きのものだけで置き換え、取得元にない項目は消さない */
-function companyPatch(existing: CompanyRow, cand: CompanyCandidate): Partial<typeof companies.$inferInsert> {
+function companyPatch(
+  existing: CompanyRow,
+  cand: CompanyCandidate,
+  observed: CompanyRow | null,
+): Partial<typeof companies.$inferInsert> {
   const patch: Partial<typeof companies.$inferInsert> = {};
   if (cand.name !== existing.name) patch.name = cand.name;
   if (cand.corporateNumber && !existing.corporateNumber) patch.corporateNumber = cand.corporateNumber;
@@ -451,6 +476,15 @@ function companyPatch(existing: CompanyRow, cand: CompanyCandidate): Partial<typ
   }
   if (cand.industry && !existing.industry) patch.industry = cand.industry;
   if (cand.representativePhone && !existing.representativePhone) patch.representativePhone = cand.representativePhone;
+  if (observed) {
+    for (const key of ["name", "corporateNumber", "industry", "representativePhone"] as const) {
+      if (existing[key] !== observed[key]) delete patch[key];
+    }
+    const location = ["prefecture", "city", "address", "addressSourceUrl"] as const;
+    if (location.some((key) => existing[key] !== observed[key])) {
+      for (const key of location) delete patch[key];
+    }
+  }
   return patch;
 }
 
