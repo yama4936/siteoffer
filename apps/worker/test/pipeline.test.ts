@@ -23,7 +23,7 @@ import { claimStep, readStepState, STEP_TARGET } from "../src/ledger.ts";
 import { auditStep } from "../src/pipeline/audit.ts";
 import { discoveryStep } from "../src/pipeline/discovery.ts";
 import { proposalStep, requestRegeneration } from "../src/pipeline/proposal.ts";
-import { type ProposalPayload, QUEUES, stepKeys } from "../src/queues.ts";
+import { type AuditPayload, type ProposalPayload, QUEUES, stepKeys } from "../src/queues.ts";
 import {
   drainWithDesignApproval,
   fakeSiteBuilder,
@@ -186,7 +186,7 @@ describe("二重投入", () => {
     const again = await executeStep(env.deps, discoveryStep, { discoveryJobId: jobId });
     expect(again).toMatchObject({ status: "duplicate", state: "succeeded" });
     const c = await company(env);
-    const auditPayload = { companyId: c.id, requestKey: `discovery:${jobId}` };
+    const auditPayload = env.queue.sent.find((message) => message.name === QUEUES.audit)!.data as AuditPayload;
     expect(await executeStep(env.deps, auditStep, auditPayload)).toMatchObject({
       status: "duplicate",
       state: "succeeded",

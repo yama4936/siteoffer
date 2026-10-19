@@ -2,9 +2,12 @@ import { type Actor, type Clock, err, ok, type Result, recordEvent } from "@site
 import { companies, type Db, type DbOrTx, discoveryJobs, discoverySources } from "@siteoffer/db";
 import { runDiscovery } from "@siteoffer/discovery";
 import { and, eq, inArray, lt } from "drizzle-orm";
+import { currentAuditSite } from "../audit-request.ts";
 import type { WorkerDeps } from "../deps.ts";
+import { discoveryAuditPayload } from "../discovery-audit-target.ts";
 import { PermanentError, PreconditionError, type StepContext, type StepDefinition } from "../execute.ts";
 import { type AuditPayload, type DiscoveryPayload, QUEUES, stepKeys } from "../queues.ts";
+import { checkPublicHttpUrl } from "../url.ts";
 import { moveCompanyStatus, PROTECTED } from "./status.ts";
 
 export interface DiscoveryStepResult {
@@ -102,29 +105,34 @@ export async function advanceConfirmedCompanies(
     .where(and(eq(discoverySources.jobId, discoveryJobId), eq(discoverySources.role, "company")));
   const ids = sources.map((s) => s.companyId).filter((id): id is string => !!id);
   if (ids.length === 0) return [];
-  const rows = await db.select().from(companies).where(inArray(companies.id, ids));
-
   const queued: string[] = [];
-  for (const c of rows) {
-    if (c.officialSiteStatus !== "confirmed" || PROTECTED.includes(c.suppression)) continue;
-    if (c.pipelineStatus === "collected") {
-      const move = (tx: DbOrTx) =>
-        moveCompanyStatus(tx, clock, {
+  for (const companyId of ids) {
+    const prepare = async (tx: DbOrTx): Promise<AuditPayload | null> => {
+      const [c] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("update");
+      if (
+        c?.officialSiteStatus !== "confirmed" ||
+        PROTECTED.includes(c.suppression) ||
+        !["collected", "site_confirmed"].includes(c.pipelineStatus)
+      )
+        return null;
+      const site = await currentAuditSite(tx, c.id);
+      if (!site || !checkPublicHttpUrl(site.url).ok) return null;
+      if (c.pipelineStatus === "collected") {
+        await moveCompanyStatus(tx, clock, {
           companyId: c.id,
           from: ["collected"],
           to: "site_confirmed",
           reason: "公式サイト確認済み",
           meta: { discoveryJobId },
         });
-      if (ownership) await ownership.withOwnership(move);
-      else await move(db);
-    } else if (c.pipelineStatus !== "site_confirmed") {
-      continue;
-    }
-    const payload: AuditPayload = { companyId: c.id, requestKey: `discovery:${discoveryJobId}` };
+      }
+      return discoveryAuditPayload(site);
+    };
+    const payload = ownership ? await ownership.withOwnership(prepare) : await db.transaction(prepare);
+    if (!payload) continue;
     await ownership?.assertCurrent();
     await deps.queue.send(QUEUES.audit, payload, { singletonKey: stepKeys.audit(payload) });
-    queued.push(c.id);
+    queued.push(companyId);
   }
   return queued;
 }

@@ -4,6 +4,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { closeStepAudits } from "../audit-cleanup.ts";
 import { validateAuditRequest } from "../audit-request.ts";
 import { resumeSavedAudit } from "../audit-result.ts";
+import { DISCOVERY_AUDIT_PREFIX } from "../discovery-audit-target.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
 import { dispatchProposalHandoffs, findProposalHandoff } from "../handoff.ts";
 import { type AuditPayload, QUEUES, stepKeys } from "../queues.ts";
@@ -83,7 +84,13 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
       withOwnership: ctx.withOwnership,
     });
     await ctx.assertCurrent();
-    if (!r.ok && r.error === "audit_busy") throw new PreconditionError(r.message);
+    if (!r.ok && r.error === "audit_busy") {
+      // A replacement target can wait for an older target without starting another model call.
+      // At the retry limit, stop without marking the other diagnosis/company as failed.
+      if (payload.requestKey.startsWith(DISCOVERY_AUDIT_PREFIX) && ctx.attempt < deps.policies.audit.maxAttempts)
+        throw new Error(r.message);
+      throw new PreconditionError(r.message);
+    }
     if (!r.ok) throw new PermanentError(`${r.error}: ${r.message ?? ""}`);
     const out = r.value;
     if (out.status === "failed") throw new Error(`診断に失敗した：${out.failureReason ?? "理由不明"}`);

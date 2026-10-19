@@ -12,6 +12,7 @@ import {
 } from "@siteoffer/db";
 import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 import { getAuditRecoveryCandidates } from "./audit-recovery.ts";
+import { DISCOVERY_AUDIT_PREFIX, matchesDiscoveryAuditTarget } from "./discovery-audit-target.ts";
 import { PROTECTED } from "./pipeline/status.ts";
 import { stepKeys } from "./queues.ts";
 import { checkPublicHttpUrl } from "./url.ts";
@@ -230,6 +231,67 @@ export async function requestAuditByOps(
 }
 /** ワーカーが対象を再照合する。依頼後のサイト差し替えを別サイトへの診断と取り違えない。 */
 export async function validateAuditRequest(db: DbOrTx, payload: { companyId: string; requestKey: string }) {
+  if (payload.requestKey.startsWith(DISCOVERY_AUDIT_PREFIX)) {
+    const [company] = await db.select().from(companies).where(eq(companies.id, payload.companyId));
+    const site = await currentAuditSite(db, payload.companyId);
+    if (!company || PROTECTED.includes(company.suppression) || company.officialSiteStatus !== "confirmed")
+      return "企業または公式サイトの状態が変わりました。企業情報を確認してください。";
+    if (!site || !checkPublicHttpUrl(site.url).ok || !matchesDiscoveryAuditTarget(payload, site))
+      return "受付後に公式サイトが変更されました。現在の対象を確認して診断を依頼してください。";
+    const key = stepKeys.audit(payload),
+      targetUrl = new URL(site.url).href;
+    const belongsToRequest = sql`exists(select 1 from audit_events e
+      where e.target_type='site_audit' and e.target_id=${siteAudits.id}::text and e.action='site_audit.started'
+        and e."after"->>'workerStepKey'=${key})`;
+    const [saved] = await db
+      .select({ id: siteAudits.id })
+      .from(siteAudits)
+      .where(
+        and(
+          eq(siteAudits.companyId, company.id),
+          eq(siteAudits.websiteId, site.id),
+          eq(siteAudits.targetUrl, targetUrl),
+          inArray(siteAudits.status, ["evaluated", "unevaluable"]),
+          belongsToRequest,
+        ),
+      )
+      .limit(1);
+    // A saved result from this request must still be resumable after it advanced the company.
+    if (!saved) {
+      if (!["collected", "site_confirmed"].includes(company.pipelineStatus))
+        return "受付後に診断や制作が進行しました。既存の結果と処理状況を確認してください。";
+      const [pending] = await db
+        .select({ id: auditRequests.id })
+        .from(auditRequests)
+        .where(
+          and(
+            eq(auditRequests.companyId, company.id),
+            eq(auditRequests.websiteId, site.id),
+            eq(auditRequests.targetUrl, targetUrl),
+            isNull(auditRequests.finishedAt),
+          ),
+        )
+        .limit(1);
+      if (pending) return "同じ対象の診断依頼を受け付けています。受付済みの依頼から処理状況を確認してください。";
+      const [other] = await db
+        .select({ id: siteAudits.id })
+        .from(siteAudits)
+        .where(
+          and(
+            eq(siteAudits.companyId, company.id),
+            eq(siteAudits.websiteId, site.id),
+            eq(siteAudits.targetUrl, targetUrl),
+            sql`not (${belongsToRequest})`,
+          ),
+        )
+        .limit(1);
+      if (other) return "同じ対象の診断が存在します。既存の結果と処理状況を確認してください。";
+      const history = await db.execute(sql`select 1 where ${salesHistoryExists(sql`${company.id}::uuid`)}`);
+      if ((history as { rows: unknown[] }).rows.length)
+        return "営業・提案の履歴があります。現在の案件を確認し、必要な場合は再診断を依頼してください。";
+    }
+    return null;
+  }
   if (!payload.requestKey.startsWith("ops:")) return null;
   const id = payload.requestKey.slice(4);
   if (!UUID.test(id)) return "診断の依頼番号が不正です";

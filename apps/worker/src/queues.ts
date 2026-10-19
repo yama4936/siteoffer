@@ -32,7 +32,7 @@ export const auditPayloadSchema = z.strictObject({
   companyId: z.uuid(),
   /**
    * 同じ企業の診断を区別するキー。同じ値の二重投入は1回しか実行しない。
-   * 収集から送るときは収集ジョブID、再診断は新しい値（運営の操作ID等）にする。
+   * 自動収集は対象サイトIDとURLのハッシュで共有する。明示的な再診断は新しい値（運営の操作ID等）にする。
    */
   requestKey: z.string().min(1).max(200),
 });
