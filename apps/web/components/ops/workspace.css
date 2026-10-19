@@ -307,6 +307,15 @@
   font-size: 12px;
   font-weight: 600;
 }
+.queue-actions {
+  border-top: 1px solid var(--ops-line);
+  padding: 8px 12px;
+}
+.queue-actions .queue-all {
+  min-height: 44px;
+  padding: 10px 8px;
+  gap: 8px;
+}
 .queue-empty {
   padding: 20px;
   font-size: 12px;
@@ -638,6 +647,30 @@
   left: 15px;
   font-size: 12px;
   color: #8a97ac;
+}
+.preview-status {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  right: 15px;
+  border: 1px solid var(--ops-line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.preview-status p {
+  margin-top: 4px;
+  color: #65758e;
+}
+.preview-status button {
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 8px 16px;
+  border: 1px solid #b9c9ec;
+  border-radius: 6px;
+  color: #2449a3;
 }
 .preview-unavailable {
   height: 445px;
@@ -1087,7 +1120,7 @@
 @media (min-width: 1251px) {
   .review-layout {
     height: calc(100dvh - 60px);
-    min-height: 680px;
+    min-height: 0;
     grid-template-rows: minmax(0, 1fr) auto;
   }
   .review-content,

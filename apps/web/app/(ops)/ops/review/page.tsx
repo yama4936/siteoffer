@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ProposalDocument } from "@/components/ops/proposal-document";
 import { ReviewWorkspace } from "@/components/ops/review-workspace";
@@ -116,11 +115,6 @@ export default async function ReviewPage({
             : null
         }
       />
-      <div className="review-ready">
-        <Link href={`/ops/review/ready?${new URLSearchParams({ q: inbox.value.query })}`}>
-          営業への引き継ぎ · {inbox.value.counts.ready}社 →
-        </Link>
-      </div>
     </>
   );
 }

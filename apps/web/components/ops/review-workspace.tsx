@@ -41,7 +41,7 @@ type ReviewQueue = {
   page: number;
   pages: number;
   total: number;
-  counts: { all: number; pending: number };
+  counts: { all: number; pending: number; ready: number };
   context: string;
   pendingHref: string;
   allHref: string;
@@ -102,6 +102,30 @@ export function ReviewWorkspace({
     c?.version?.comparison.status === "ready" && c.version.comparison.basis === "revision" ? "changes" : "compare",
   );
   const [device, setDevice] = useState("desktop");
+  const queueItemsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!c?.id || !items.some((item) => item.id === c.id)) return;
+    const container = queueItemsRef.current;
+    const selected = container?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!container || !selected) return;
+    function revealSelected() {
+      if (!container || !selected) return;
+      const box = container.getBoundingClientRect(),
+        target = selected.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return;
+      // Reveal the selected item within its own list without moving the page or header.
+      if (target.height > box.height || target.top < box.top) container.scrollTop += Math.floor(target.top - box.top);
+      else if (target.bottom > box.bottom) container.scrollTop += Math.ceil(target.bottom - box.bottom);
+      if (target.width > box.width || target.left < box.left)
+        container.scrollLeft += Math.floor(target.left - box.left);
+      else if (target.right > box.right) container.scrollLeft += Math.ceil(target.right - box.right);
+    }
+    revealSelected();
+    const observer = new ResizeObserver(revealSelected);
+    observer.observe(container);
+    observer.observe(selected);
+    return () => observer.disconnect();
+  }, [c?.id, items]);
   const checkId = useId();
   const [checkGuide, setCheckGuide] = useState<{ key: ReviewCheckKey } | null>(null);
   const guideRef = useRef<HTMLElement>(null);
@@ -251,6 +275,7 @@ export function ReviewWorkspace({
         <nav className="queue-filters" aria-label="レビューの表示対象">
           <Link
             href={queue.pendingHref}
+            scroll={false}
             className={queue.view === "pending" ? "active" : ""}
             aria-current={queue.view === "pending" ? "page" : undefined}
           >
@@ -258,17 +283,19 @@ export function ReviewWorkspace({
           </Link>
           <Link
             href={queue.allHref}
+            scroll={false}
             className={queue.view === "all" ? "active" : ""}
             aria-current={queue.view === "all" ? "page" : undefined}
           >
             すべて {queue.counts.all}
           </Link>
         </nav>
-        <div className="queue-items">
+        <div className="queue-items" ref={queueItemsRef}>
           {visible.map((i) => (
             <Link
               key={i.id}
               href={reviewHref(i.id, i.versionId)}
+              scroll={false}
               className={`queue-item ${i.id === c?.id ? "selected" : ""}`}
               aria-current={i.id === c?.id ? "page" : undefined}
             >
@@ -292,18 +319,35 @@ export function ReviewWorkspace({
           {visible.length === 0 && <p className="queue-empty">該当する案件はありません。</p>}
         </div>
         <nav aria-label="レビュー案件のページ" className="queue-pagination">
-          {queue.page > 1 ? <Link href={queue.previousHref}>前の20社</Link> : <span />}
+          {queue.page > 1 ? (
+            <Link href={queue.previousHref} scroll={false}>
+              前の20社
+            </Link>
+          ) : (
+            <span />
+          )}
           <span>
             {queue.page} / {queue.pages}ページ · {queue.total}社
           </span>
-          {queue.page < queue.pages ? <Link href={queue.nextHref}>次の20社</Link> : <span />}
+          {queue.page < queue.pages ? (
+            <Link href={queue.nextHref} scroll={false}>
+              次の20社
+            </Link>
+          ) : (
+            <span />
+          )}
         </nav>
         {c && !items.some((i) => i.id === c.id) && (
           <p className="queue-empty">表示中の案件は、この一覧条件には含まれていません。</p>
         )}
-        <Link href="/ops/discovery" className="queue-all">
-          案件一覧を見る <ChevronRight size={17} />
-        </Link>
+        <nav className="queue-actions" aria-label="案件の操作">
+          <Link href={`/ops/review/ready?${new URLSearchParams({ q: queue.query })}`} className="queue-all">
+            営業への引き継ぎ · {queue.counts.ready}社 <ChevronRight size={17} />
+          </Link>
+          <Link href="/ops/discovery" className="queue-all">
+            案件一覧を見る <ChevronRight size={17} />
+          </Link>
+        </nav>
       </aside>
       {!c ? (
         <div className="review-empty">
@@ -351,6 +395,12 @@ export function ReviewWorkspace({
                 </a>
               )}
             </header>
+            {content.fixedSample === true && (
+              <div className="review-version-notice" role="note">
+                <strong>動作確認用の提案です</strong>
+                <p>表示サイトは固定サンプルで、実企業の情報やデザイン画像の再現品質を確認したものではありません。</p>
+              </div>
+            )}
             {version && !version.isLatest && (
               <div className="review-version-notice" role="status">
                 過去の提案版を表示しています。この版の承認・差し戻しはできません。

@@ -246,6 +246,7 @@ export function reviewContentSummary(raw: unknown) {
       })
     : [];
   return {
+    fixedSample: content.generator === "mock",
     designVersionId: uuid(content.designVersionId),
     proposalRevision: { sourceVersionId: uuid(revision.sourceVersionId) },
     proposalText: { measures: titles },

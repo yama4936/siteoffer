@@ -209,7 +209,11 @@ it("ワークスペース用の情報は表示名と参照だけに絞り、原�
     generationJobIds: { demo_site: "PRIVATE_JOB_SENTINEL" },
     inputPath: "C:/PRIVATE_PATH_SENTINEL",
   });
-  expect(result).toMatchObject({ designVersionId: designId, proposalRevision: { sourceVersionId: sourceId } });
+  expect(result).toMatchObject({
+    fixedSample: false,
+    designVersionId: designId,
+    proposalRevision: { sourceVersionId: sourceId },
+  });
   expect(result.proposalText.measures.length).toBeLessThanOrEqual(3);
   expect(Array.from(result.proposalText.measures[0]!.title)).toHaveLength(501);
   expect(result.proposalText.measures[0]!.title.endsWith("…")).toBe(true);
@@ -217,4 +221,13 @@ it("ワークスペース用の情報は表示名と参照だけに絞り、原�
   expect(
     reviewContentSummary({ designVersionId: "invalid", proposalRevision: { sourceVersionId: "invalid" } }),
   ).toMatchObject({ designVersionId: null, proposalRevision: { sourceVersionId: null } });
+});
+
+it("marks only stored mock output as a fixed sample without exposing execution metadata", () => {
+  expect(reviewContentSummary({ generator: "mock", privateExecution: "PRIVATE_SENTINEL" }).fixedSample).toBe(true);
+  for (const generator of ["codex", undefined, "unknown"])
+    expect(reviewContentSummary({ generator, fixedSample: true }).fixedSample).toBe(false);
+  expect(
+    JSON.stringify(reviewContentSummary({ generator: "mock", privateExecution: "PRIVATE_SENTINEL" })),
+  ).not.toContain("PRIVATE_SENTINEL");
 });
