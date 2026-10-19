@@ -1,8 +1,9 @@
 import type { findings as findingsTable, siteAudits } from "@siteoffer/db";
 import { isReadableDiagnosticText } from "@siteoffer/schemas";
 import { FindingSections } from "@/components/audit/finding-sections";
+import { Observations } from "@/components/audit/observations";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { findingLabel } from "@/lib/audit/item-labels";
 import { fmtDate } from "@/lib/ops/format";
 import { Json } from "./ui";
 import { StatusBadge } from "./ui-parts-1";
@@ -26,7 +27,7 @@ const DECISION: Record<string, string> = {
 };
 
 const FINDING_STATUS: Record<string, string> = {
-  scored: "採点",
+  scored: "採点済み",
   unevaluable: "評価不能",
   not_applicable: "対象外",
 };
@@ -147,55 +148,61 @@ export function AuditView({ audit, findings }: { audit: Audit; findings: Finding
         </dl>
       </div>
       <details className="rounded-lg border bg-card px-4 py-3 [&[open]>summary]:mb-3">
-        <summary className="cursor-pointer font-medium text-sm">集計（score.py の summary）</summary>
+        <summary className="cursor-pointer font-medium text-sm">診断集計の詳細</summary>
         <Json value={audit.summary} />
       </details>
       <h3 className="pt-2 font-semibold text-base">項目ごとの根拠（{findings.length}件）</h3>
-      <FindingSections findings={findings} renderList={(items) => <FindingTable findings={items} />} />
+      <FindingSections
+        findings={findings}
+        renderList={(items) => <FindingCards findings={items} rubricVersion={audit.rubricVersion} />}
+      />
     </div>
   );
 }
 
-function FindingTable({ findings }: { findings: Finding[] }) {
+function FindingCards({ findings, rubricVersion }: { findings: Finding[]; rubricVersion: string | null }) {
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>項目</TableHead>
-          <TableHead>結果</TableHead>
-          <TableHead>レベル</TableHead>
-          <TableHead>理由</TableHead>
-          <TableHead>観測事実（URL・日時・根拠）</TableHead>
-          <TableHead>改善案</TableHead>
-          <TableHead>推測</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {findings.map((f) => (
-          <TableRow key={f.id}>
-            <TableCell className="whitespace-nowrap font-mono text-xs">
-              {f.itemCode}
-              {f.critical ? <span className="font-sans text-destructive">（致命）</span> : null}
-            </TableCell>
-            <TableCell>
-              <StatusBadge
-                value={f.status}
-                labels={FINDING_STATUS}
-                tone={f.status === "scored" ? "secondary" : f.status === "unevaluable" ? "warning" : "outline"}
-              />
-            </TableCell>
-            <TableCell className="tabular-nums">{f.score ?? "—"}</TableCell>
-            <TableCell className="min-w-48">{f.reason ?? "—"}</TableCell>
-            <TableCell className="min-w-56 max-w-96">
-              <Json value={f.observations} />
-            </TableCell>
-            <TableCell className="min-w-48">{f.improvementHint ?? "—"}</TableCell>
-            <TableCell>
-              <Badge variant={f.inference ? "warning" : "outline"}>{f.inference ? "推測" : "観測"}</Badge>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <div className="grid gap-3">
+      {findings.map((f) => (
+        <article
+          key={f.id}
+          aria-label={`${f.itemCode}の診断結果`}
+          className={`min-w-0 overflow-hidden rounded-xl border bg-card text-sm shadow-xs ${f.critical ? "border-l-4 border-l-destructive" : ""}`}
+        >
+          <header className="flex flex-wrap items-center gap-2 border-b bg-muted/20 px-4 py-3">
+            <h4 className="font-semibold">{findingLabel(f.itemCode, rubricVersion) ?? f.itemCode}</h4>
+            {findingLabel(f.itemCode, rubricVersion) && (
+              <span className="font-mono text-muted-foreground text-xs">{f.itemCode}</span>
+            )}
+            {f.critical && <Badge variant="destructive">致命項目</Badge>}
+            <span className="font-medium tabular-nums">レベル {f.score ?? "未記録"}</span>
+            <StatusBadge
+              value={f.status}
+              labels={FINDING_STATUS}
+              tone={f.status === "scored" ? "secondary" : f.status === "unevaluable" ? "warning" : "outline"}
+            />
+            <Badge variant={f.inference ? "warning" : "outline"}>{f.inference ? "推測を含む" : "観測"}</Badge>
+          </header>
+          <div className="grid min-w-0 gap-4 p-4 lg:grid-cols-2 lg:gap-6">
+            <dl className="min-w-0 space-y-4 [&_dd]:break-words [&_dd]:whitespace-pre-wrap [&_dd]:leading-relaxed [&_dt]:mb-1 [&_dt]:font-medium [&_dt]:text-muted-foreground [&_dt]:text-xs">
+              <div>
+                <dt>判定理由</dt>
+                <dd>{f.reason ?? "判定理由は未記録です。"}</dd>
+              </div>
+              {f.improvementHint && (
+                <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-3">
+                  <dt>改善案</dt>
+                  <dd>{f.improvementHint}</dd>
+                </div>
+              )}
+            </dl>
+            <div className="min-w-0 space-y-2">
+              <h5 className="font-medium text-muted-foreground text-xs">確認した根拠</h5>
+              <Observations value={f.observations} />
+            </div>
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
