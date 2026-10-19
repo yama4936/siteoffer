@@ -60,6 +60,9 @@ export function CompanyJourney({ data }: { data: Journey }) {
         <Link href={`/ops/content?company=${data.companyId}`} className="text-primary underline">
           お知らせ・記事
         </Link>
+        <Link href={`/ops/companies/${data.companyId}/audits`} className="text-primary underline">
+          診断履歴・前回との比較
+        </Link>
       </div>
       <p className="text-xs text-muted-foreground">
         確認時点：{fmtDate(data.checkedAt)}

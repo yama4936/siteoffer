@@ -6,7 +6,7 @@ import { fmtDate } from "@/lib/ops/format";
 import { Json } from "./ui";
 import { StatusBadge } from "./ui-parts-1";
 
-type Audit = typeof siteAudits.$inferSelect;
+type Audit = Omit<typeof siteAudits.$inferSelect, "artifactDir" | "generationJobId">;
 type Finding = typeof findingsTable.$inferSelect;
 
 const AUDIT_STATUS: Record<string, string> = {

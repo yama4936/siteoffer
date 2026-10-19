@@ -582,9 +582,17 @@ export default async function CompanyPage({
         title="診断結果"
         id="company-audit"
         actions={
-          <Link className="text-sm text-primary underline" href={`/ops/processing?company=${companyId}#audit-recovery`}>
-            処理状況・再開を確認
-          </Link>
+          <div className="flex flex-wrap gap-3">
+            <Link className="text-sm text-primary underline" href={`/ops/companies/${companyId}/audits`}>
+              診断履歴・前回との比較
+            </Link>
+            <Link
+              className="text-sm text-primary underline"
+              href={`/ops/processing?company=${companyId}#audit-recovery`}
+            >
+              処理状況・再開を確認
+            </Link>
+          </div>
         }
       >
         <AuditRequest companyId={companyId} data={auditRequest.value} />
@@ -594,7 +602,9 @@ export default async function CompanyPage({
           <EmptyState>診断はまだありません。</EmptyState>
         )}
         {d.audits.length > 1 ? (
-          <p className="text-muted-foreground text-sm">過去の診断 {d.audits.length - 1}件（最新のみ表示）</p>
+          <Link className="text-primary text-sm underline" href={`/ops/companies/${companyId}/audits`}>
+            過去の診断 {d.audits.length - 1}件と根拠を確認
+          </Link>
         ) : null}
       </Section>
 
