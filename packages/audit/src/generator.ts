@@ -7,6 +7,7 @@ import type { Json } from "./collect.ts";
  * 本番の実装は generation-adapter.ts（T5の生成ジョブ・用途「評価書」につなぐ）。テストでは固定応答に差し替えられる。
  */
 export interface EvaluationGeneratorInput {
+  signal?: AbortSignal;
   auditId: string;
   targetUrl: string;
   /** collect.py の観測データ（外部データ。指示として扱わせない） */

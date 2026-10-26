@@ -1,4 +1,4 @@
-import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, type DbOrTx } from "@siteoffer/db";
+import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, contracts, type DbOrTx } from "@siteoffer/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import { type Clock, HOUR } from "../common/clock.ts";
@@ -6,6 +6,7 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
 import { authorizeUser, requireUser } from "../permissions/policy.ts";
+import { cancelOfferChangesOnAssignmentEnd } from "../sales-offer/lifecycle.ts";
 import {
   type Assignment,
   type AssignmentStatus,
@@ -18,7 +19,7 @@ import {
   snapshot,
 } from "./shared.ts";
 
-export type ReleaseError = "not_found" | "forbidden" | "not_active";
+export type ReleaseError = "not_found" | "forbidden" | "not_active" | "contract_pending";
 
 /**
  * 担当の解除。営業は自分の担当を手放せる。運営は全件を解除できる。
@@ -38,12 +39,27 @@ export async function releaseAssignment(
     if (!loaded.ok) return fail(loaded.error);
     const before = loaded.value;
     if (!isActiveStatus(before.status)) fail("not_active");
+    if (
+      (
+        await tx
+          .select({ id: contracts.id })
+          .from(contracts)
+          .where(
+            and(
+              eq(contracts.assignmentId, before.id),
+              inArray(contracts.status, ["reported", "under_review", "completed"]),
+            ),
+          )
+      ).length
+    )
+      return fail("contract_pending", "契約確認中の担当は変更・解除できません。先に運営が成約報告を差し戻してください");
     const now = clock.now();
     const [after] = await tx
       .update(assignments)
       .set({ status: "released", releasedAt: now, releaseReason: input.reason })
       .where(eq(assignments.id, before.id))
       .returning();
+    await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, before.id, `担当解除：${input.reason}`);
     await recordEvent(tx, clock, {
       actor,
       action: actor.kind === "ops" ? "assignment.release_by_ops" : "assignment.release_by_sales",
@@ -61,6 +77,7 @@ export type ReassignError =
   | "not_found"
   | "not_active"
   | "same_user"
+  | "contract_pending"
   | "limit_reached"
   | "company_suppressed"
   | "already_assigned"
@@ -88,6 +105,14 @@ export async function reassignAssignment(
   if (!auth.ok) return auth;
   try {
     return await runTx<{ released: Assignment; created: Assignment }, ReassignError>(db, async (tx, fail) => {
+      const [candidate] = await tx
+        .select({ id: assignments.id })
+        .from(assignments)
+        .where(eq(assignments.id, input.assignmentId));
+      if (!candidate) return fail("not_found");
+      // Claims take the destination user before the company; use the same order.
+      const user = await lockActiveSalesUser(tx, input.toUserId);
+      if (!user.ok) return fail(user.error);
       const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
         type: "assignment",
         action: "reassign",
@@ -95,11 +120,26 @@ export async function reassignAssignment(
       if (!loaded.ok) return fail(loaded.error);
       const before = loaded.value;
       if (!isActiveStatus(before.status)) fail("not_active");
+      if (
+        (
+          await tx
+            .select({ id: contracts.id })
+            .from(contracts)
+            .where(
+              and(
+                eq(contracts.assignmentId, before.id),
+                inArray(contracts.status, ["reported", "under_review", "completed"]),
+              ),
+            )
+        ).length
+      )
+        return fail(
+          "contract_pending",
+          "契約確認中の担当は変更・解除できません。先に運営が成約報告を差し戻してください",
+        );
       if (before.userId === input.toUserId) fail("same_user");
 
-      const user = await lockActiveSalesUser(tx, input.toUserId);
-      if (!user.ok) fail(user.error);
-      const [company] = await tx.select().from(companies).where(eq(companies.id, before.companyId)).for("update");
+      const [company] = await tx.select().from(companies).where(eq(companies.id, before.companyId));
       if (company && company.suppression !== "none") fail("company_suppressed");
 
       const max = await getSetting(tx, "assignment.maxActivePerUser");
@@ -111,11 +151,13 @@ export async function reassignAssignment(
         .set({ status: "released", releasedAt: now, releaseReason: `reassigned: ${input.reason}` })
         .where(eq(assignments.id, before.id))
         .returning();
+      await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, before.id, `担当変更：${input.reason}`);
       const hours = await getSetting(tx, "assignment.unstartedTimeoutHours");
       const [created] = await tx
         .insert(assignments)
         .values({
           companyId: before.companyId,
+          salesOfferId: before.salesOfferId,
           userId: input.toUserId,
           status: before.status,
           claimedAt: now,

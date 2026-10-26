@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 // 顧客確認の画面のサーバー処理の結合テスト（PGlite）。AC-18。
 // TODO(統合)：core の index.ts に delivery を追加したら "@siteoffer/core" から読む
 import {
@@ -50,6 +51,7 @@ const deps = () => ({ db, clock });
 
 function form(values: Record<string, string>): FormData {
   const fd = new FormData();
+  fd.set("requestKey", randomUUID());
   for (const [k, v] of Object.entries(values)) fd.set(k, v);
   return fd;
 }

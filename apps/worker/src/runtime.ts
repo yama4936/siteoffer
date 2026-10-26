@@ -1,9 +1,13 @@
-import { releaseExpiredAssignments } from "@siteoffer/core";
+import { cleanupAuthAttempts, releaseExpiredAssignments } from "@siteoffer/core";
+import { recoverExpiredGenerationJobs, recoverUnconfirmedGenerationJobs } from "@siteoffer/generation";
+import { dispatchAuditRequests, reconcileAuditRequest } from "./audit-request-dispatch.ts";
 import type { JobQueue, WorkerDeps } from "./deps.ts";
-import { executeStep, type StepOutcome } from "./execute.ts";
+import { executeStep, type StepExecutionOptions, type StepOutcome } from "./execute.ts";
+import { dispatchProposalHandoffs } from "./handoff.ts";
 import { auditStep } from "./pipeline/audit.ts";
 import { discoveryStep, recoverStaleDiscoveryJobs } from "./pipeline/discovery.ts";
 import { proposalStep } from "./pipeline/proposal.ts";
+import { recoverPipelineSteps } from "./pipeline-recovery.ts";
 import { auditPayloadSchema, discoveryPayloadSchema, proposalPayloadSchema, QUEUES, type QueueName } from "./queues.ts";
 
 export type RunOutcome =
@@ -15,7 +19,7 @@ export type RunOutcome =
  * キュー名と内容を受け取り、対応する処理を実行する。pg-boss からも、テストからも同じ入口で呼ぶ。
  */
 export function createWorkerRuntime(deps: WorkerDeps) {
-  async function run(name: QueueName, data: unknown): Promise<RunOutcome> {
+  async function run(name: QueueName, data: unknown, options?: StepExecutionOptions): Promise<RunOutcome> {
     switch (name) {
       case QUEUES.discovery: {
         const p = discoveryPayloadSchema.safeParse(data);
@@ -25,17 +29,41 @@ export function createWorkerRuntime(deps: WorkerDeps) {
       case QUEUES.audit: {
         const p = auditPayloadSchema.safeParse(data);
         if (!p.success) return { status: "invalid_payload", reason: p.error.message };
-        return executeStep(deps, auditStep, p.data);
+        const outcome = await executeStep(deps, auditStep, p.data, options);
+        if (p.data.requestKey.startsWith("ops:"))
+          await reconcileAuditRequest(deps.db, deps.clock, p.data.requestKey.slice(4));
+        return outcome;
       }
       case QUEUES.proposal: {
         const p = proposalPayloadSchema.safeParse(data);
         if (!p.success) return { status: "invalid_payload", reason: p.error.message };
-        return executeStep(deps, proposalStep, p.data);
+        return executeStep(deps, proposalStep, p.data, options);
       }
       case QUEUES.expireAssignments: {
         const result = await releaseExpiredAssignments(deps.db, deps.clock);
+        await cleanupAuthAttempts(deps.db, deps.clock);
         if (result.released.length || result.escalated.length) deps.logger.info("担当の期限を処理した", { ...result });
         return { status: "maintenance", result };
+      }
+      case QUEUES.recoverPipeline: {
+        const recovered = await recoverPipelineSteps(deps);
+        return { status: "maintenance", result: { recovered } };
+      }
+      case QUEUES.dispatchHandoffs: {
+        const result = await dispatchProposalHandoffs(deps);
+        const audits = await dispatchAuditRequests(deps);
+        return { status: "maintenance", result: { ...result, audits } };
+      }
+      case QUEUES.recoverGeneration: {
+        const recovered = await recoverExpiredGenerationJobs(deps.db, deps.clock);
+        const stopped = await recoverUnconfirmedGenerationJobs({
+          db: deps.db,
+          clock: deps.clock,
+          generator: deps.generation.generator,
+        });
+        if (recovered.length) deps.logger.warn("生成履歴の接続切れを記録しました", { recovered });
+        if (stopped.length) deps.logger.info("生成の停止を確認しました", { stopped });
+        return { status: "maintenance", result: { recovered, stopped } };
       }
       case QUEUES.recoverDiscovery: {
         const recovered = await recoverStaleDiscoveryJobs(deps.db, deps.clock, deps.discoveryStaleAfterMs);

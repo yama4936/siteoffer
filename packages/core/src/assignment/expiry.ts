@@ -3,6 +3,7 @@ import { and, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
+import { cancelOfferChangesOnAssignmentEnd } from "../sales-offer/lifecycle.ts";
 import { snapshot } from "./shared.ts";
 
 const EXPIRY_JOB: Actor = { kind: "system", job: "assignment-expiry" };
@@ -46,6 +47,14 @@ export async function releaseExpiredAssignments(db: DbOrTx, clock: Clock): Promi
         .where(and(eq(assignments.id, c.id), eq(assignments.status, c.status), lte(assignments.expiresAt, now)))
         .returning();
       if (!updated) return;
+      if (release)
+        await cancelOfferChangesOnAssignmentEnd(
+          tx,
+          clock,
+          EXPIRY_JOB,
+          c.id,
+          "担当期限が過ぎて解除されたため、未確認の条件変更を終了しました。",
+        );
       await recordEvent(tx, clock, {
         actor: EXPIRY_JOB,
         action: release ? `assignment.release_${reason}` : "assignment.escalate_overdue",

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 
 /** トークンの乱数のバイト数（256ビット） */
 const TOKEN_BYTES = 32;
@@ -27,4 +27,22 @@ export function hashShareToken(token: string): string {
  */
 export function shareLinkUrl(baseUrl: string, token: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/s/${token}/`;
+}
+
+/** サーバー専用の鍵から再現可能なトークンを作る。鍵・トークンはDBやログに保存しない。 */
+export interface ShareTokenRecovery {
+  keyId: string;
+  derive: (id: string, userId: string, purpose: string, targetId: string) => string;
+}
+export function createShareTokenRecovery(secret: string): ShareTokenRecovery {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(secret) || Buffer.from(secret, "base64url").toString("base64url") !== secret)
+    throw new Error("共有リンク復旧用の鍵は32バイトのbase64urlで設定してください");
+  const key = Buffer.from(secret, "base64url");
+  return {
+    keyId: createHash("sha256").update(key).digest("hex"),
+    derive: (id, userId, purpose, targetId) =>
+      createHmac("sha256", key)
+        .update(JSON.stringify(["siteoffer-share-v1", id, userId, purpose, targetId]))
+        .digest("base64url"),
+  };
 }

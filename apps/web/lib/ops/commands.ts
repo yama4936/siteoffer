@@ -17,8 +17,10 @@ import {
   DEFAULT_SETTINGS,
   err,
   extendAssignment,
+  findSalesContract,
   liftSuppression,
   markRewardPaid,
+  nextSalesOfferVersion,
   ok,
   type PaymentTargetStatus,
   parseRewardRule,
@@ -38,18 +40,31 @@ import {
 } from "@siteoffer/core";
 import {
   appSettings,
+  auditEvents,
   companies,
   type DbOrTx,
+  designVersions,
+  discoveryJobs,
   imageAssets,
+  imageSubmissions,
   productTerms,
   proposals,
   proposalVersions,
-  websites,
+  salesOffers,
+  users,
 } from "@siteoffer/db";
-import { createDiscoveryJob } from "@siteoffer/discovery";
-import { and, desc, eq, inArray } from "drizzle-orm";
-import { type OpsActor, requireOps } from "./guard";
-import { type SellableIssue, sellableIssues } from "./sellable";
+import {
+  createDiscoveryJob,
+  discoveryAvailability,
+  discoveryCriteriaSchema,
+  NtaCorporateNumberProvider,
+} from "@siteoffer/discovery";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { isUuid } from "./form.ts";
+import { type OpsActor, requireOps } from "./guard.ts";
+import { PRODUCT_TERMS_MAX_AMOUNT } from "./product-terms-draft.ts";
+import { type SellableIssue, sellableIssues } from "./sellable.ts";
+import { reviewOfficialWebsite } from "./website-candidate.ts";
 
 export interface OpsDeps {
   db: DbOrTx;
@@ -136,6 +151,17 @@ export async function createDiscoveryJobByOps(
   if (!(DISCOVERY_PROVIDERS as readonly string[]).includes(input.provider)) {
     return err("invalid_provider", "取得元が不正です");
   }
+  const parsed = discoveryCriteriaSchema.safeParse(input.criteria);
+  if (!parsed.success)
+    return err("invalid_criteria", "収集条件が不正です。市区町村を指定する場合は都道府県も入力してください");
+  if (input.provider === "nta-corporate-number") {
+    if (parsed.data.industry)
+      return err("invalid_criteria", "国税庁APIでは業種で絞り込めません。業種を空欄にしてください");
+    const request = new NtaCorporateNumberProvider().buildRequests(parsed.data, clock.now());
+    if (!request.ok) return err(request.error, request.message);
+  }
+  const capability = (await discoveryAvailability(db, clock)).find((p) => p.provider === input.provider);
+  if (!capability?.ready) return err("provider_unavailable", capability?.reason ?? "取得元を確認できません");
   const r = await createDiscoveryJob(db, clock, {
     provider: input.provider,
     criteria: input.criteria,
@@ -144,6 +170,58 @@ export async function createDiscoveryJobByOps(
   });
   if (!r.ok) return err(r.error, r.message ?? "収集条件が不正です");
   return ok({ jobId: r.value.jobId });
+}
+
+/** Keep failed history and use a fresh queue key. Lock and unique parent prevent double-click duplicates. */
+export async function retryDiscoveryJobByOps(
+  deps: OpsDeps,
+  actor: Actor | null,
+  jobId: string,
+): Promise<Result<{ jobId: string }, string>> {
+  const auth = requireOps(actor);
+  if (!auth.ok) return auth;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(jobId)) return err("not_found");
+  return deps.db.transaction(async (tx) => {
+    const key = `discovery:${jobId}`;
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`siteoffer:step:${key}`}))`);
+    const [old] = await tx.select().from(discoveryJobs).where(eq(discoveryJobs.id, jobId)).for("update");
+    if (!old) return err("not_found");
+    if (old.status !== "failed") return err("invalid_state", "失敗した収集ジョブだけを再試行できます");
+    const [existing] = await tx
+      .select({ jobId: discoveryJobs.id })
+      .from(discoveryJobs)
+      .where(eq(discoveryJobs.retryOfJobId, jobId));
+    if (existing) return ok(existing);
+    const events = await tx
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.targetType, "worker_step"), eq(auditEvents.targetId, key)));
+    const started = events.filter((e) => e.action === "worker.step_started").length;
+    const finished = events.filter((e) => ["worker.step_failed", "worker.step_succeeded"].includes(e.action)).length;
+    if (started > finished) return err("invalid_state", "自動再試行が実行中です。完了してから再試行してください");
+    const next = await createDiscoveryJobByOps({ db: tx, clock: deps.clock }, actor, {
+      provider: old.provider,
+      criteria: old.criteria,
+    });
+    if (!next.ok) return next;
+    // Retire the old queue key before creating an independent retry chain.
+    await recordEvent(tx, deps.clock, {
+      actor: auth.value,
+      action: "worker.step_failed",
+      targetType: "worker_step",
+      targetId: key,
+      after: { queue: "discovery", attempt: started, final: true, reason: "運営による再試行ジョブに引き継ぎました" },
+    });
+    await tx.update(discoveryJobs).set({ retryOfJobId: jobId }).where(eq(discoveryJobs.id, next.value.jobId));
+    await recordEvent(tx, deps.clock, {
+      actor: auth.value,
+      action: "discovery.job_retried",
+      targetType: "discovery_job",
+      targetId: jobId,
+      after: { newJobId: next.value.jobId },
+    });
+    return next;
+  });
 }
 
 export interface CandidatePatch {
@@ -219,42 +297,7 @@ export async function setOfficialSiteStatus(
   actor: Actor | null,
   input: { companyId: string; status: OfficialSiteStatus; websiteId?: string | null; note?: string },
 ): Promise<Result<Company, string>> {
-  const ops = authorizeCompanyManage(actor, input.companyId);
-  if (!ops.ok) return ops;
-  if (!["confirmed", "candidate", "needs_review", "not_found"].includes(input.status)) {
-    return err("invalid_input", "公式サイトの確度が不正です");
-  }
-  return inTx(db, async (tx, fail) => {
-    const [before] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
-    if (!before) return fail("not_found");
-    let primaryWebsiteId: string | null = null;
-    if (input.websiteId) {
-      const [site] = await tx
-        .select()
-        .from(websites)
-        .where(and(eq(websites.id, input.websiteId), eq(websites.companyId, before.id)));
-      if (!site) return fail("website_not_found", "この企業のサイトではありません");
-      if (input.status === "confirmed") {
-        await tx.update(websites).set({ isPrimary: false }).where(eq(websites.companyId, before.id));
-        await tx.update(websites).set({ isPrimary: true }).where(eq(websites.id, site.id));
-        primaryWebsiteId = site.id;
-      }
-    }
-    const [after] = await tx
-      .update(companies)
-      .set({ officialSiteStatus: input.status, updatedAt: clock.now() })
-      .where(eq(companies.id, before.id))
-      .returning();
-    await recordEvent(tx, clock, {
-      actor: ops.value,
-      action: "company.official_site_status",
-      targetType: "company",
-      targetId: before.id,
-      before: { officialSiteStatus: before.officialSiteStatus },
-      after: { officialSiteStatus: input.status, primaryWebsiteId, note: input.note?.trim() || null },
-    });
-    return after!;
-  });
+  return reviewOfficialWebsite({ db, clock }, actor, input);
 }
 
 /** 候補の除外・既存顧客の記録（企業共通の抑止。再収集で営業可能に戻らない） */
@@ -334,8 +377,16 @@ export async function updateImageAssetPolicy(
     allowSalesDemo: boolean;
     allowProduction: boolean;
     note?: string;
+    placement?: "reference" | "hero" | "logo";
+    expectedRevision?: number;
   },
 ): Promise<Result<ImageAsset, string>> {
+  if (
+    !isUuid(input.companyId) ||
+    !isUuid(input.imageAssetId) ||
+    (input.expectedRevision !== undefined && (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0))
+  )
+    return err("invalid_input");
   const ops = authorizeCompanyManage(actor, input.companyId);
   if (!ops.ok) return ops;
   if (!(IMAGE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) {
@@ -344,23 +395,81 @@ export async function updateImageAssetPolicy(
   if (input.rightsStatus === "unknown" && (input.allowSalesDemo || input.allowProduction)) {
     return err("rights_unconfirmed", "権利未確認の素材は評価参照にしか使えません");
   }
+  if (input.placement !== undefined && !["reference", "hero", "logo"].includes(input.placement))
+    return err("invalid_input", "配置先が不正です");
   return inTx(db, async (tx, fail) => {
-    const [before] = await tx
+    const [company] = await tx
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.id, input.companyId))
+      .for("update");
+    if (!company) return fail("not_found");
+    const locked = await tx
       .select()
       .from(imageAssets)
-      .where(and(eq(imageAssets.id, input.imageAssetId), eq(imageAssets.companyId, input.companyId)))
+      .where(eq(imageAssets.companyId, input.companyId))
+      .orderBy(asc(imageAssets.id))
       .for("update");
+    const [user] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, ops.value.userId), eq(users.role, "ops"), eq(users.status, "active")))
+      .for("share");
+    if (!user) return fail("forbidden");
+    const before = locked.find((a) => a.id === input.imageAssetId);
     if (!before) return fail("not_found");
+    if (input.expectedRevision !== undefined && before.policyRevision !== input.expectedRevision)
+      return fail("conflict", "別の担当が素材を更新しました。最新の画像と許諾を確認してから更新してください");
+    const [submission] = await tx
+      .select()
+      .from(imageSubmissions)
+      .where(eq(imageSubmissions.assetId, before.id))
+      .for("share");
+    if (
+      submission &&
+      (input.allowSalesDemo ||
+        input.allowProduction ||
+        (input.placement !== undefined && input.placement !== "reference")) &&
+      (submission.status !== "accepted" ||
+        (input.allowSalesDemo && !submission.requestedDemo) ||
+        (input.allowProduction && !submission.requestedProduction))
+    )
+      return fail(
+        "customer_scope",
+        "顧客提出の確認結果と許可された用途を確認してください。未確認・取り下げ済みの画像は利用できません",
+      );
+    const placement = input.placement ?? before.placement;
+    const note = input.note?.trim() || null;
     const confirmed = input.rightsStatus !== "unknown";
+    // Saving unchanged values must not invalidate proposals pinned to this permission revision.
+    // Keep this after authorization, optimistic concurrency, and customer-scope checks.
+    if (
+      placement === before.placement &&
+      input.rightsStatus === before.rightsStatus &&
+      input.allowSalesDemo === before.allowSalesDemo &&
+      input.allowProduction === before.allowProduction &&
+      note === before.note &&
+      (confirmed ? !!before.confirmedBy && !!before.confirmedAt : !before.confirmedBy && !before.confirmedAt)
+    )
+      return before;
+    const replaced =
+      placement !== "reference" ? locked.filter((a) => a.id !== before.id && a.placement === placement) : [];
+    for (const a of replaced)
+      await tx
+        .update(imageAssets)
+        .set({ placement: "reference", policyRevision: a.policyRevision + 1, updatedAt: clock.now() })
+        .where(eq(imageAssets.id, a.id));
     const [after] = await tx
       .update(imageAssets)
       .set({
+        placement,
+        policyRevision: before.policyRevision + 1,
         rightsStatus: input.rightsStatus,
         allowSalesDemo: input.allowSalesDemo,
         allowProduction: input.allowProduction,
         confirmedBy: confirmed ? ops.value.userId : null,
         confirmedAt: confirmed ? clock.now() : null,
-        note: input.note?.trim() || null,
+        note,
         updatedAt: clock.now(),
       })
       .where(eq(imageAssets.id, before.id))
@@ -372,12 +481,15 @@ export async function updateImageAssetPolicy(
       targetId: input.companyId,
       before: {
         imageAssetId: before.id,
+        placement: before.placement,
         rightsStatus: before.rightsStatus,
         allowSalesDemo: before.allowSalesDemo,
         allowProduction: before.allowProduction,
       },
       after: {
         imageAssetId: before.id,
+        placement,
+        replacedPlacementAssetIds: replaced.map((a) => a.id),
         rightsStatus: input.rightsStatus,
         allowSalesDemo: input.allowSalesDemo,
         allowProduction: input.allowProduction,
@@ -404,6 +516,20 @@ export async function reviewProposalVersion(
   const note = input.note?.trim() || null;
   if (input.decision === "rejected" && !note) return err("invalid_input", "差し戻しの理由を入力してください");
   return inTx(db, async (tx, fail) => {
+    const [target] = await tx
+      .select({ proposalId: proposalVersions.proposalId, companyId: proposals.companyId })
+      .from(proposalVersions)
+      .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+      .where(eq(proposalVersions.id, input.proposalVersionId));
+    if (!target) return fail("not_found");
+    // Lock the proposal parent before any version, then its company. A joined FOR UPDATE
+    // can otherwise retain a version lock while waiting for its proposal parent.
+    await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.id, target.proposalId)).for("update");
+    await tx
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.id, target.companyId))
+      .for("no key update");
     const [row] = await tx
       .select({ version: proposalVersions, companyId: proposals.companyId })
       .from(proposalVersions)
@@ -419,7 +545,44 @@ export async function reviewProposalVersion(
     });
     if (!auth.ok) return fail(auth.error, auth.message);
     const before = row.version;
+    const [latest] = await tx
+      .select({ id: proposalVersions.id })
+      .from(proposalVersions)
+      .where(eq(proposalVersions.proposalId, before.proposalId))
+      .orderBy(desc(proposalVersions.version))
+      .limit(1);
+    if (latest?.id !== before.id)
+      return fail("superseded_version", "新しい提案版があります。最新版を開いて確認してください");
+
     if (before.status !== "in_review") return fail("invalid_state", "運営確認待ちの版だけをレビューできます");
+    if (input.decision === "approved") {
+      const content = before.content as {
+        designVersionId?: string;
+        designSha256?: string;
+        demoCheck?: { ok?: boolean };
+      } | null;
+      if (content?.designVersionId) {
+        const [design] = await tx.select().from(designVersions).where(eq(designVersions.id, content.designVersionId));
+        if (
+          design?.status !== "approved" ||
+          design.companyId !== row.companyId ||
+          design.auditId !== before.auditId ||
+          design.imageSha256 !== content.designSha256
+        )
+          return fail("design_not_approved", "この提案版のデザイン承認を確認できません");
+        if (!content.demoCheck?.ok || !before.demoArtifactDir)
+          return fail("quality_check_failed", "サイトのビルド・検査を完了してください");
+        const required = [
+          "会社情報の確認",
+          "画像の利用許諾",
+          "PC・スマホの表示",
+          "リンク・問い合わせ導線",
+          "既存機能の引き継ぎ",
+        ];
+        if (!note?.startsWith("確認済み：") || required.some((check) => !note.split("\n")[0]?.includes(check)))
+          return fail("review_incomplete", "公開前の5項目を確認してください");
+      }
+    }
     const now = clock.now();
     const [after] = await tx
       .update(proposalVersions)
@@ -481,28 +644,88 @@ export function sellableIssueText(issue: SellableIssue): string {
 /**
  * 営業可能にする（AC-09・14章）。サーバー側で次をすべて確かめる：
  * 運営だけ／最新の提案版が承認済み／販売条件・報酬条件が設定済み（isTermsReadyForSales）／営業抑止がない。
- * 使った提案版と条件の版は操作履歴に残す（companies に条件の版を持つ列がないため。報告参照）。
+ * 使った提案版と条件の版をsales_offersに固定し、操作履歴と一括で保存する。
  */
 export async function makeSellable(
   { db, clock }: OpsDeps,
   actor: Actor | null,
-  input: { companyId: string; productTermsId: string | null },
+  input: {
+    companyId: string;
+    productTermsId: string | null;
+    expectedProposalVersionId?: string;
+    expectedCompanyUpdatedAt?: string;
+    allowExisting?: boolean;
+  },
 ): Promise<Result<Company, string>> {
   const ops = authorizeCompanyManage(actor, input.companyId);
   if (!ops.ok) return ops;
+  if (
+    !isUuid(ops.value.userId) ||
+    !isUuid(input.companyId) ||
+    (input.productTermsId !== null && !isUuid(input.productTermsId)) ||
+    (input.expectedProposalVersionId !== undefined && !isUuid(input.expectedProposalVersionId)) ||
+    (input.expectedCompanyUpdatedAt !== undefined &&
+      (!input.expectedCompanyUpdatedAt || !Number.isFinite(Date.parse(input.expectedCompanyUpdatedAt))))
+  )
+    return err("invalid_input", "対象の企業・提案版・販売条件を確認してください");
   return inTx(db, async (tx, fail) => {
+    const [user] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, ops.value.userId), eq(users.role, "ops"), eq(users.status, "active")))
+      .for("share");
+    if (!user) return fail("forbidden", "有効な運営アカウントでログインしてください");
+    // Match review's parent-before-company order; also blocks insertion of a new proposal version.
+    await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.companyId, input.companyId)).for("update");
     const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).for("update");
     if (!company) return fail("not_found");
+    if (await findSalesContract(tx, company.id))
+      return fail("company_contracted", "契約確認中または契約済みのため、営業へ引き継げません");
     const latest = await latestProposalVersion(tx, company.id);
+    if (input.expectedProposalVersionId && latest?.id !== input.expectedProposalVersionId.toLowerCase())
+      return fail("proposal_changed", "確認した提案版から更新されています。最新版を確認して選び直してください");
     let terms: typeof productTerms.$inferSelect | null = null;
     if (input.productTermsId) {
-      const [t] = await tx.select().from(productTerms).where(eq(productTerms.id, input.productTermsId));
+      const [t] = await tx.select().from(productTerms).where(eq(productTerms.id, input.productTermsId)).for("share");
       if (!t) return fail("terms_not_found", "販売条件・報酬条件の版が見つかりません");
       terms = t;
     }
-    const issues = sellableIssues({ company, latestVersion: latest, terms });
+    const [previousOffer] = await tx
+      .select()
+      .from(salesOffers)
+      .where(and(eq(salesOffers.companyId, company.id), eq(salesOffers.isPublic, true)))
+      .orderBy(desc(salesOffers.version))
+      .limit(1);
+    const issues = sellableIssues({ company, latestVersion: latest, terms }).filter(
+      (issue) => issue !== "already_sellable" || !!previousOffer,
+    );
+    if (
+      input.allowExisting &&
+      issues.length === 1 &&
+      issues[0] === "already_sellable" &&
+      input.expectedProposalVersionId
+    ) {
+      if (previousOffer?.proposalVersionId === latest?.id && previousOffer?.productTermsId === terms?.id)
+        return company;
+    }
+    if (
+      input.expectedCompanyUpdatedAt !== undefined &&
+      company.updatedAt.getTime() !== Date.parse(input.expectedCompanyUpdatedAt)
+    )
+      return fail("company_changed", "企業の状態が更新されています。現在の内容を確認して選び直してください");
     if (issues.length > 0) return fail(issues[0]!, issues.map(sellableIssueText).join(" / "));
     const now = clock.now();
+    const [offer] = await tx
+      .insert(salesOffers)
+      .values({
+        companyId: company.id,
+        version: await nextSalesOfferVersion(tx, company.id),
+        productTermsId: terms!.id,
+        proposalVersionId: latest!.id,
+        createdBy: ops.value.userId,
+        createdAt: now,
+      })
+      .returning();
     const [after] = await tx
       .update(companies)
       .set({ pipelineStatus: "sellable", updatedAt: now })
@@ -520,6 +743,7 @@ export async function makeSellable(
         proposalVersion: latest!.version,
         productTermsId: terms!.id,
         productTermsVersion: terms!.version,
+        salesOfferId: offer!.id,
       },
     });
     return after!;
@@ -619,6 +843,7 @@ export async function createProductTermsVersion(
 ): Promise<Result<typeof productTerms.$inferSelect, string>> {
   const ops = requireOps(actor);
   if (!ops.ok) return ops;
+  if (!isUuid(ops.value.userId)) return err("forbidden");
   const auth = authorizeUser(ops.value, "manage", { type: "productTerms" });
   if (!auth.ok) return auth;
   const version = input.version.trim();
@@ -628,14 +853,23 @@ export async function createProductTermsVersion(
     ["価格", input.price],
     ["月額", input.monthlyFee],
   ] as const) {
-    if (v !== null && (!Number.isSafeInteger(v) || v < 0)) return err("invalid_input", `${label}は0以上の整数（円）`);
+    if (v !== null && (!Number.isSafeInteger(v) || v < 0 || v > PRODUCT_TERMS_MAX_AMOUNT))
+      return err("invalid_input", `${label}は0〜2,147,483,647の整数（円）`);
   }
   if (input.rewardRule !== null) {
     const rule = parseRewardRule(input.rewardRule);
     if (!rule.ok) return err("invalid_input", "報酬条件が不正です（定額は0以上の整数、割合は0〜10000の万分率）");
+    if (rule.value.type === "fixed" && rule.value.amount > PRODUCT_TERMS_MAX_AMOUNT)
+      return err("invalid_input", "報酬額は2,147,483,647円以下で入力してください");
   }
   try {
     return await inTx(db, async (tx) => {
+      const [operator] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, ops.value.userId), eq(users.role, "ops"), eq(users.status, "active")))
+        .for("share");
+      if (!operator) throw new Abort("forbidden");
       const [row] = await tx
         .insert(productTerms)
         .values({
@@ -753,8 +987,12 @@ export const cancelRewardByOps = (
 
 // ───────────── 5. ドメイン希望 ─────────────
 
-export const confirmDomainPreferenceByOps = ({ db, clock }: OpsDeps, actor: Actor | null, id: string) =>
-  asOps(actor, (ops) => confirmDomainPreference(db, clock, ops, { id }));
+export const confirmDomainPreferenceByOps = (
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  id: string,
+  revision: number,
+) => asOps(actor, (ops) => confirmDomainPreference(db, clock, ops, { id, revision }));
 
 // ───────────── 6. 設定・操作履歴・利用停止 ─────────────
 

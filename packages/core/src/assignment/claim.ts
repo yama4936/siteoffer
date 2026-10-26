@@ -1,11 +1,14 @@
-import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, type DbOrTx } from "@siteoffer/db";
+import { ACTIVE_ASSIGNMENT_STATUSES, assignments, companies, type DbOrTx, productTerms } from "@siteoffer/db";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import { type Clock, HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { findSalesContract } from "../contract/customer.ts";
 import { authorizeUser } from "../permissions/policy.ts";
+import { isTermsReadyForSales } from "../reward/rule.ts";
+import { getSalesOffer } from "../sales-offer/offer.ts";
 import {
   type Assignment,
   countActiveAssignments,
@@ -19,6 +22,9 @@ export type ClaimError =
   | "forbidden"
   | "company_not_found"
   | "company_not_sellable"
+  | "company_contracted"
+  | "offer_not_ready"
+  | "offer_changed"
   | "company_suppressed"
   | "already_assigned"
   | "limit_reached"
@@ -36,6 +42,7 @@ export async function claimAssignment(
   clock: Clock,
   actor: Actor,
   companyId: string,
+  expectedSalesOfferId?: string,
 ): Promise<Result<Assignment, ClaimError>> {
   // 業務条件：担当を持つのは営業ユーザーだけ（運営も can() では claim を許されるが、担当は営業に付ける）
   if (actor.kind !== "sales") return err("forbidden", "担当の確保は営業ユーザーだけが行えます");
@@ -48,6 +55,8 @@ export async function claimAssignment(
 
       const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("update");
       if (!company) return fail("company_not_found");
+      if (await findSalesContract(tx, company.id))
+        return fail("company_contracted", "契約確認中または契約済みのため、新しい担当は確保できません");
       if (company.suppression !== "none") fail("company_suppressed", `営業抑止中（${company.suppression}）`);
       if (company.pipelineStatus !== "sellable") fail("company_not_sellable");
 
@@ -70,12 +79,19 @@ export async function claimAssignment(
         fail("limit_reached", `同時担当の上限（${max}社）に達しています`);
       }
 
+      const offer = await getSalesOffer(tx, company.id);
+      if (offer?.proposal.status !== "approved") return fail("offer_not_ready", "運営による販売条件の確認が必要です");
+      if (expectedSalesOfferId !== undefined && expectedSalesOfferId.toLowerCase() !== offer.offer.id)
+        return fail("offer_changed", "販売条件が更新されています。画面を開き直して確認してください");
+      const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, offer.terms.id)).for("share");
+      if (!terms || !isTermsReadyForSales(terms)) return fail("offer_not_ready", "運営による販売条件の確認が必要です");
       const hours = await getSetting(tx, "assignment.unstartedTimeoutHours");
       const now = clock.now();
       const [row] = await tx
         .insert(assignments)
         .values({
           companyId,
+          salesOfferId: offer.offer.id,
           userId,
           status: "claimed",
           claimedAt: now,

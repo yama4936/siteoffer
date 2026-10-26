@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ThreadEvent, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
 import { describe, expect, it } from "vitest";
@@ -91,6 +93,39 @@ describe("CodexGenerator（NoopSandboxRunner 経由。実Codexは動かさない
     const r = await new CodexGenerator(runner).generate(baseReq("proposal_text"));
     expect(r).toMatchObject({ ok: false, error: "sandbox_error" });
   });
+
+  it.each([false, true])("停止未確認・実行場所の例外ではマウント元を削除しない（例外: %s）", async (throws) => {
+    const root = await mkdtemp(path.join(tmpdir(), "siteoffer-stop-test-"));
+    if (path.dirname(root) !== tmpdir() || !path.basename(root).startsWith("siteoffer-stop-test-"))
+      throw Error("Unexpected test path");
+    let workDir = "";
+    try {
+      const generator = new CodexGenerator(
+        {
+          kind: "test-only",
+          async run(spec) {
+            workDir = spec.workDir;
+            if (throws) throw new Error("private runtime error");
+            return {
+              ok: false,
+              error: "sandbox_stop_unconfirmed",
+              message: "stop unknown",
+              result: null,
+              stopped: false,
+            };
+          },
+        },
+        { workRoot: root },
+      );
+      const result = await generator.generate(baseReq("faq"));
+      expect(result).toMatchObject({ ok: false, error: "sandbox_stop_unconfirmed" });
+      expect(existsSync(path.join(workDir, "input/facts.json"))).toBe(true);
+      expect(await readdir(root)).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toContain("private runtime error");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 /** Codex SDK の Thread と同じ形の偽物。runStreamed のイベントを返す */
@@ -172,7 +207,7 @@ describe("runCodexTurn（コンテナ内の処理。SDKの偽物で確認）", (
     expect(seen.turn?.outputSchema).toEqual({ type: "object" });
     expect(seen.input).toEqual([
       { type: "text", text: "p" },
-      { type: "local_image", path: "/work/input/files/shot.png" },
+      { type: "local_image", path: path.resolve("/work/input/files/shot.png") },
     ]);
   });
 

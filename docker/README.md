@@ -21,7 +21,7 @@ Biome の検査だけ（静的な確認）。Dockerのある環境で下の「�
 | `docker/migrate.ts` | packages/db/drizzle のマイグレーションを PostgreSQL に適用する（適用済みは飛ばす） |
 | `docker/codex-sandbox/Dockerfile` | 生成用コンテナのイメージ（Node 24・Codex SDK と同梱の Codex CLI・packages/generation・Astroテンプレート） |
 | `docker/compose.codex.yaml` | 実Codexで生成するときに重ねる設定（ローカルの試験用） |
-| `docker/egress-proxy/` | 生成用コンテナの送信先を絞る出口プロキシ（squid）の案。未検証・未接続（下記） |
+| `docker/egress-proxy/` | 明示選択するSquidのCONNECTプロキシ。隔離環境でTLS・拒否・直接接続の遮断・SDKへの環境引き渡しを確認。実OpenAI接続は未検証（下記） |
 | `.dockerignore`（リポジトリ直下） | .env・reports/・node_modules 等をビルドに渡さない |
 
 ## 前提
@@ -147,27 +147,39 @@ cap-drop ALL・no-new-privileges の下で動くか。動かない場合は Code
 
 ## 生成用コンテナのネットワーク（送信先の制限）
 
-方針：Codex CLI が必要とする先（OpenAI 等）だけへ送信できるようにする（24.4）。現状は**未実装**で、次の段階に分けている。
+Codexの生成用コンテナは、明示した内部専用ネットワークとCONNECTプロキシを組み合わせて送信先を制限できます（24.4）。既存の通常デモや認証・モデル設定は変更しません。
 
 | 段階 | 内容 | 状態 |
 | --- | --- | --- |
 | 試験用 | `siteoffer-codex-open`：ICC を止めた専用ブリッジ。他のサービス（DB等）とは別ネットワークだが、インターネットへの送信先は絞らない | 手順のみ（未検証） |
-| 案 | `siteoffer-codex-egress`（`internal: true`。外へ直接出られない）＋ `egress-proxy`（squid。`allowed-domains.txt` のドメインへの CONNECT 443 だけ中継）。docker/compose.codex.yaml と docker/egress-proxy/ に用意 | 未検証・未接続 |
+| プロキシを選択 | `siteoffer-codex-egress`（`internal: true`）＋ `egress-proxy`。許可したドメインのCONNECT 443だけを中継 | 実装・隔離検証済み。実OpenAIの認証と許可先は未検証 |
 
-案を使えない理由と必要な変更（担当外）：
+準備済みのcompose設定でプロキシを使う場合は、次を明示します。
 
-- 生成用コンテナに `HTTPS_PROXY=http://172.30.240.2:3128` を渡す必要がある。docker.ts は値を明示した環境変数しか渡さず、
-  container-entry.ts は Codex CLI へ許可リストの変数しか渡さない。プロキシの変数をイメージの ENV で入れても Codex CLI まで届かない。
-  → container-entry.ts の許可リストに `HTTPS_PROXY`・`NO_PROXY` を足す（値は docker.ts の引数で明示するか、イメージの ENV に置く）変更が要る。
-- Codex CLI が `HTTPS_PROXY` を使うか、ChatGPTログイン時に接続する先（`allowed-domains.txt` の値は想定）は未確認。
-  プロキシのログ（`docker compose logs egress-proxy`）で接続先を確かめて許可リストを確定する。
-- 別案：ホストの iptables（DOCKER-USER チェイン）で生成用ネットワークの送信先IPを絞る。宛先がCDNのIPで変わるため、ドメイン単位のプロキシより保守が難しい。
+```dotenv
+SITEOFFER_CODEX_NETWORK=siteoffer-codex-egress
+SITEOFFER_CODEX_HTTPS_PROXY=http://siteoffer-codex-proxy:3128
+SITEOFFER_CODEX_PROXY_SUBNET=172.30.240.0/24
+```
+
+`SITEOFFER_CODEX_PROXY_SUBNET`は既存のDockerネットワークと重複しない専用のプライベート範囲へ変更してください。Dockerが範囲の重複を拒否した場合は、既存ネットワークを削除せず別の範囲を選びます。プロキシは同じ範囲の接続だけを受け付けます。IPv4のプライベート範囲、/16〜/30、ネットワークの先頭アドレスだけを許可し、任意のSquid設定を環境変数へ混ぜる入力は拒否します。プロキシのIPを固定せず、専用ネットワークのサービス名を使います。
+
+```sh
+docker compose -f compose.yaml -f docker/compose.codex.yaml --profile codex-proxy up -d egress-proxy
+pnpm codex:build
+pnpm demo:doctor
+```
+
+この操作は通常のワーカーを再起動・実生成へ切り替える操作とは別です。既存の仕事を確認して通常停止した後の明示起動は、ルートREADME・demo/READMEの手順に従います。`codex:setup`を再実行しても、明示済みの生成ネットワークは保持します。
+
+ワーカーのプロキシ設定は、Dockerへ専用の環境変数として渡し、コンテナ内で検証してからSDKの`env`を通じてCLIの`HTTP_PROXY`・`HTTPS_PROXY`へ渡します。ホストやイメージの通常のプロキシ変数、`NO_PROXY`・`ALL_PROXY`、アプリの秘密値は引き継ぎません。プロキシURLの認証情報・パス・クエリ・フラグメントも拒否します。`demo:doctor`だけでなく、各生成を開始する直前にもDockerから内部専用bridgeの実値を確認し、不明・タイムアウト・非内部ネットワークでは生成を開始しません。
+
+隔離した取得元との証明書検証付きTLS通信、禁止ドメイン・80番・通常GETの403、プロキシを通さない接続の失敗、インストール済みSDKから代替CLIへの環境引き渡しと実際のDocker起動・終了を確認しました。実OpenAIへの通信・本物の認証は行っていません。`allowed-domains.txt`の値は想定のため、実運用前に認証方式ごとの接続先を別途確認してください。プロキシを通らない他のコンポーネントまで制限する仕組みではありません。
 
 ## 未解決・担当外
 
-- Astro のビルドは、現状ワーカーのプロセス内（createAstroSiteBuilder）で行っている。24.4 は「Codexの作業とサイトのビルド」をコンテナで行うとしているため、
-  ビルドも生成用コンテナ（イメージには templates/astro-site と Astro を入れてある）で行う変更が別途要る。コンテナ内のビルドで `.astro` 等をテンプレート側に書こうとすると read-only で失敗しうる（未確認）。
-- CodexGenerator の作業ディレクトリは `os.tmpdir()` 配下に固定で、設定で変えられない。compose.codex.yaml では TMPDIR で向きを変えている（Python・Chromium の一時ファイルも同じ場所になる）。専用の設定値があるとよい。
+- 実Codexのサイト制作は現在Dockerビルドが必須です。ローカルのcreateAstroSiteBuilderはモックと試験用です。現行の分離イメージ・事前確認はルートREADMEを参照してください。compose一式の実運用の受入は別途必要です。
+- CodexGeneratorはworkRootを指定できます。既定はos.tmpdir()配下で、現行の起動処理はTMPDIRも使用します。composeではホストとワーカーから同じ絶対パスへ到達でき、実行UIDが書き込める作業場所が必要です。
 - Chromium をコンテナ内の一般ユーザーで動かすと、Chromium のサンドボックスが使えず起動に失敗することがある。collect.py と templates/astro-site/check/mobile.ts は `--no-sandbox` 等を付けていない。対処（引数の追加か、seccomp の設定）は未決。
 - `.env.example` に compose 用の変数（POSTGRES_* 等）が入っていない。
 - ベースイメージ（`node:24-bookworm-slim`・`debian:bookworm-slim`・`docker:27.5.1-cli`）は版・ダイジェストの固定が不十分。Dockerのある環境でダイジェストに固定する。

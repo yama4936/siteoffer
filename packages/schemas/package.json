@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@siteoffer/astro-site": "workspace:*",
+    "parse5": "8.0.1",
+    "saxes": "6.0.0",
     "zod": "4.6.7"
   }
 }

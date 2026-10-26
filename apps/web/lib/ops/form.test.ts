@@ -30,3 +30,13 @@ describe("運営画面のフォーム読み取り", () => {
     expect(optInt(fd, "bad")).toBeNaN();
   });
 });
+
+it("結果メッセージを付けても対象案件のアンカーと絞り込みを保つ", () => {
+  const path = withFlash("/ops/delivery?focus=fixture&error=old#delivery-fixture", { msg: "完了" });
+  const url = new URL(path, "https://example.test");
+  expect(url.searchParams.get("focus")).toBe("fixture");
+  expect(url.searchParams.get("msg")).toBe("完了");
+  expect(url.searchParams.has("error")).toBe(false);
+  expect(url.hash).toBe("#delivery-fixture");
+  expect(withFlash("/ops/delivery#domain-preferences", {})).toBe("/ops/delivery#domain-preferences");
+});

@@ -2,9 +2,12 @@ import { type Actor, type Clock, err, ok, type Result, recordEvent } from "@site
 import { companies, type Db, type DbOrTx, discoveryJobs, discoverySources } from "@siteoffer/db";
 import { runDiscovery } from "@siteoffer/discovery";
 import { and, eq, inArray, lt } from "drizzle-orm";
+import { currentAuditSite } from "../audit-request.ts";
 import type { WorkerDeps } from "../deps.ts";
-import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
+import { discoveryAuditPayload } from "../discovery-audit-target.ts";
+import { PermanentError, PreconditionError, type StepContext, type StepDefinition } from "../execute.ts";
 import { type AuditPayload, type DiscoveryPayload, QUEUES, stepKeys } from "../queues.ts";
+import { checkPublicHttpUrl } from "../url.ts";
 import { moveCompanyStatus, PROTECTED } from "./status.ts";
 
 export interface DiscoveryStepResult {
@@ -27,23 +30,39 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
   kind: "discovery",
   async run(deps, payload, ctx) {
     const { db, clock } = deps;
-    const [job] = await db.select().from(discoveryJobs).where(eq(discoveryJobs.id, payload.discoveryJobId));
+    const [job] = await ctx.withOwnership((tx) =>
+      tx.select().from(discoveryJobs).where(eq(discoveryJobs.id, payload.discoveryJobId)),
+    );
     if (!job) throw new PreconditionError(`収集ジョブがない：${payload.discoveryJobId}`);
 
     let counts = { found: job.foundCount, created: job.createdCount, updated: job.updatedCount };
     let status: DiscoveryStepResult["status"] = "already_succeeded";
     if (job.status !== "succeeded") {
       const provider = deps.discovery.providers[job.provider];
-      if (!provider) throw new PreconditionError(`取得元「${job.provider}」はこのワーカーで有効になっていない`);
+      if (!provider) {
+        await ctx.withOwnership((tx) =>
+          stopDiscoveryJob(
+            { db: tx, clock },
+            job.id,
+            `取得元「${job.provider}」はこのワーカーで有効になっていません。設定後に再試行してください`,
+          ),
+        );
+        throw new PreconditionError(`取得元「${job.provider}」はこのワーカーで有効になっていない`);
+      }
       if (job.status === "running" && ctx.attempt > 1) {
         // このステップの前回の試行が途中で止まり、running のまま残っている
-        await failRunningDiscoveryJob(db, clock, {
-          jobId: job.id,
-          actor: { kind: "system", job: "worker" },
-          reason: "前回の試行が完了せずに中断された（再試行の前に失敗に戻した）",
-        });
+        await ctx.withOwnership((tx) =>
+          failRunningDiscoveryJob(tx, clock, {
+            jobId: job.id,
+            actor: { kind: "system", job: "worker" },
+            reason: "前回の試行が完了せずに中断された（再試行の前に失敗に戻した）",
+          }),
+        );
       }
       const r = await runDiscovery(db, clock, job.id, {
+        withOwnership: ctx.withOwnership,
+        signal: ctx.signal,
+        searchLimit: deps.discovery.searchLimit,
         companies: provider,
         ...(deps.discovery.search ? { search: deps.discovery.search } : {}),
         ...(deps.discovery.thirdPartyDomains ? { thirdPartyDomains: deps.discovery.thirdPartyDomains } : {}),
@@ -51,6 +70,7 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
       if (!r.ok) {
         // job_already_running：別の実行が進行中（または停止して残っている。定期ジョブ・運営操作で失敗に戻す）
         if (r.error === "job_already_running") throw new Error(`収集ジョブが実行中：${r.message ?? ""}`);
+        if (r.error === "job_superseded") throw new PreconditionError(r.message ?? "収集の状態が変更されました");
         throw new PermanentError(`${r.error}: ${r.message ?? ""}`);
       }
       if (r.value.status === "failed") {
@@ -61,9 +81,10 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
       status = "succeeded";
     }
 
-    const auditQueued = await advanceConfirmedCompanies(deps, job.id);
+    const auditQueued = await advanceConfirmedCompanies(deps, job.id, ctx);
     return { discoveryJobId: job.id, status, ...counts, auditQueued };
   },
+  onGiveUp: (deps, payload, reason) => stopDiscoveryJob(deps, payload.discoveryJobId, reason),
   summarize: (r) => r,
 };
 
@@ -71,7 +92,12 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
  * 収集ジョブで見つかった企業のうち、公式サイト確認済み・営業抑止なしのものを site_confirmed に進め、診断へ送る。
  * すでに site_confirmed の企業（前回の試行で進めたが送る前に止まった等）も送る。診断側の冪等キーで二重実行しない。
  */
-export async function advanceConfirmedCompanies(deps: WorkerDeps, discoveryJobId: string): Promise<string[]> {
+export async function advanceConfirmedCompanies(
+  deps: WorkerDeps,
+  discoveryJobId: string,
+  ownership?: Pick<StepContext, "withOwnership" | "assertCurrent">,
+): Promise<string[]> {
+  if (deps.discoveryOnly) return [];
   const { db, clock } = deps;
   const sources = await db
     .selectDistinct({ companyId: discoverySources.companyId })
@@ -79,25 +105,34 @@ export async function advanceConfirmedCompanies(deps: WorkerDeps, discoveryJobId
     .where(and(eq(discoverySources.jobId, discoveryJobId), eq(discoverySources.role, "company")));
   const ids = sources.map((s) => s.companyId).filter((id): id is string => !!id);
   if (ids.length === 0) return [];
-  const rows = await db.select().from(companies).where(inArray(companies.id, ids));
-
   const queued: string[] = [];
-  for (const c of rows) {
-    if (c.officialSiteStatus !== "confirmed" || PROTECTED.includes(c.suppression)) continue;
-    if (c.pipelineStatus === "collected") {
-      await moveCompanyStatus(db, clock, {
-        companyId: c.id,
-        from: ["collected"],
-        to: "site_confirmed",
-        reason: "公式サイト確認済み",
-        meta: { discoveryJobId },
-      });
-    } else if (c.pipelineStatus !== "site_confirmed") {
-      continue;
-    }
-    const payload: AuditPayload = { companyId: c.id, requestKey: `discovery:${discoveryJobId}` };
+  for (const companyId of ids) {
+    const prepare = async (tx: DbOrTx): Promise<AuditPayload | null> => {
+      const [c] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("update");
+      if (
+        c?.officialSiteStatus !== "confirmed" ||
+        PROTECTED.includes(c.suppression) ||
+        !["collected", "site_confirmed"].includes(c.pipelineStatus)
+      )
+        return null;
+      const site = await currentAuditSite(tx, c.id);
+      if (!site || !checkPublicHttpUrl(site.url).ok) return null;
+      if (c.pipelineStatus === "collected") {
+        await moveCompanyStatus(tx, clock, {
+          companyId: c.id,
+          from: ["collected"],
+          to: "site_confirmed",
+          reason: "公式サイト確認済み",
+          meta: { discoveryJobId },
+        });
+      }
+      return discoveryAuditPayload(site);
+    };
+    const payload = ownership ? await ownership.withOwnership(prepare) : await db.transaction(prepare);
+    if (!payload) continue;
+    await ownership?.assertCurrent();
     await deps.queue.send(QUEUES.audit, payload, { singletonKey: stepKeys.audit(payload) });
-    queued.push(c.id);
+    queued.push(companyId);
   }
   return queued;
 }
@@ -156,4 +191,22 @@ export async function recoverStaleDiscoveryJobs(db: Db, clock: Clock, staleAfter
     if (r.ok) recovered.push(j.id);
   }
   return recovered;
+}
+
+export async function stopDiscoveryJob(deps: { db: DbOrTx; clock: Clock }, id: string, reason: string) {
+  await deps.db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(discoveryJobs)
+      .set({ status: "failed", error: reason.slice(0, 1000), finishedAt: deps.clock.now() })
+      .where(and(eq(discoveryJobs.id, id), inArray(discoveryJobs.status, ["queued", "running"])))
+      .returning({ id: discoveryJobs.id });
+    if (row)
+      await recordEvent(tx, deps.clock, {
+        actor: { kind: "system", job: "discovery-recovery" },
+        action: "discovery.job_stopped",
+        targetType: "discovery_job",
+        targetId: id,
+        after: { reason: reason.slice(0, 1000) },
+      });
+  });
 }

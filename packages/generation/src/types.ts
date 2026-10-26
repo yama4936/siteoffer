@@ -1,4 +1,9 @@
 import type { z } from "zod";
+import type { GenerationFeedback } from "./feedback.ts";
+
+export type { GenerationFeedback } from "./feedback.ts";
+
+import type { SandboxStopReference } from "./sandbox/types.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 
 /**
@@ -31,9 +36,15 @@ export interface GenerateRequest<T> {
   /** 1回の試行のタイムアウト（GenerationLimits.timeoutMs）。実行場所（コンテナ）の打ち切りに使う */
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Application-authored validation summary for a bounded retry; never previous output text. */
+  retryFeedback?: GenerationFeedback;
+  /** Host-only lifecycle record. It must settle before a sandbox may start. */
+  saveStopReference?: (reference: SandboxStopReference) => Promise<void>;
 }
 
 export type GeneratorErrorCode =
+  | "sandbox_stop_unconfirmed"
+  | "sandbox_stop_pending"
   | "timeout"
   | "aborted"
   | "sandbox_error"
@@ -43,10 +54,17 @@ export type GeneratorErrorCode =
   | "fact_violation";
 
 export type GeneratorResult<T> =
-  | { ok: true; output: T; record: ExecutionRecord }
-  | { ok: false; error: GeneratorErrorCode; message: string; record: ExecutionRecord };
+  | { ok: true; output: T; record: ExecutionRecord; stopReference?: SandboxStopReference }
+  | {
+      ok: false;
+      error: GeneratorErrorCode;
+      message: string;
+      feedback?: GenerationFeedback;
+      record: ExecutionRecord;
+      stopReference?: SandboxStopReference;
+    };
 
-/** 生成の実行者。用途・入力・出力スキーマを受け取り、検証済みの出力と実行記録を返す */
+/** 生成の実行者。generateは実行環境の終了を確認してから返す。確認できない場合はsandbox_stop_unconfirmed。 */
 export interface Generator {
   readonly kind: string;
   /** 用途ごとのプロンプト版（実行記録に入れる） */
@@ -54,4 +72,5 @@ export interface Generator {
   /** 記録上の要求モデル（未指定ならnull） */
   readonly requestedModel: string | null;
   generate<T>(req: GenerateRequest<T>): Promise<GeneratorResult<T>>;
+  recoverStop?(reference: SandboxStopReference): Promise<boolean>;
 }

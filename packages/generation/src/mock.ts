@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { requiresReferenceVisual } from "./design-reference.ts";
 import { promptVersion } from "./prompt.ts";
 import type { GenerationPurpose } from "./schemas.ts";
 import type { ExecutionRecord, GenerateRequest, Generator, GeneratorResult } from "./types.ts";
@@ -50,12 +51,31 @@ export class MockGenerator implements Generator {
       usage: null,
     };
     if (req.signal?.aborted) return { ok: false, error: "aborted", message: "中断された", record };
-    const raw =
-      this.options.overrides && req.purpose in this.options.overrides
-        ? this.options.overrides[req.purpose]
-        : loadCodexFixture(req.purpose);
+    const overridden = this.options.overrides && req.purpose in this.options.overrides;
+    const raw = overridden ? this.options.overrides?.[req.purpose] : loadCodexFixture(req.purpose);
+    // 固定の架空デザイン。画像を解析した結果ではない。旧サービスが読むfixture自体は変更しない。
+    if (!overridden && requiresReferenceVisual(req.purpose, req.input)) {
+      (raw as { theme: Record<string, unknown> }).theme.visual = {
+        headingFont: "sans",
+        bodyFont: "sans",
+        headingScale: "standard",
+        background: "#ffffff",
+        surface: "#f6f7f9",
+        text: "#1a1a1a",
+        headerTone: "brand",
+        buttonTone: "accent",
+        spacing: "comfortable",
+        corners: "soft",
+        contentWidth: "standard",
+        heroTextShare: 60,
+        heroFrame: "contained",
+        heroImageRatio: "landscape",
+        mobileHeroOrder: "text-first",
+        serviceLayout: "grid",
+      };
+    }
     const v = validateOutput(req.purpose, req.input, req.outputSchema, raw);
-    if (!v.ok) return { ok: false, error: v.error, message: v.message, record };
+    if (!v.ok) return { ok: false, error: v.error, message: v.message, feedback: v.feedback, record };
     return { ok: true, output: v.output, record };
   }
 }

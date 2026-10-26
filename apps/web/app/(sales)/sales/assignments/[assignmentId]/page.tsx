@@ -1,19 +1,26 @@
+import { randomUUID } from "node:crypto";
 import { EXISTING_DOMAIN_REVIEW_NOTICE, NEW_DOMAIN_AVAILABILITY_NOTICE } from "@siteoffer/core";
 import { ChevronRight, Info, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ActivityForm, ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
+import { ActivityHistory } from "@/components/activity-history";
+import { OfferChanges } from "@/components/offer-changes";
+import { ActivityForm } from "@/components/sales/activity-form";
+import { ContractReportForm, DomainPreferenceForm, ReleaseForm } from "@/components/sales/forms";
 import { BackLink, SectionCard } from "@/components/sales/section-card";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
 import { AssignmentStatusBadge, ContractStatusBadge } from "@/components/sales/status-badge";
-import { ExternalLink } from "@/components/sales/views";
+import { ExternalLink, TermsTable } from "@/components/sales/views";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { DescriptionList, EmptyState, Muted, PageHeader } from "@/components/ui/page";
+import { DescriptionList, Muted, PageHeader } from "@/components/ui/page";
+import { parseActivityHistoryQuery } from "@/lib/activity-history-types";
 import { getDb } from "@/lib/db";
+import { getOfferChangeView } from "@/lib/offer-changes";
+import { emptyActivity } from "@/lib/sales/activity-draft-types";
+import { loadActivityDraft } from "@/lib/sales/activity-drafts";
 import {
-  activityKindLabel,
   DOMAIN_INTENTS,
   DOMAIN_MANAGERS,
   formatDate,
@@ -27,7 +34,6 @@ import { getMyAssignmentDetail } from "@/lib/sales/queries";
 import { requireUser } from "@/lib/session";
 import {
   issueShareAction,
-  recordActivityAction,
   releaseAction,
   reportDealAction,
   revokeShareAction,
@@ -37,15 +43,25 @@ import {
 export const metadata = { title: "担当案件 | SiteOffer" };
 
 /** 担当案件の詳細：活動記録、次回対応、運営相談、ドメイン希望、成約報告、契約確認状況 */
-export default async function AssignmentDetailPage({ params }: { params: Promise<{ assignmentId: string }> }) {
+export default async function AssignmentDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ assignmentId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await requireUser("sales");
   const { assignmentId } = await params;
-  const r = await getMyAssignmentDetail(getDb(), user.actor, assignmentId);
+  const filters = parseActivityHistoryQuery(await searchParams);
+  if (!filters) notFound();
+  const r = await getMyAssignmentDetail(getDb(), user.actor, assignmentId, filters);
   if (!r.ok) notFound();
   const d = r.value;
   const a = d.assignment;
+  const offerChanges = await getOfferChangeView(getDb(), user.actor, assignmentId);
   const pref = d.domainPreference;
   const firstSite = d.sites[0];
+  const draft = a.active ? await loadActivityDraft(getDb(), user.actor, a.id) : null;
 
   return (
     <>
@@ -62,6 +78,29 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
           </Link>
         }
       />
+      <nav className="mb-5 flex flex-wrap gap-2" aria-label="案件内の操作">
+        {a.active && (
+          <a href="#activity-entry" className={buttonVariants({ size: "sm" })}>
+            活動・次回予定を記録
+          </a>
+        )}
+        <a href="#activity-history" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          活動履歴を見る
+        </a>
+        {d.activityHistory.hasConsultations && (
+          <Link
+            href={`/sales/consultations?assignment=${a.id}`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            運営への相談・回答
+          </Link>
+        )}
+      </nav>
+      {offerChanges && offerChanges.history.length > 0 && (
+        <SectionCard id="offer-changes" title="販売条件の変更・確認">
+          <OfferChanges data={offerChanges} viewerRole="sales" />
+        </SectionCard>
+      )}
       <SectionCard title="担当の概要">
         <DescriptionList>
           <dt>担当の状態</dt>
@@ -74,8 +113,21 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
           <dd>{formatDateTime(a.nextActionAt)}</dd>
           <dt>担当の期限</dt>
           <dd>{formatDateTime(a.expiresAt)}</dd>
-          <dt>代表電話</dt>
+          <dt>代表電話{d.company.representativePhone && !d.company.contactVerified ? "（未確認の候補）" : ""}</dt>
           <dd className="tabular-nums">{d.company.representativePhone ?? "不明"}</dd>
+          {d.company.contactEmail && (
+            <>
+              <dt>メール（運営確認済み）</dt>
+              <dd className="break-all">
+                <a
+                  className="text-primary underline"
+                  href={`mailto:${encodeURIComponent(d.company.contactEmail).replace(/%40/g, "@")}`}
+                >
+                  {d.company.contactEmail}
+                </a>
+              </dd>
+            </>
+          )}
           <dt>現在のサイト</dt>
           <dd>{firstSite ? <ExternalLink href={firstSite.url} /> : "不明"}</dd>
           {d.company.suppression !== "none" && (
@@ -139,35 +191,23 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
       </SectionCard>
 
       {a.active && (
-        <SectionCard title="活動を記録する">
-          <ActivityForm action={recordActivityAction} assignmentId={a.id} />
+        <SectionCard id="activity-entry" title="活動を記録する">
+          {draft && (
+            <ActivityForm
+              key={a.id}
+              assignmentId={a.id}
+              initial={draft}
+              defaults={emptyActivity(new Date())}
+              requestKey={randomUUID()}
+              nextActionLabel={formatDateTime(a.nextActionAt)}
+              previousNote={d.activityHistory.latestNote}
+            />
+          )}
         </SectionCard>
       )}
 
-      <SectionCard title="活動履歴">
-        {d.activities.length === 0 ? (
-          <EmptyState>活動の記録はまだありません。</EmptyState>
-        ) : (
-          <ol className="relative space-y-4 border-l pl-5">
-            {d.activities.map((x) => (
-              <li key={x.id} className="relative space-y-1 text-sm">
-                <span
-                  aria-hidden="true"
-                  className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-card bg-primary"
-                />
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <strong className="font-semibold">{activityKindLabel(x.kind)}</strong>{" "}
-                  <span className="text-muted-foreground text-xs">{formatDateTime(x.occurredAt)}</span>
-                  {x.consultOps && <Badge variant="warning">運営に相談</Badge>}
-                </div>
-                {x.note && <p className="whitespace-pre-wrap leading-relaxed">{x.note}</p>}
-                {x.nextActionAt && (
-                  <div className="text-muted-foreground text-xs">次回対応日：{formatDateTime(x.nextActionAt)}</div>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
+      <SectionCard id="activity-history" title="活動履歴">
+        <ActivityHistory key={a.id} initial={d.activityHistory} />
       </SectionCard>
 
       <SectionCard title="ドメイン希望の聞き取り">
@@ -222,7 +262,7 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
         )}
       </SectionCard>
 
-      {d.showReport && (
+      {(d.showReport || d.contracts.some((c) => c.status === "reported" || c.status === "under_review")) && (
         <SectionCard title="成約報告">
           {d.terms.length === 0 && (
             <Alert variant="warning">
@@ -230,12 +270,28 @@ export default async function AssignmentDetailPage({ params }: { params: Promise
               <AlertDescription>販売条件・報酬条件：未設定（運営に確認してください）</AlertDescription>
             </Alert>
           )}
-          <ContractReportForm
-            action={reportDealAction}
-            assignmentId={a.id}
-            proposalVersionId={d.proposalVersionId}
-            terms={d.terms.map((t) => ({ id: t.id, label: `${t.name}（${formatYen(t.price)}）` }))}
-          />
+          <TermsTable terms={d.terms} />
+          {d.showReport ? (
+            <ContractReportForm
+              blockedReason={
+                offerChanges?.history.some((h) => h.status === "pending")
+                  ? "販売条件の変更に回答してから成約を報告してください。"
+                  : undefined
+              }
+              action={reportDealAction}
+              assignmentId={a.id}
+              salesOfferId={d.salesOfferId}
+              proposalVersionId={d.proposalVersionId}
+              terms={d.terms.map((t) => ({ id: t.id, label: `${t.name}（${formatYen(t.price)}）` }))}
+            />
+          ) : (
+            <p
+              role="status"
+              className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"
+            >
+              成約報告を受け付けました。運営が契約資料を確認しています。報酬は契約完了時に確定します。
+            </p>
+          )}
         </SectionCard>
       )}
 

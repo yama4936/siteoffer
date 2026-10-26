@@ -1,3 +1,4 @@
+import type { ProposalImageAsset } from "@siteoffer/core";
 import type { CallScript, Faq, ProposalText, SiteGenerationOutput } from "@siteoffer/schemas";
 
 /**
@@ -28,6 +29,11 @@ export interface ProposalContent {
   /** この版を作ったステップの冪等キー（同じキーの再試行で同じ版を使う） */
   idempotencyKey: string;
   auditId: string;
+  designVersionId?: string;
+  designSha256?: string | null;
+  /** Only the source reference is public; the operator's note stays in the private input/audit record. */
+  proposalRevision?: { sourceVersionId: string; sourceVersion: number; sourceSha256: string; requestedAt: string };
+  demoImageAssets?: ProposalImageAsset[];
   revision: string;
   [PROPOSAL_CONTENT_KEYS.proposalText]: ProposalText | null;
   [PROPOSAL_CONTENT_KEYS.callScript]: CallScript | null;

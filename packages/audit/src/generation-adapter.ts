@@ -30,6 +30,7 @@ export function createGenerationEvaluationGenerator(deps: GenerationDeps): Evalu
         companyId: audit?.companyId ?? null,
         purpose: "evaluation",
         input: toGenerationInput(input),
+        ...(input.signal ? { signal: input.signal } : {}),
       });
       if (!r.ok) return err("generation_failed", r.message ?? r.error);
       const { job, output } = r.value;

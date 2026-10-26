@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 
 process.chdir(fileURLToPath(new URL("..", import.meta.url)));
 const authFile = path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json");
@@ -10,15 +10,19 @@ const auth = JSON.parse(readFileSync(authFile, "utf8"));
 if (auth.auth_mode !== "chatgpt" || !auth.tokens?.access_token) {
   throw new Error("現在のCodexでChatGPTログインが必要です。codex login を実行してください。");
 }
-const result = spawnSync("codex", ["login", "status"], { encoding: "utf8", stdio: "pipe" });
-if (result.status !== 0) throw new Error("Codexのログイン状態を確認できませんでした。");
+if (!existsSync(".env"))
+  throw new Error("先に pnpm dev:setup でアプリのローカル設定を用意してください。既存デモのデータは変更していません。");
 
 let env = readFileSync(".env", "utf8");
+const existing = parseEnv(env);
 const values = {
   SITEOFFER_GENERATOR: "codex",
-  SITEOFFER_CODEX_AUTH_FILE: authFile,
+  SITEOFFER_CODEX_AUTH_FILE: authFile.replaceAll("\\", "/"),
   SITEOFFER_CODEX_IMAGE: "siteoffer-codex:local",
-  SITEOFFER_CODEX_NETWORK: "bridge",
+  SITEOFFER_SITE_BUILDER: "docker",
+  SITEOFFER_SITE_BUILD_IMAGE: "siteoffer-site:local",
+  SITEOFFER_SITE_BUILD_USER: `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+  SITEOFFER_CODEX_NETWORK: existing.SITEOFFER_CODEX_NETWORK?.trim() || "bridge",
   SITEOFFER_CODEX_USER: `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
   SITEOFFER_DISCOVERY_PROVIDERS: "fixture",
   SITEOFFER_AUDIT_COLLECTOR: "fixture",
@@ -30,5 +34,5 @@ for (const [key, value] of Object.entries(values)) {
 }
 writeFileSync(".env", env, { mode: 0o600 });
 console.log(
-  "現在のChatGPTログインをCodex SDK用に設定しました。認証ファイルはコピーせず、ジョブごとに読み取り専用で渡します。",
+  "ChatGPT認証ファイルの参照先を設定しました。認証ファイルはコピーせず、ジョブごとに読み取り専用で渡します。実際の接続は pnpm codex:check で確認してください。",
 );

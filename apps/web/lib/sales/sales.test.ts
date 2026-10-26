@@ -6,7 +6,9 @@ import {
   claimAssignment,
   confirmContract,
   fixedClock,
+  getSalesOffer,
   HOUR,
+  saveCompanyProfile,
   scheduleRewardPayment,
 } from "@siteoffer/core";
 import {
@@ -16,11 +18,13 @@ import {
   productTerms,
   proposals,
   proposalVersions,
+  salesOffers,
   siteAudits,
   users,
   websites,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
+import { EMPTY_COMPANY_PROFILE } from "@siteoffer/schemas";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -33,7 +37,6 @@ import {
 } from "./operations.ts";
 import {
   getCompanyDetail,
-  getCompanyFilterOptions,
   getMyAssignmentDetail,
   getMyEarnings,
   listMyAssignments,
@@ -44,6 +47,47 @@ let db: Db;
 let close: () => Promise<void>;
 let clock: ReturnType<typeof fixedClock>;
 let seq = 0;
+
+it("運営が一度確認した連絡先を営業詳細と担当へ共通表示し、取り下げ後に旧候補を復活させない", async () => {
+  const me = await user("sales"),
+    ops = await user("ops"),
+    other = await user("sales");
+  const c = await company({ representativePhone: "052-000-1111" }),
+    a = await claim(me.actor, c.id);
+  const initial = await getCompanyDetail(db, me.actor, c.id);
+  if (!initial.ok) throw Error(initial.error);
+  expect(initial.value.company.contactVerified).toBe(false);
+  await saveCompanyProfile(db, clock, ops.actor, {
+    companyId: c.id,
+    expectedRevision: 0,
+    values: { ...EMPTY_COMPANY_PROFILE, phone: "052-123-4567", email: "contact@example.test" },
+    source: "営業へは渡さない内部の確認資料名",
+    confirmed: true,
+  });
+  const detail = await getCompanyDetail(db, me.actor, c.id),
+    assignment = await getMyAssignmentDetail(db, me.actor, a.id);
+  if (!detail.ok || !assignment.ok) throw Error("fixture read failed");
+  for (const result of [detail.value, assignment.value]) {
+    expect(result.company).toMatchObject({
+      representativePhone: "052-123-4567",
+      contactEmail: "contact@example.test",
+      contactVerified: true,
+    });
+    expect(JSON.stringify(result)).not.toContain("営業へは渡さない内部の確認資料名");
+  }
+  expect((await getMyAssignmentDetail(db, other.actor, a.id)).ok).toBe(false);
+  await saveCompanyProfile(db, clock, ops.actor, {
+    companyId: c.id,
+    expectedRevision: 1,
+    values: EMPTY_COMPANY_PROFILE,
+    source: "架空の使用取り下げ",
+    confirmed: true,
+  });
+  const withdrawn = await getCompanyDetail(db, me.actor, c.id);
+  if (!withdrawn.ok) throw Error(withdrawn.error);
+  expect(withdrawn.value.company.representativePhone).toBeNull();
+  expect(withdrawn.value.company.contactEmail).toBeNull();
+});
 
 beforeEach(async () => {
   ({ db, close } = await createTestDb());
@@ -68,6 +112,20 @@ async function company(values: Partial<typeof companies.$inferInsert> = {}) {
     .insert(companies)
     .values({ name: `架空工務店${seq}`, pipelineStatus: "sellable", prefecture: "愛知県", city: "名古屋市", ...values })
     .returning();
+  if (c!.pipelineStatus === "sellable") {
+    const existing = await db.select().from(productTerms);
+    const t =
+      existing.find((t) => t.price !== null && t.rewardRule !== null) ??
+      (await terms({ price: 300000, rewardRule: { type: "fixed", amount: 30000 } }));
+    const [p] = await db.insert(proposals).values({ companyId: c!.id }).returning();
+    const [v] = await db
+      .insert(proposalVersions)
+      .values({ proposalId: p!.id, version: 1, status: "approved" })
+      .returning();
+    await db
+      .insert(salesOffers)
+      .values({ companyId: c!.id, version: 1, productTermsId: t.id, proposalVersionId: v!.id });
+  }
   return c!;
 }
 
@@ -100,7 +158,7 @@ describe("企業一覧", () => {
     await company({ pipelineStatus: "on_hold" });
     await company({ pipelineStatus: "in_review" });
     const r = await listSellableCompanies(db, me.actor);
-    expect(r.ok && r.value.map((c) => c.id)).toEqual([sellable.id]);
+    expect(r.ok && r.value.items.map((c) => c.id)).toEqual([sellable.id]);
   });
 
   it("都道府県・市区町村・業種で絞り込める", async () => {
@@ -111,13 +169,15 @@ describe("企業一覧", () => {
     const ids = async (f: Parameters<typeof listSellableCompanies>[2]) => {
       const r = await listSellableCompanies(db, me.actor, f);
       if (!r.ok) throw new Error(r.error);
-      return r.value.map((x) => x.id).sort();
+      return r.value.items.map((x) => x.id).sort();
     };
     expect(await ids({ prefecture: "愛知県" })).toEqual([a.id, b.id].sort());
     expect(await ids({ prefecture: "愛知県", city: "豊橋市" })).toEqual([b.id]);
     expect(await ids({ industry: "歯科" })).toEqual([c.id]);
     expect(await ids({ prefecture: " " })).toHaveLength(3);
-    const opts = await getCompanyFilterOptions(db);
+    const directory = await listSellableCompanies(db, me.actor);
+    if (!directory.ok) throw new Error(directory.error);
+    const opts = directory.value.options;
     expect(opts.prefectures).toEqual(expect.arrayContaining(["愛知県", "岐阜県"]));
     expect(opts.industries).toEqual(expect.arrayContaining(["工務店", "歯科"]));
   });
@@ -132,11 +192,11 @@ describe("企業一覧", () => {
     await claim(other.actor, others.id);
     const r = await listSellableCompanies(db, me.actor);
     if (!r.ok) throw new Error(r.error);
-    const byId = new Map(r.value.map((c) => [c.id, c]));
+    const byId = new Map(r.value.items.map((c) => [c.id, c]));
     expect(byId.get(mine.id)).toMatchObject({ assignment: "mine", myAssignmentId: myA.id });
     expect(byId.get(others.id)).toMatchObject({ assignment: "other", myAssignmentId: null });
     expect(byId.get(refused.id)).toMatchObject({ assignment: "none", suppression: "do_not_contact" });
-    expect(JSON.stringify(r.value)).not.toContain(other.id);
+    expect(JSON.stringify(r.value.items)).not.toContain(other.id);
   });
 
   it("最新の評価の総合点で並べ替え、点数のない企業は末尾に置く", async () => {
@@ -178,17 +238,17 @@ describe("企業一覧", () => {
     const ids = async (sort: "region" | "score_asc" | "score_desc") => {
       const r = await listSellableCompanies(db, me.actor, { sort });
       if (!r.ok) throw new Error(r.error);
-      return r.value.map((x) => x.id);
+      return r.value.items.map((x) => x.id);
     };
     expect(await ids("score_asc")).toEqual([low.id, rescored.id, high.id, unevaluable.id, none.id]);
     expect(await ids("score_desc")).toEqual([high.id, rescored.id, low.id, unevaluable.id, none.id]);
     expect(await ids("region")).toEqual([high.id, low.id, rescored.id, unevaluable.id, none.id]);
     // 指定なしは評価点の低い順
     const def = await listSellableCompanies(db, me.actor, {});
-    expect(def.ok && def.value.map((x) => x.id)).toEqual(await ids("score_asc"));
+    expect(def.ok && def.value.items.map((x) => x.id)).toEqual(await ids("score_asc"));
     const r = await listSellableCompanies(db, me.actor, { sort: "score_asc" });
-    expect(r.ok && r.value[1]).toMatchObject({ totalScore: "55" });
-    expect(r.ok && r.value[4]).toMatchObject({ totalScore: null });
+    expect(r.ok && r.value.items[1]).toMatchObject({ totalScore: "55" });
+    expect(r.ok && r.value.items[4]).toMatchObject({ totalScore: null });
   });
 
   it("未ログインは拒否する", async () => {
@@ -260,7 +320,7 @@ describe("企業詳細", () => {
         inference: true,
       },
     ]);
-    const [proposal] = await db.insert(proposals).values({ companyId: c.id }).returning();
+    const [proposal] = await db.select().from(proposals).where(eq(proposals.companyId, c.id));
     const callScript = {
       opening: "非公式の改善提案のご案内です",
       sections: [{ title: "用件", lines: ["ホームページについてご提案があります"] }],
@@ -268,10 +328,13 @@ describe("企業詳細", () => {
       closing: "ありがとうございました",
       doNotSay: ["必ず売上が上がる"],
     };
-    await db.insert(proposalVersions).values([
-      { proposalId: proposal!.id, version: 1, status: "approved", content: { callScript }, demoArtifactDir: "/tmp/x" },
-      { proposalId: proposal!.id, version: 2, status: "in_review", content: { callScript } },
-    ]);
+    await db
+      .update(proposalVersions)
+      .set({ content: { callScript }, demoArtifactDir: "/tmp/x" })
+      .where(eq(proposalVersions.proposalId, proposal!.id));
+    await db
+      .insert(proposalVersions)
+      .values({ proposalId: proposal!.id, version: 2, status: "in_review", content: { callScript } });
     await terms({ price: 300000, rewardRule: { type: "fixed", amount: 30000 } });
     await terms({ price: null, rewardRule: null });
 
@@ -292,7 +355,7 @@ describe("企業詳細", () => {
     // 版IDから組み立てた固定のURLは返さない（企業に見せるURLは共有リンクで発行する）
     expect(d.proposal?.hasDemo).toBe(true);
     expect(JSON.stringify(d.proposal)).not.toContain("/demo/");
-    expect(d.terms.map((t) => t.ready).sort()).toEqual([false, true]);
+    expect(d.terms.map((t) => t.ready)).toEqual([true]);
   });
 
   it("他人の担当企業は担当中とだけ表示し、確保ボタンを出さない", async () => {
@@ -349,7 +412,10 @@ describe("サーバー処理", () => {
     const me = await user("sales");
     const other = await user("sales");
     const c = await company();
-    const r1 = await claimCompany({ db, clock, actor: me.actor }, form({ companyId: c.id }));
+    const r1 = await claimCompany(
+      { db, clock, actor: me.actor },
+      form({ companyId: c.id, salesOfferId: (await getSalesOffer(db, c.id))!.offer.id }),
+    );
     expect(r1).toMatchObject({ status: "ok" });
     expect(r1?.assignmentId).toBeTruthy();
     const r2 = await claimCompany({ db, clock, actor: other.actor }, form({ companyId: c.id }));
@@ -401,7 +467,7 @@ describe("サーバー処理", () => {
     );
     expect(r?.status).toBe("ok");
     const list = await listSellableCompanies(db, other.actor);
-    expect(list.ok && list.value.find((x) => x.id === c.id)).toMatchObject({
+    expect(list.ok && list.value.items.find((x) => x.id === c.id)).toMatchObject({
       suppression: "not_now",
       assignment: "none",
     });
@@ -459,7 +525,7 @@ describe("サーバー処理", () => {
     const other = await user("sales");
     const c = await company();
     const a = await claim(me.actor, c.id);
-    const t = await terms({ price: 300000, rewardRule: { type: "fixed", amount: 30000 } });
+    const t = (await getSalesOffer(db, c.id, a.salesOfferId))!.terms;
 
     const ng = await reportDeal({ db, clock, actor: other.actor }, form({ assignmentId: a.id }));
     expect(ng?.status).toBe("error");

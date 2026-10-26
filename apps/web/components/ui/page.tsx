@@ -44,7 +44,11 @@ export function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section aria-labelledby={id && title ? `${id}-heading` : undefined} className={cn("mb-8 space-y-3", className)}>
+    <section
+      id={id}
+      aria-labelledby={id && title ? `${id}-heading` : undefined}
+      className={cn("mb-8 space-y-3", className)}
+    >
       {title || actions ? (
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div className="space-y-0.5">

@@ -15,6 +15,7 @@ export type DiscoveryProviderError =
 
 export interface ProviderContext {
   clock: Clock;
+  signal?: AbortSignal;
 }
 
 /**
@@ -41,7 +42,7 @@ export interface SiteQuery {
 }
 
 /**
- * 検索系APIで公式サイト候補を探す（24.6）。製品は未決のため、実装はモックのみ。
+ * 検索系APIで公式サイト候補を探す（24.6）。利用する製品は設定で明示する。
  * 返す候補は確度を判定する前の生の結果で、第三者サイトや同名企業のサイトを含みうる。
  */
 export interface SearchProvider {

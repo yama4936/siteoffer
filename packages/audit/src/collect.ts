@@ -27,7 +27,7 @@ export type CollectError = "collect_failed";
 
 /** 収集段のインターフェース。本番は collect.py、テスト・ローカル開発は取得済みフィクスチャ */
 export interface SiteCollector {
-  collect(url: string, outDir: string): Promise<Result<CollectOutcome, CollectError>>;
+  collect(url: string, outDir: string, signal?: AbortSignal): Promise<Result<CollectOutcome, CollectError>>;
 }
 
 /** collect.py の引数。--config は常に絶対パスで渡す（スクリプトの既定値はカレントディレクトリ基準のため） */
@@ -48,6 +48,7 @@ export function parseCollectRun(
   collectedText: string | null,
   outDir: string,
 ): Result<CollectOutcome, CollectError> {
+  if (run.aborted) return err("collect_failed", "サイト取得が中断されました");
   if (run.timedOut) return err("collect_failed", "collect.py がタイムアウトした");
   const collectedPath = path.join(outDir, "collected.json");
   let collected: Json | null = null;
@@ -89,13 +90,14 @@ export function screenshotPathsOf(collected: Json, outDir: string): string[] {
 /** collect.py をサブプロセス（python3 -I）で実行する収集段 */
 export function createPythonCollector(runner: PythonRunner, options: AuditOptions): SiteCollector {
   return {
-    async collect(url, outDir) {
+    async collect(url, outDir, signal) {
       await mkdir(outDir, { recursive: true });
       const extraEnv: Record<string, string> = {};
       if (options.psi && process.env.PSI_API_KEY) extraEnv.PSI_API_KEY = process.env.PSI_API_KEY;
       const run = await runner.run(scriptPaths(options.paths).collect, buildCollectArgs(url, outDir, options), {
         cwd: options.paths.repoRoot,
         timeoutMs: options.collectTimeoutMs,
+        ...(signal ? { signal } : {}),
         extraEnv,
       });
       const text = await readFile(path.join(outDir, "collected.json"), "utf8").catch(() => null);

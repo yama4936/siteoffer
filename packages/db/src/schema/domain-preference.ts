@@ -1,4 +1,4 @@
-import { boolean, index, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgEnum, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { assignments } from "./assignment.ts";
 import { createdAt, id, ts, updatedAt } from "./common.ts";
 import { companies } from "./companies.ts";
@@ -28,6 +28,8 @@ export const domainPreferences = pgTable(
     usesEmail: triState("uses_email").notNull().default("unknown"),
     customerWish: text("customer_wish"),
     needsOpsReview: boolean("needs_ops_review").notNull().default(true),
+    /** 聞き取り内容の版。確認は画面に表示した版だけを対象にする */
+    revision: integer("revision").notNull().default(1),
     confirmedAt: ts("confirmed_at"),
     confirmedBy: uuid("confirmed_by").references(() => users.id),
     recordedBy: uuid("recorded_by")

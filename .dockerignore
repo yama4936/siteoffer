@@ -7,6 +7,7 @@
 reports
 **/node_modules
 **/.next
+**/.next-*
 **/dist
 **/.astro
 **/*.tsbuildinfo
@@ -16,3 +17,5 @@ reports
 **/*.key
 **/*.pyc
 coverage
+
+**/.next-quality

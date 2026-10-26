@@ -1,0 +1,78 @@
+.design-studio .article-editor label {
+  font-size: 13px;
+}
+.design-studio .article-editor input:not([type="checkbox"]),
+.design-studio .article-editor textarea,
+.design-studio .article-editor select {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.design-studio .article-editor article {
+  overflow-wrap: anywhere;
+}
+.design-studio .article-editor fieldset {
+  min-width: 0;
+}
+
+.article-photo-thumb {
+  width: 100%;
+  height: 110px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #e9edf3;
+}
+.article-preview-photo {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #e9edf3;
+}
+
+.article-publication {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #cbd8ee;
+  border-radius: 12px;
+  background: #f7faff;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.article-publication-heading,
+.article-publication-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.article-publication-heading h3 {
+  margin: 0;
+  font-weight: 700;
+}
+.article-publication-badge {
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: #e8eefb;
+  color: #24498f;
+  font-size: 12px;
+  font-weight: 600;
+}
+.article-publication-links {
+  margin-top: 12px;
+}
+.article-publication-links a {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+}
+.article-publication-links a:focus-visible {
+  outline: 3px solid #386cf3;
+  outline-offset: 3px;
+}
+.article-publication-note {
+  color: #52647b;
+  font-size: 12px;
+}

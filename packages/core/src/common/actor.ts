@@ -2,9 +2,10 @@
 export type Actor =
   | { kind: "sales"; userId: string }
   | { kind: "ops"; userId: string }
+  | { kind: "customer_user"; userId: string }
   | { kind: "system"; job: string }
   | { kind: "customer"; shareLinkId: string };
 
 export function actorUserId(actor: Actor): string | null {
-  return actor.kind === "sales" || actor.kind === "ops" ? actor.userId : null;
+  return actor.kind === "sales" || actor.kind === "ops" || actor.kind === "customer_user" ? actor.userId : null;
 }

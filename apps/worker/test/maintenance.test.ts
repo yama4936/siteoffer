@@ -1,6 +1,6 @@
 /** 定期ジョブ（担当の期限解除・実行中のまま残った収集ジョブの回復）と、運営の操作 */
 import { HOUR } from "@siteoffer/core";
-import { assignments, companies, discoveryJobs, users } from "@siteoffer/db";
+import { assignments, authAttempts, companies, discoveryJobs, generationJobs, users } from "@siteoffer/db";
 import { createDiscoveryJob } from "@siteoffer/discovery";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -144,4 +144,40 @@ describe("実行中のまま残った収集ジョブ", () => {
     const second = await executeStep(env.deps, discoveryStep, { discoveryJobId: jobId });
     expect(second).toMatchObject({ status: "succeeded", attempt: 2 });
   });
+});
+
+it("生成の定期回復は期限切れの履歴を閉じ、再実行しても重複しない", async () => {
+  env = await setupEnv();
+  const [job] = await env.db
+    .insert(generationJobs)
+    .values({
+      idempotencyKey: "worker-generation-crash",
+      purpose: "faq",
+      generator: "mock",
+      promptVersion: "test",
+      status: "running",
+      leaseUntil: new Date(env.clock.now().getTime() - 1),
+    })
+    .returning();
+  expect(await env.runtime.run(QUEUES.recoverGeneration, {})).toEqual({
+    status: "maintenance",
+    result: { recovered: [job!.id], stopped: [] },
+  });
+  expect(await env.runtime.run(QUEUES.recoverGeneration, {})).toEqual({
+    status: "maintenance",
+    result: { recovered: [], stopped: [] },
+  });
+  const [after] = await env.db.select().from(generationJobs).where(eq(generationJobs.id, job!.id));
+  expect(after).toMatchObject({ status: "failed", errorCode: "interrupted", leaseUntil: null });
+});
+
+it("既存の定期処理で古い認証試行を削除し、有効な制限は保持する", async () => {
+  env = await setupEnv();
+  const { db, clock } = env;
+  await db.insert(authAttempts).values([
+    { key: "old-test-identity", attempts: 5, windowStartedAt: new Date(clock.now().getTime() - 25 * HOUR) },
+    { key: "current-test-identity", attempts: 5, windowStartedAt: clock.now() },
+  ]);
+  await env.runtime.run(QUEUES.expireAssignments, {});
+  expect((await db.select().from(authAttempts)).map((r) => r.key)).toEqual(["current-test-identity"]);
 });

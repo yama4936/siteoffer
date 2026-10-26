@@ -6,7 +6,6 @@ import {
   type Actor,
   authorizeUser,
   DEFAULT_SETTINGS,
-  getRewardSummary,
   getSetting,
   listOpsConsultations,
   ok,
@@ -27,18 +26,18 @@ import {
   domainPreferences,
   findings,
   generationJobs,
+  imageAssetFiles,
   imageAssets,
-  payments,
   productTerms,
   proposals,
   proposalVersions,
-  rewards,
   siteAudits,
   users,
   websites,
 } from "@siteoffer/db";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import { EDITABLE_SETTINGS, latestProposalVersions } from "./commands";
+import { attachContractFinancials } from "./contract-financials";
 import { requireOps } from "./guard";
 
 type Company = typeof companies.$inferSelect;
@@ -179,8 +178,18 @@ export async function getCompanyDetail(db: DbOrTx, actor: Actor | null, companyI
     .orderBy(desc(generationJobs.createdAt))
     .limit(20);
   const assets = await db
-    .select({ asset: imageAssets, confirmerName: users.displayName })
+    .select({
+      asset: imageAssets,
+      confirmerName: users.displayName,
+      file: {
+        assetId: imageAssetFiles.assetId,
+        width: imageAssetFiles.width,
+        height: imageAssetFiles.height,
+        byteSize: imageAssetFiles.byteSize,
+      },
+    })
     .from(imageAssets)
+    .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
     .leftJoin(users, eq(users.id, imageAssets.confirmedBy))
     .where(eq(imageAssets.companyId, companyId))
     .orderBy(desc(imageAssets.createdAt));
@@ -220,7 +229,13 @@ export async function listReviewQueue(db: DbOrTx, actor: Actor | null) {
     .from(proposalVersions)
     .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
     .innerJoin(companies, eq(companies.id, proposals.companyId))
-    .where(eq(proposalVersions.status, "in_review"))
+    .where(
+      and(
+        eq(proposalVersions.status, "in_review"),
+        eq(companies.suppression, "none"),
+        sql`not exists(select 1 from proposal_versions newer where newer.proposal_id=${proposalVersions.proposalId} and newer.version>${proposalVersions.version})`,
+      ),
+    )
     .orderBy(asc(proposalVersions.createdAt))
     .limit(LIST_LIMIT);
   // 営業可能化の候補：営業可能でなく、抑止がなく、承認済みの版がある企業
@@ -232,6 +247,7 @@ export async function listReviewQueue(db: DbOrTx, actor: Actor | null) {
     .where(
       and(
         eq(proposalVersions.status, "approved"),
+        sql`not exists(select 1 from proposal_versions newer where newer.proposal_id=${proposalVersions.proposalId} and newer.version>${proposalVersions.version})`,
         ne(companies.pipelineStatus, "sellable"),
         eq(companies.suppression, "none"),
       ),
@@ -267,7 +283,7 @@ export async function listProductTerms(db: DbOrTx, actor: Actor | null) {
 export async function listAssignmentsOverview(
   db: DbOrTx,
   actor: Actor | null,
-  filter: { includeClosed?: boolean } = {},
+  filter: { includeClosed?: boolean; id?: string } = {},
 ) {
   const g = guard(actor);
   if (!g.ok) return g;
@@ -282,7 +298,12 @@ export async function listAssignmentsOverview(
     .from(assignments)
     .innerJoin(companies, eq(companies.id, assignments.companyId))
     .innerJoin(users, eq(users.id, assignments.userId))
-    .where(filter.includeClosed ? undefined : inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES]))
+    .where(
+      and(
+        filter.id ? eq(assignments.id, filter.id) : undefined,
+        filter.includeClosed ? undefined : inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES]),
+      ),
+    )
     .orderBy(desc(assignments.claimedAt))
     .limit(LIST_LIMIT);
   return ok(rows);
@@ -341,7 +362,7 @@ export async function listActiveSalesUsers(db: DbOrTx, actor: Actor | null) {
 
 // ───────────── 4. 契約確認・入金・報酬 ─────────────
 
-export async function listContractsOverview(db: DbOrTx, actor: Actor | null) {
+export async function listContractsOverview(db: DbOrTx, actor: Actor | null, filter: { id?: string } = {}) {
   const g = guard(actor);
   if (!g.ok) return g;
   const rows = await db
@@ -349,25 +370,15 @@ export async function listContractsOverview(db: DbOrTx, actor: Actor | null) {
     .from(contracts)
     .innerJoin(companies, eq(companies.id, contracts.companyId))
     .innerJoin(users, eq(users.id, contracts.salesUserId))
+    .where(filter.id ? eq(contracts.id, filter.id) : undefined)
     .orderBy(desc(contracts.reportedAt))
     .limit(LIST_LIMIT);
-  const ids = rows.map((r) => r.c.id);
-  const pays = ids.length ? await db.select().from(payments).where(inArray(payments.contractId, ids)) : [];
-  const rws = ids.length ? await db.select().from(rewards).where(inArray(rewards.contractId, ids)) : [];
-  const summaries = new Map<string, Awaited<ReturnType<typeof getRewardSummary>>>();
-  for (const rw of rws) summaries.set(rw.contractId, await getRewardSummary(db, rw.id));
-  return ok(
-    rows.map((r) => ({
-      ...r,
-      payments: pays.filter((p) => p.contractId === r.c.id),
-      reward: summaries.get(r.c.id) ?? null,
-    })),
-  );
+  return ok(await attachContractFinancials(db, rows));
 }
 
 // ───────────── 5. 制作・ドメイン希望 ─────────────
 
-export async function listDomainPreferencesForOps(db: DbOrTx, actor: Actor | null) {
+export async function listDomainPreferencesForOps(db: DbOrTx, actor: Actor | null, filter: { id?: string } = {}) {
   const g = guard(actor);
   if (!g.ok) return g;
   const auth = authorizeUser(actor, "read", { type: "domainPreference", ownerUserId: null });
@@ -377,10 +388,10 @@ export async function listDomainPreferencesForOps(db: DbOrTx, actor: Actor | nul
     .from(domainPreferences)
     .innerJoin(companies, eq(companies.id, domainPreferences.companyId))
     .innerJoin(users, eq(users.id, domainPreferences.recordedBy))
-    .orderBy(desc(domainPreferences.updatedAt))
+    .where(filter.id ? eq(domainPreferences.id, filter.id) : undefined)
+    // 件数制限の前に未確認・古い順へ並べる。新しい確認済み行で未対応を押し出さない。
+    .orderBy(desc(isNull(domainPreferences.confirmedAt)), asc(domainPreferences.updatedAt), asc(domainPreferences.id))
     .limit(LIST_LIMIT);
-  // 未確認を先に
-  rows.sort((a, b) => Number(a.d.confirmedAt !== null) - Number(b.d.confirmedAt !== null));
   return ok(rows);
 }
 

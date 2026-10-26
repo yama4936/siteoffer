@@ -3,10 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./audit-preparation": "./src/audit-preparation.ts",
+    "./audit-recovery": "./src/audit-recovery.ts",
+    "./audit-request": "./src/audit-request.ts",
+    "./audit-request-management": "./src/audit-request-management.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.postgres.json",
     "start": "tsx src/index.ts"
   },
   "dependencies": {
@@ -24,6 +28,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
+    "sharp": "^0.35.5",
     "tsx": "^4.23.15"
   }
 }

@@ -1,5 +1,10 @@
+import { systemClock } from "@siteoffer/core";
 import { Filter } from "lucide-react";
-import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { HistoryList } from "@/components/ops/history-list";
+import { ProductionSettings } from "@/components/ops/production-status";
+import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
 import { inlineFormClass } from "@/components/ops/ui-parts-1";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,7 +13,10 @@ import { PageHeader, Section } from "@/components/ui/page";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { fmtDate } from "@/lib/ops/format";
-import { getSettingsForOps, listAuditEventsForOps, listUsersForOps } from "@/lib/ops/queries";
+import { readAuditHistory } from "@/lib/ops/history";
+import { historyHref, parseHistoryQuery } from "@/lib/ops/history-query";
+import { getProductionStatusForOps, imageRequestReadiness } from "@/lib/ops/production-status";
+import { getSettingsForOps, listUsersForOps } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
 import { reactivateUserAction, suspendUserAction, updateSettingAction } from "../actions";
 
@@ -24,18 +32,45 @@ export default async function SettingsPage({
   };
   const db = getDb();
   const actor = await getCurrentActor();
-  const [settings, users, events] = await Promise.all([
+  const historyQuery = parseHistoryQuery({
+    targetType: filter.targetType,
+    action: filter.actionPrefix,
+    view: filter.actionPrefix?.startsWith("session.") ? "all" : undefined,
+  });
+  if (!historyQuery) notFound();
+  const [settings, users, events, production] = await Promise.all([
     getSettingsForOps(db, actor),
     listUsersForOps(db, actor),
-    listAuditEventsForOps(db, actor, { ...filter, limit: 200 }),
+    readAuditHistory(db, actor, historyQuery),
+    getProductionStatusForOps(db, systemClock, actor),
   ]);
-  if (!settings.ok || !users.ok || !events.ok) return <Forbidden />;
+  if (!settings.ok || !users.ok || !events.ok || !production.ok) return <Forbidden />;
   const here = "/ops/settings";
 
   return (
     <>
-      <PageHeader title="6. 設定・操作履歴" />
+      <PageHeader title="設定・操作履歴" description="運用ルールと変更の履歴を確認します。" />
       <Flash searchParams={sp} />
+      <p className="mb-4 text-sm">
+        <Link href="/ops/backups" className="text-primary underline">
+          バックアップの作成・復元確認・ダウンロード
+        </Link>
+      </p>
+      <p className="mb-4 text-sm">
+        <Link href="/ops/account-recovery" className="text-primary underline">
+          ログインの復旧依頼を確認
+        </Link>
+      </p>
+      <p className="mb-5 text-sm">
+        <Link className="text-primary underline" href="/ops/processing">
+          処理の状況・ワーカーの通知を確認
+        </Link>
+      </p>
+
+      <ProductionSettings
+        status={production.value}
+        imageRequest={imageRequestReadiness(process.env.SITEOFFER_IMAGE_MODEL, production.value.image)}
+      />
 
       <Section
         title="運営設定"
@@ -110,7 +145,9 @@ export default async function SettingsPage({
                 <TableCell className="font-medium">{u.displayName}</TableCell>
                 <TableCell className="break-all">{u.email}</TableCell>
                 <TableCell>
-                  <Badge variant={u.role === "ops" ? "info" : "outline"}>{u.role === "ops" ? "運営" : "営業"}</Badge>
+                  <Badge variant={u.role === "ops" ? "info" : "outline"}>
+                    {u.role === "ops" ? "運営" : u.role === "customer" ? "顧客" : "営業"}
+                  </Badge>
                 </TableCell>
                 <TableCell>
                   <Badge variant={u.status === "suspended" ? "destructive" : "success"}>
@@ -120,7 +157,7 @@ export default async function SettingsPage({
                 <TableCell className="tabular-nums">{u.activeAssignments}</TableCell>
                 <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(u.createdAt)}</TableCell>
                 <TableCell className="min-w-64">
-                  {u.role === "sales" ? (
+                  {u.role !== "ops" ? (
                     <form
                       action={u.status === "active" ? suspendUserAction : reactivateUserAction}
                       className={inlineFormClass}
@@ -140,8 +177,12 @@ export default async function SettingsPage({
         </Table>
       </Section>
 
-      <Section title="操作履歴（最新200件）">
-        <form className={inlineFormClass} method="get" action={here}>
+      <Section
+        title="操作履歴"
+        description="通常は案件・設定の最近20件を表示します。ログイン・ログアウトを含む全記録は、履歴の検索画面で表示範囲を選べます。"
+      >
+        <form className={inlineFormClass} method="get" action="/ops/history">
+          <input type="hidden" name="view" value="all" />
           <Input
             name="targetType"
             placeholder="対象の種類（例：settings, company）"
@@ -161,42 +202,10 @@ export default async function SettingsPage({
             絞り込み
           </Button>
         </form>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>日時</TableHead>
-              <TableHead>主体</TableHead>
-              <TableHead>操作</TableHead>
-              <TableHead>対象</TableHead>
-              <TableHead>変更前</TableHead>
-              <TableHead>変更後</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {events.value.map(({ e, actorName }) => (
-              <TableRow key={e.id}>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(e.createdAt)}</TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {e.actorKind}
-                  {actorName ? `：${actorName}` : ""}
-                </TableCell>
-                <TableCell>
-                  <code className="rounded bg-muted px-1 py-0.5 text-xs">{e.action}</code>
-                </TableCell>
-                <TableCell>
-                  {e.targetType}
-                  <div className="break-all font-mono text-muted-foreground text-xs">{e.targetId}</div>
-                </TableCell>
-                <TableCell className="min-w-56 max-w-96">
-                  <Json value={e.before} />
-                </TableCell>
-                <TableCell className="min-w-56 max-w-96">
-                  <Json value={e.after} />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <HistoryList data={events.value} compact />
+        <Link href={historyHref(historyQuery)} className="inline-block text-primary underline text-sm">
+          すべての操作履歴を検索する
+        </Link>
       </Section>
     </>
   );

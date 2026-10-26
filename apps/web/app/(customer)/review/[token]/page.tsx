@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CUSTOMER_COMMENT_MAX } from "@/lib/customer/core";
 import { formatJst, INVALID_LINK_MESSAGE, loadCustomerReview } from "@/lib/customer/review";
 import { getDb } from "@/lib/db";
+import { cn } from "@/lib/utils";
 import { customerDecisionAction } from "../../actions";
 
 /**
@@ -58,6 +59,15 @@ export default async function CustomerReviewPage({ params }: { params: Promise<{
         </p>
       </header>
 
+      <nav aria-label="確認の手順" className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-4 text-sm">
+        <span>1. 制作サイトを確認</span>
+        <span aria-hidden="true">→</span>
+        <a href="#customer-decision" className="font-medium text-primary underline">
+          2. 承認・修正の内容を入力
+        </a>
+        <span aria-hidden="true">→</span>
+        <span>3. 内容を確認して送信</span>
+      </nav>
       <section className="space-y-3" aria-labelledby="preview-heading">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 id="preview-heading" className="font-semibold text-lg tracking-tight">
@@ -67,10 +77,15 @@ export default async function CustomerReviewPage({ params }: { params: Promise<{
             href={view.previewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className={buttonVariants({ variant: "outline", size: "sm", className: "h-auto whitespace-normal py-1.5" })}
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "h-auto max-w-full whitespace-normal py-1.5",
+            )}
           >
             <ExternalLink />
-            新しいタブで開く（スマートフォン表示の確認にもお使いください）
+            <span className="min-w-0 whitespace-normal">
+              新しいタブで開く（スマートフォン表示の確認にもお使いください）
+            </span>
           </a>
         </div>
         <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
@@ -90,7 +105,7 @@ export default async function CustomerReviewPage({ params }: { params: Promise<{
         </p>
       </section>
 
-      <Card className="mx-auto max-w-2xl">
+      <Card id="customer-decision" className="mx-auto max-w-2xl scroll-mt-6">
         <CardHeader>
           <CardTitle>
             <h2 className="font-semibold text-lg tracking-tight">承認・修正のご依頼</h2>
@@ -123,6 +138,7 @@ function Decision({
           action={customerDecisionAction}
           token={token}
           versionId={view.versionId}
+          versionNumber={view.versionNumber}
           commentMax={CUSTOMER_COMMENT_MAX}
         />
       );
@@ -150,7 +166,9 @@ function Decision({
               。修正版の準備ができましたら、あらためてご案内します。
             </p>
             {view.lastDecision?.comment ? (
-              <p className="whitespace-pre-wrap text-muted-foreground">ご依頼の内容：{view.lastDecision.comment}</p>
+              <p className="whitespace-pre-wrap break-words text-muted-foreground">
+                ご依頼の内容：{view.lastDecision.comment}
+              </p>
             ) : null}
           </AlertDescription>
         </Alert>

@@ -3,11 +3,11 @@ import type { Result } from "../common/result.ts";
 
 /** ログイン済みのユーザー。actor は権限判定（can）と操作履歴に渡す */
 export interface AuthenticatedUser {
-  actor: Extract<Actor, { kind: "sales" | "ops" }>;
+  actor: Extract<Actor, { kind: "sales" | "ops" | "customer_user" }>;
   userId: string;
   email: string;
   displayName: string;
-  role: "sales" | "ops";
+  role: "sales" | "ops" | "customer";
 }
 
 export interface RegisterSalesInput {
@@ -28,7 +28,7 @@ export type RegisterError =
   | "email_taken";
 
 /** 存在しないメールとパスワード違いは区別しない（どちらも invalid_credentials） */
-export type LoginError = "invalid_credentials" | "suspended";
+export type LoginError = "invalid_credentials" | "suspended" | "rate_limited";
 
 export type AuthenticateError = "invalid_session" | "session_expired" | "suspended";
 

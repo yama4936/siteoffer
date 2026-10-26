@@ -7,6 +7,7 @@ import {
   deliveryVersions,
   deployments,
   generationJobs,
+  proposalVersions,
   shareLinks,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
@@ -15,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Actor } from "../common/actor.ts";
 import { fixedClock, HOUR } from "../common/clock.ts";
 import { issueShareLink, revokeShareLink } from "../share-link/share-link.ts";
-import { seedProposalVersion } from "../share-link/test-helpers.ts";
 import { decideAsCustomer, getCustomerReview } from "./customer.ts";
 import {
   addDeliveryVersion,
@@ -36,6 +36,7 @@ let ops: Actor;
 let sales: Actor;
 let contractId: string;
 let companyId: string;
+let proposalVersionId: string;
 
 beforeEach(async () => {
   ({ db, close } = await createTestDb());
@@ -45,6 +46,7 @@ beforeEach(async () => {
   sales = base.sales;
   contractId = base.contract.id;
   companyId = base.company.id;
+  proposalVersionId = base.proposalVersion.id;
   // マイグレーションの適用に時間がかかることがある（共有マシンの負荷）。既定の10秒では足りない場合に備える
 }, 30_000);
 
@@ -332,8 +334,12 @@ describe("顧客確認（AC-18）", () => {
     const bad = await decideAsCustomer(db, clock, "not-a-token", { versionId: v1.id, decision: "approved" });
     expect(bad.ok ? null : bad.error).toBe("link_invalid");
     // 同じ企業の提案リンク（用途が proposal）では、納品の承認も閲覧もできない
-    const pv = await seedProposalVersion(db, companyId, { artifactDir: "/artifacts/proposal" });
-    const proposalLink = must(await issueShareLink(db, clock, ops, { purpose: "proposal", targetId: pv.id }));
+    const [pv] = await db
+      .update(proposalVersions)
+      .set({ demoArtifactDir: "/artifacts/proposal" })
+      .where(eq(proposalVersions.id, proposalVersionId))
+      .returning();
+    const proposalLink = must(await issueShareLink(db, clock, ops, { purpose: "proposal", targetId: pv!.id }));
     const r = await decideAsCustomer(db, clock, proposalLink.token, { versionId: v1.id, decision: "approved" });
     expect(r.ok ? null : r.error).toBe("link_invalid");
     expect((await getCustomerReview(db, clock, proposalLink.token)).ok).toBe(false);

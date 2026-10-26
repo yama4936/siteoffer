@@ -8,6 +8,7 @@
  *   demoでは営業用画面から省きビルド結果の markers に残す。deliveryではビルドを失敗させる。
  */
 import { z } from "zod";
+import { VisualDesignSchema } from "./visual-design.ts";
 
 /** セクションの種類。ファーストビュー（hero）は常に先頭に出すので含めない。 */
 export const SectionTypeSchema = z.enum(["services", "company", "works", "contact"]);
@@ -67,7 +68,7 @@ export const PhoneContactSchema = z.object({
 
 export const SiteInputSchema = z
   .object({
-    /** 入力形式の版。形を変えたら上げる。 */
+    /** 入力形式の版。非互換変更で上げる。過去の入力を受け入れる任意項目の追加では維持する。 */
     schemaVersion: z.literal(1),
     /** モード。省略時はビルド時の指定（環境変数 SITEOFFER_SITE_MODE / ビルド関数の引数）、それもなければ demo。 */
     mode: SiteModeSchema.optional(),
@@ -96,6 +97,8 @@ export const SiteInputSchema = z
       style: VisualStyleSchema.default("professional"),
       heroLayout: HeroLayoutSchema.default("split"),
       sectionRhythm: SectionRhythmSchema.default("alternating"),
+      /** Additive extension. Existing saved inputs keep the previous preset when absent. */
+      visual: VisualDesignSchema.optional(),
     }),
     /** ファーストビュー。会社名・キャッチ・主な問い合わせ手段（contact.primary）のボタンを出す。 */
     hero: z.object({
@@ -170,6 +173,11 @@ export const SiteInputSchema = z
     /** デモ表示の宛名（「〇〇様向け」）。省略時は company.name。 */
     demo: z.object({ recipientName: z.string().min(1).optional() }).optional(),
     /** フッターの著作権表記の名義。省略時は company.name。 */
+    updatesUrl: z
+      .string()
+      .url()
+      .refine((v) => /^https?:\/\//.test(v), "HTTP(S) URLが必要")
+      .optional(),
     footer: z.object({ copyright: z.string().min(1).optional() }).optional(),
   })
   .superRefine((v, ctx) => {

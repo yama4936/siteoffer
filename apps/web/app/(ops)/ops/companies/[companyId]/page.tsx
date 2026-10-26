@@ -1,18 +1,25 @@
-import { isTermsReadyForSales } from "@siteoffer/core";
+import { randomUUID } from "node:crypto";
+import { isTermsReadyForSales, loadCompanyProfileForOps, systemClock } from "@siteoffer/core";
+import { getCompanyAuditRequest } from "@siteoffer/worker/audit-request";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AuditRequest } from "@/components/ops/audit-request";
 import { AuditView } from "@/components/ops/audit-view";
+import { CompanyJourney } from "@/components/ops/company-journey";
+import { CompanyProfile } from "@/components/ops/company-profile";
+import { GenerationHistory } from "@/components/ops/generation-history";
+import { ImageAssetUpload } from "@/components/ops/image-asset-upload";
 import { Flash, Forbidden, first, Json, ReturnTo } from "@/components/ops/ui";
 import {
   detailsClass,
   EmptyRow,
-  inlineFormClass,
   StatusBadge,
   SubHeading,
   stackFormClass,
   summaryClass,
 } from "@/components/ops/ui-parts-2";
+import { WebsiteCandidate, WebsiteReview } from "@/components/ops/website-candidate";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -24,11 +31,11 @@ import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
 import { sellableIssueText } from "@/lib/ops/commands";
+import { getCompanyJourney } from "@/lib/ops/company-journey";
 import { isUuid, safeReturnTo } from "@/lib/ops/form";
 import {
   ASSIGNMENT_STATUS_LABEL,
   fmtDate,
-  JOB_STATUS_LABEL,
   label,
   OFFICIAL_SITE_LABEL,
   PIPELINE_LABEL,
@@ -37,15 +44,20 @@ import {
   SUPPRESSION_LABEL,
   yen,
 } from "@/lib/ops/format";
+import { readGenerationRetries } from "@/lib/ops/generation-retries";
 import { getCompanyDetail, listAuditEventsForOps, listProductTerms } from "@/lib/ops/queries";
 import { sellableIssues, termsIssueText } from "@/lib/ops/sellable";
+import {
+  listSiteSearchCandidates,
+  listWebsiteCandidateEvidence,
+  safeWebsiteCandidateUrl,
+  websiteReviewFingerprint,
+} from "@/lib/ops/website-candidate";
 import { getCurrentActor } from "@/lib/session";
 import {
   createImageAssetAction,
   excludeCandidateAction,
   makeSellableAction,
-  reviewProposalAction,
-  setOfficialSiteStatusAction,
   updateCandidateAction,
   updateImageAssetPolicyAction,
   withdrawSellableAction,
@@ -84,8 +96,38 @@ export default async function CompanyPage({
   const events = await listAuditEventsForOps(db, actor, { targetType: "company", targetId: companyId, limit: 50 });
   if (!terms.ok || !events.ok) return <Forbidden />;
 
+  const auditRequest = await getCompanyAuditRequest(db, actor, companyId);
+  if (!auditRequest.ok) return <Forbidden />;
+  const journey = await getCompanyJourney(db, systemClock, actor, companyId);
+  if (!journey.ok) return journey.error === "forbidden" ? <Forbidden /> : notFound();
   const d = r.value;
   const c = d.company;
+  const retries = await readGenerationRetries(
+    db,
+    actor,
+    c.id,
+    d.generationJobs.map((job) => job.id),
+  );
+  if (!retries.ok) return <Forbidden />;
+  const profile = await loadCompanyProfileForOps(db, actor, c.id);
+  const websiteProps = {
+    companyId: c.id,
+    fingerprint: websiteReviewFingerprint(c),
+    requestId: randomUUID(),
+    status: c.officialSiteStatus,
+    sites: d.websites
+      .filter((site) => site.kind === "current")
+      .map((site) => ({
+        id: site.id,
+        url: site.url,
+        primary: site.isPrimary,
+        fingerprint: websiteReviewFingerprint(c, site),
+      })),
+  };
+  const evidence = await listWebsiteCandidateEvidence(db, actor, c.id);
+  if (!evidence.ok) return <Forbidden />;
+  const searchCandidates = await listSiteSearchCandidates(db, actor, c.id);
+  if (!searchCandidates.ok) return <Forbidden />;
   const here = `/ops/companies/${c.id}`;
   const back = safeReturnTo(first(sp, "returnTo") ?? null, "/ops/discovery");
   const latest = d.proposalVersions[0] ?? null;
@@ -105,6 +147,29 @@ export default async function CompanyPage({
         suppression={c.suppression}
       />
       <Flash searchParams={sp} />
+      <CompanyJourney data={journey.value} />
+      <CompanyProfile
+        companyId={c.id}
+        revision={profile?.revision ?? 0}
+        initialValues={
+          profile?.values ?? {
+            phone: c.representativePhone,
+            email: null,
+            hours: null,
+            services: null,
+            industry: c.industry,
+            address: c.address ? [c.prefecture, c.city, c.address].filter(Boolean).join(" ") : null,
+          }
+        }
+        source={
+          profile?.source ??
+          safeWebsiteCandidateUrl(d.websites.find((site) => site.kind === "current" && site.isPrimary)?.url)?.url ??
+          ""
+        }
+        confirmedAt={profile?.confirmedAt.toISOString() ?? null}
+        confirmedBy={profile?.confirmedByName ?? null}
+        contactReady={!!(profile?.values.phone || profile?.values.email)}
+      />
 
       <div className="mb-8 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -133,20 +198,28 @@ export default async function CompanyPage({
               </dd>
               <dt>業種</dt>
               <dd>{c.industry ?? "不明"}</dd>
-              <dt>営業抑止</dt>
+              <dt id="company-policy" className="scroll-mt-24">
+                営業抑止
+              </dt>
               <dd>
                 {label(SUPPRESSION_LABEL, c.suppression)}
                 {c.suppressionReason ? `（${c.suppressionReason}）` : ""}
               </dd>
               <dt>代表窓口</dt>
-              <dd>{c.representativePhone ?? "不明"}</dd>
+              <dd className="break-all">
+                {profile
+                  ? (profile.values.phone ?? profile.values.email ?? "制作に使う連絡先なし")
+                  : (c.representativePhone ?? "不明")}
+              </dd>
               <dt>更新</dt>
               <dd className="tabular-nums">{fmtDate(c.updatedAt)}</dd>
             </DescriptionList>
 
             <div className="space-y-2">
               <details className={detailsClass}>
-                <summary className={summaryClass}>候補を修正する</summary>
+                <summary id="company-information" className={summaryClass}>
+                  候補を修正する
+                </summary>
                 <form action={updateCandidateAction} className={stackFormClass}>
                   <ReturnTo path={here} />
                   <input type="hidden" name="companyId" value={c.id} />
@@ -213,7 +286,7 @@ export default async function CompanyPage({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card id="company-sales">
           <CardHeader>
             <CardTitle>
               <h2>営業可能化</h2>
@@ -260,7 +333,8 @@ export default async function CompanyPage({
                 <form action={makeSellableAction} className="grid gap-2">
                   <ReturnTo path={here} />
                   <input type="hidden" name="companyId" value={c.id} />
-                  <NativeSelect name="productTermsId" defaultValue="" aria-label="販売条件・報酬条件の版">
+                  <input type="hidden" name="proposalVersionId" value={latest?.id ?? ""} />
+                  <NativeSelect name="productTermsId" defaultValue="" aria-label="販売条件・報酬条件の版" required>
                     <option value="">販売条件・報酬条件の版を選ぶ</option>
                     {terms.value.map((t) => {
                       const ready = isTermsReadyForSales(t);
@@ -273,7 +347,12 @@ export default async function CompanyPage({
                     })}
                   </NativeSelect>
                   <div>
-                    <Button type="submit" size="sm" variant="success">
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant="success"
+                      disabled={baseIssues.length > 0 || readyTerms.length === 0}
+                    >
                       営業可能にする
                     </Button>
                   </div>
@@ -284,7 +363,7 @@ export default async function CompanyPage({
         </Card>
       </div>
 
-      <Section title="サイトと公式サイトの確認">
+      <Section title="サイトと公式サイトの確認" id="company-site">
         <Table>
           <TableHeader>
             <TableRow>
@@ -306,34 +385,28 @@ export default async function CompanyPage({
             {d.websites.length === 0 ? <EmptyRow colSpan={4}>サイトは見つかっていません</EmptyRow> : null}
           </TableBody>
         </Table>
-        <form action={setOfficialSiteStatusAction} className={inlineFormClass}>
-          <ReturnTo path={here} />
-          <input type="hidden" name="companyId" value={c.id} />
-          <NativeSelect
-            name="status"
-            defaultValue={c.officialSiteStatus === "needs_review" ? "confirmed" : c.officialSiteStatus}
-            aria-label="公式サイトの確度"
-            className="w-auto"
-          >
-            {Object.entries(OFFICIAL_SITE_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </NativeSelect>
-          <NativeSelect name="websiteId" defaultValue="" aria-label="主サイト" className="w-auto max-w-full">
-            <option value="">（主サイトは変えない）</option>
-            {d.websites.map((w) => (
-              <option key={w.id} value={w.id}>
-                主サイト：{w.url}
-              </option>
-            ))}
-          </NativeSelect>
-          <Input name="note" placeholder="確認メモ（任意）" aria-label="確認メモ" className="w-56" />
-          <Button type="submit" size="sm">
-            公式サイトの確度を更新
-          </Button>
-        </form>
+        <WebsiteCandidate {...websiteProps} searchCandidates={searchCandidates.value} />
+        <WebsiteReview {...websiteProps} />
+        {!!evidence.value.length && (
+          <details className="my-4 rounded-xl border p-4">
+            <summary className="cursor-pointer font-medium">運営が追加した候補の確認根拠（最近20件）</summary>
+            <ul className="mt-3 space-y-3">
+              {evidence.value.map((row) => {
+                const proof = row.data as { url?: string; sourceUrl?: string; note?: string };
+                return (
+                  <li key={row.id} className="rounded-lg bg-slate-50 p-3 text-sm">
+                    <p className="break-all">候補：{proof.url}</p>
+                    <p className="mt-1 break-all">出典：{proof.sourceUrl}</p>
+                    <p className="mt-2 break-words">{proof.note}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {fmtDate(row.at)} · {row.by ?? "運営"}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        )}
 
         <SubHeading>出典</SubHeading>
         <Table>
@@ -358,10 +431,16 @@ export default async function CompanyPage({
         </Table>
       </Section>
 
-      <Section title="画像素材と利用許諾">
+      <Section id="image-assets" title="画像素材と利用許諾">
+        <p className="mb-4 text-sm">
+          <Link href={`/ops/materials?company=${companyId}&all=1`} className="underline">
+            この会社の顧客提出素材を確認
+          </Link>
+        </p>
         <Alert>
           <AlertDescription>
             元サイトの画像は登録しただけでは営業デモや納品サイトに使えません。権利状態と利用範囲を画像ごとに確認してください。外部画像の直リンクは行いません。
+            デモに掲載する写真・ロゴは、ファイル・営業デモの許可・配置先を登録すると次回の提案制作に反映されます。デザイン画像はレイアウトの参照に使います。
           </AlertDescription>
         </Alert>
         <details className={detailsClass}>
@@ -396,47 +475,68 @@ export default async function CompanyPage({
             </div>
           </form>
         </details>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>素材・出所</TableHead>
-              <TableHead>権利状態</TableHead>
-              <TableHead>利用範囲</TableHead>
-              <TableHead>確認</TableHead>
-              <TableHead>更新</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {d.imageAssets.map(({ asset, confirmerName }) => (
-              <TableRow key={asset.id}>
-                <TableCell className="min-w-52">
-                  <div className="font-medium">{asset.label}</div>
-                  <div className="text-muted-foreground text-xs">{label(IMAGE_SOURCE_LABEL, asset.sourceType)}</div>
-                  {asset.sourceUrl ? (
-                    <div className="break-all text-muted-foreground text-xs">{asset.sourceUrl}</div>
-                  ) : null}
-                </TableCell>
-                <TableCell>{label(IMAGE_RIGHTS_LABEL, asset.rightsStatus)}</TableCell>
-                <TableCell>
-                  <div>評価参照：可</div>
-                  <div>営業デモ：{asset.allowSalesDemo ? "可" : "不可"}</div>
-                  <div>本番：{asset.allowProduction ? "可" : "不可"}</div>
-                </TableCell>
-                <TableCell className="text-xs">
-                  {asset.confirmedAt ? (
-                    <>
-                      <div>{confirmerName ?? "運営ユーザー"}</div>
-                      <div className="whitespace-nowrap tabular-nums">{fmtDate(asset.confirmedAt)}</div>
-                    </>
-                  ) : (
-                    "未確認"
-                  )}
-                </TableCell>
-                <TableCell className="min-w-72">
-                  <form action={updateImageAssetPolicyAction} className="grid gap-2">
+        <div className="grid gap-4">
+          {d.imageAssets.map(({ asset, confirmerName, file }) => (
+            <article
+              key={asset.id}
+              aria-label={`素材：${asset.label}`}
+              className="grid gap-4 rounded-xl border bg-background p-4 lg:grid-cols-[240px_1fr]"
+            >
+              <div className="min-w-0">
+                <div className="font-medium">{asset.label}</div>
+                <ImageAssetUpload
+                  companyId={c.id}
+                  assetId={asset.id}
+                  label={asset.label}
+                  file={file?.assetId ? file : null}
+                />
+                <div className="text-muted-foreground text-xs">{label(IMAGE_SOURCE_LABEL, asset.sourceType)}</div>
+                {asset.sourceUrl ? (
+                  <div className="break-all text-muted-foreground text-xs">{asset.sourceUrl}</div>
+                ) : null}
+              </div>
+              <div className="min-w-0 space-y-3">
+                <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">権利：</span>
+                    {label(IMAGE_RIGHTS_LABEL, asset.rightsStatus)}
+                  </div>
+                  <div>
+                    <div>評価参照：可</div>
+                    <div>営業デモ：{asset.allowSalesDemo ? "可" : "不可"}</div>
+                    <div>本番：{asset.allowProduction ? "可" : "不可"}</div>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {asset.confirmedAt ? (
+                      <>
+                        <div>{confirmerName ?? "運営ユーザー"}</div>
+                        <div className="whitespace-nowrap tabular-nums">{fmtDate(asset.confirmedAt)}</div>
+                      </>
+                    ) : (
+                      "未確認"
+                    )}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <form key={asset.policyRevision} action={updateImageAssetPolicyAction} className="grid gap-2">
                     <ReturnTo path={here} />
                     <input type="hidden" name="companyId" value={c.id} />
                     <input type="hidden" name="imageAssetId" value={asset.id} />
+                    <input type="hidden" name="expectedRevision" value={asset.policyRevision} />
+                    <label htmlFor={`placement-${asset.id}`} className="text-sm">
+                      提案デモ・納品サイトの配置先
+                    </label>
+                    <NativeSelect id={`placement-${asset.id}`} name="placement" defaultValue={asset.placement}>
+                      <option value="reference">自動配置しない</option>
+                      <option value="hero">メイン画像</option>
+                      <option value="logo">ロゴ</option>
+                    </NativeSelect>
+                    <p className="max-w-72 text-xs text-muted-foreground">
+                      画像ファイルを登録し、下で許可した用途の次回制作に配置します。各配置先に1点。営業デモの許可だけでは納品サイトに使いません。
+                    </p>
+                    <p className="max-w-72 text-xs text-muted-foreground">
+                      許諾や配置の保存内容が変わると、この素材を使う既存の提案共有は停止します。変更後の素材で新しい提案を制作してください。
+                    </p>
                     <NativeSelect
                       name="rightsStatus"
                       defaultValue={asset.rightsStatus}
@@ -468,22 +568,43 @@ export default async function CompanyPage({
                       </Button>
                     </div>
                   </form>
-                </TableCell>
-              </TableRow>
-            ))}
-            {d.imageAssets.length === 0 ? <EmptyRow colSpan={5}>登録された画像素材はありません</EmptyRow> : null}
-          </TableBody>
-        </Table>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+        {d.imageAssets.length === 0 && (
+          <EmptyState>画像素材を登録すると、画像の取込・許諾確認・配置先の指定ができます。</EmptyState>
+        )}
       </Section>
 
-      <Section title="診断結果">
+      <Section
+        title="診断結果"
+        id="company-audit"
+        actions={
+          <div className="flex flex-wrap gap-3">
+            <Link className="text-sm text-primary underline" href={`/ops/companies/${companyId}/audits`}>
+              診断履歴・前回との比較
+            </Link>
+            <Link
+              className="text-sm text-primary underline"
+              href={`/ops/processing?company=${companyId}#audit-recovery`}
+            >
+              処理状況・再開を確認
+            </Link>
+          </div>
+        }
+      >
+        <AuditRequest companyId={companyId} data={auditRequest.value} />
         {d.latestAudit ? (
           <AuditView audit={d.latestAudit} findings={d.findings} />
         ) : (
           <EmptyState>診断はまだありません。</EmptyState>
         )}
         {d.audits.length > 1 ? (
-          <p className="text-muted-foreground text-sm">過去の診断 {d.audits.length - 1}件（最新のみ表示）</p>
+          <Link className="text-primary text-sm underline" href={`/ops/companies/${companyId}/audits`}>
+            過去の診断 {d.audits.length - 1}件と根拠を確認
+          </Link>
         ) : null}
       </Section>
 
@@ -494,7 +615,7 @@ export default async function CompanyPage({
               <TableHead>版</TableHead>
               <TableHead>状態</TableHead>
               <TableHead>内容</TableHead>
-              <TableHead>デモ</TableHead>
+              <TableHead>サイト</TableHead>
               <TableHead>レビュー</TableHead>
               <TableHead>操作</TableHead>
             </TableRow>
@@ -515,46 +636,38 @@ export default async function CompanyPage({
                   </details>
                 </TableCell>
                 <TableCell>
-                  {v.demoArtifactDir ? <code className="break-all text-xs">{v.demoArtifactDir}</code> : "—"}
+                  {v.demoArtifactDir ? (
+                    <a
+                      className="text-primary underline whitespace-nowrap"
+                      href={`/ops/review/preview/${v.id}/index.html`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`提案第${v.version}版のサイトを別タブで確認`}
+                    >
+                      サイトを見る
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">サイトは未作成です</span>
+                  )}
                 </TableCell>
                 <TableCell>
                   <span className="whitespace-nowrap tabular-nums">{fmtDate(v.reviewedAt)}</span>
-                  {v.reviewNote ? <div className="text-muted-foreground text-xs">{v.reviewNote}</div> : null}
+                  {v.reviewNote ? (
+                    <details className="mt-1 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">確認メモを表示</summary>
+                      <p className="mt-2 max-w-md whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                        {v.reviewNote}
+                      </p>
+                    </details>
+                  ) : null}
                 </TableCell>
                 <TableCell>
-                  {v.status === "in_review" ? (
-                    <div className="grid min-w-64 gap-2">
-                      <form action={reviewProposalAction} className={inlineFormClass}>
-                        <ReturnTo path={here} />
-                        <input type="hidden" name="proposalVersionId" value={v.id} />
-                        <input type="hidden" name="decision" value="approved" />
-                        <Input
-                          name="note"
-                          placeholder="確認メモ（任意）"
-                          aria-label="確認メモ"
-                          className="h-8 flex-1"
-                        />
-                        <Button type="submit" size="sm" variant="success">
-                          承認
-                        </Button>
-                      </form>
-                      <form action={reviewProposalAction} className={inlineFormClass}>
-                        <ReturnTo path={here} />
-                        <input type="hidden" name="proposalVersionId" value={v.id} />
-                        <input type="hidden" name="decision" value="rejected" />
-                        <Input
-                          name="note"
-                          placeholder="差し戻しの理由（必須）"
-                          required
-                          aria-label="差し戻しの理由"
-                          className="h-8 flex-1"
-                        />
-                        <Button type="submit" size="sm" variant="outline">
-                          差し戻し
-                        </Button>
-                      </form>
-                    </div>
-                  ) : null}
+                  <Link
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                    href={`/ops/review?${new URLSearchParams({ company: c.id, version: v.id })}`}
+                  >
+                    {v.status === "in_review" ? "確認してレビュー" : "この版を確認"}
+                  </Link>
                 </TableCell>
               </TableRow>
             ))}
@@ -562,39 +675,7 @@ export default async function CompanyPage({
           </TableBody>
         </Table>
 
-        <SubHeading>生成ジョブ</SubHeading>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>用途</TableHead>
-              <TableHead>状態</TableHead>
-              <TableHead>生成器</TableHead>
-              <TableHead>モデル（要求/応答）</TableHead>
-              <TableHead>プロンプト版</TableHead>
-              <TableHead>失敗理由</TableHead>
-              <TableHead>登録</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {d.generationJobs.map((j) => (
-              <TableRow key={j.id}>
-                <TableCell>{j.purpose}</TableCell>
-                <TableCell>
-                  <StatusBadge map={JOB_STATUS_LABEL} status={j.status} />
-                </TableCell>
-                <TableCell>{j.generator}</TableCell>
-                <TableCell className="text-xs">
-                  {j.requestedModel ?? "未記録"} / {j.responseModel ?? "未記録"}
-                </TableCell>
-                <TableCell className="text-xs">{j.promptVersion}</TableCell>
-                <TableCell className={j.errorCode ? "text-destructive text-xs" : undefined}>
-                  {j.errorCode ? `${j.errorCode}: ${j.error ?? ""}` : "—"}
-                </TableCell>
-                <TableCell className="whitespace-nowrap tabular-nums">{fmtDate(j.createdAt)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <GenerationHistory jobs={d.generationJobs} retries={retries.value} companyId={c.id} now={new Date()} />
       </Section>
 
       <Section

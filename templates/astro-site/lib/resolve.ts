@@ -95,24 +95,4 @@ export function telHref(phone: { display: string; tel?: string | undefined }): s
   return `tel:${raw.replace(/[^0-9+]/g, "")}`;
 }
 
-function channel(hex: string, i: number): number {
-  const c = Number.parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-}
-
-/** 相対輝度（WCAG）。 */
-export function luminance(hex: string): number {
-  return 0.2126 * channel(hex, 0) + 0.7152 * channel(hex, 1) + 0.0722 * channel(hex, 2);
-}
-
-export function contrastRatio(a: string, b: string): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
-  return (hi + 0.05) / (lo + 0.05);
-}
-
-/** 背景色に対して読みやすい文字色（白か濃い灰）。 */
-export function textColorOn(bg: string): string {
-  const dark = "#1a1a1a";
-  const light = "#ffffff";
-  return contrastRatio(bg, light) >= contrastRatio(bg, dark) ? light : dark;
-}
+export { contrastRatio, luminance, textColorOn } from "./color.ts";

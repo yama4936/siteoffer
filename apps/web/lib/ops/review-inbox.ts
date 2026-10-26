@@ -1,0 +1,90 @@
+import { type Actor, err, hasSalesContract, ok } from "@siteoffer/core";
+import { type DbOrTx, users } from "@siteoffer/db";
+import { and, eq, sql } from "drizzle-orm";
+import { isUuid } from "./form";
+/** 全案件の最新版を検索する。提案本文・画像・内部の生成情報は一覧へ渡さない。 */
+export async function getReviewInbox(
+  db: DbOrTx,
+  actor: Actor | null,
+  input: { view?: string; query?: string; page?: number; companyId?: string; offset?: number; limit?: number } = {},
+) {
+  if (actor?.kind !== "ops" || !isUuid(actor.userId)) return err("forbidden");
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, actor.userId), eq(users.role, "ops"), eq(users.status, "active")));
+  if (!user) return err("forbidden");
+  const view = input.view ?? "pending";
+  if (
+    !["pending", "ready", "all"].includes(view) ||
+    (input.offset !== undefined &&
+      (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > 2147483647)) ||
+    (input.query?.length ?? 0) > 200 ||
+    (input.companyId !== undefined && !isUuid(input.companyId))
+  )
+    return err("invalid_input");
+  if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500))
+    return err("invalid_input");
+  const query = input.query?.trim() ?? "";
+  const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",o.id as "salesOfferId",
+   v.id as "versionId",v.version,v.status as "versionStatus",coalesce(v.created_at,c.created_at) as since,
+   coalesce(v.status='in_review' and c.suppression='none',false) as pending,
+   coalesce(v.status='approved' and c.suppression='none' and not ${hasSalesContract(sql`c.id`)} and (c.pipeline_status<>'sellable' or o.id is null),false) as ready
+   from companies c left join proposals p on p.company_id=c.id
+   left join lateral(select id,version,status,created_at from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
+   left join lateral(select id from sales_offers where company_id=c.id and is_public=true order by version desc limit 1) o on true
+   where true ${input.companyId ? sql`and c.id=${input.companyId}` : sql``} ${query ? sql`and position(lower(${query}) in lower(c.name||' '||coalesce(c.prefecture,'')||' '||coalesce(c.city,'')||' '||coalesce(c.industry,'')))>0` : sql``}`;
+  const count = await db.execute(
+    sql`select count(*)::int as "all",count(*) filter(where pending)::int as pending,count(*) filter(where ready)::int as ready from (${base}) inbox`,
+  );
+  const counts = (count as { rows: { all: number; pending: number; ready: number }[] }).rows[0]!;
+  const total = counts[view as "pending" | "ready" | "all"];
+  const pages = Math.max(1, Math.ceil(total / 20));
+  const page = Math.min(pages, Math.max(1, Number.isSafeInteger(input.page) ? input.page! : 1));
+  const result =
+    await db.execute(sql`select * from (${base}) inbox where ${view === "pending" ? sql`pending` : view === "ready" ? sql`ready` : sql`true`}
+   order by pending desc,date_trunc('milliseconds', since) asc,id asc limit ${input.limit ?? 20} offset ${input.offset ?? (page - 1) * 20}`);
+  const rows = (
+    result as {
+      rows: {
+        id: string;
+        name: string;
+        prefecture: string | null;
+        city: string | null;
+        industry: string | null;
+        status: string;
+        suppression: string;
+        versionId: string | null;
+        version: number | null;
+        versionStatus: string | null;
+        pending: boolean;
+        since: Date | string;
+        updatedAt: Date | string;
+        salesOfferId: string | null;
+      }[];
+    }
+  ).rows;
+  return ok({
+    view: view as "pending" | "ready" | "all",
+    query,
+    page,
+    pages,
+    total,
+    counts,
+    items: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      location: [r.prefecture, r.city].filter(Boolean).join(" "),
+      industry: r.industry,
+      status: r.status,
+      suppression: r.suppression,
+      pending: r.pending,
+      versionId: r.versionId,
+      version: r.version,
+      versionStatus: r.versionStatus,
+      since: new Date(r.since).toISOString(),
+      updatedAt: new Date(r.updatedAt).toISOString(),
+      salesOfferId: r.salesOfferId,
+    })),
+  });
+}

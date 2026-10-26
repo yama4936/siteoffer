@@ -1,0 +1,1 @@
+CREATE INDEX "audit_requests_company_history" ON "audit_requests" USING btree ("company_id","created_at","id");

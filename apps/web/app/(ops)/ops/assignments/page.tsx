@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
 import { inlineFormClass, StatusBadge } from "@/components/ops/ui-parts-1";
 import { Badge } from "@/components/ui/badge";
@@ -8,13 +9,9 @@ import { PageHeader, Section } from "@/components/ui/page";
 import { NativeSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDb } from "@/lib/db";
-import { ACTIVITY_LABEL, ASSIGNMENT_STATUS_LABEL, fmtDate, label, SUPPRESSION_LABEL } from "@/lib/ops/format";
-import {
-  listActiveSalesUsers,
-  listAssignmentsOverview,
-  listConsultations,
-  listSuppressedCompanies,
-} from "@/lib/ops/queries";
+import { isUuid } from "@/lib/ops/form";
+import { ASSIGNMENT_STATUS_LABEL, fmtDate, label, SUPPRESSION_LABEL } from "@/lib/ops/format";
+import { listActiveSalesUsers, listAssignmentsOverview, listSuppressedCompanies } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
 import {
   extendAssignmentAction,
@@ -29,16 +26,17 @@ export default async function AssignmentsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
+  const focus = first(sp, "focus");
+  if (focus && !isUuid(focus)) notFound();
   const includeClosed = first(sp, "all") === "1";
   const db = getDb();
   const actor = await getCurrentActor();
-  const [list, salesUsers, suppressed, consultations] = await Promise.all([
-    listAssignmentsOverview(db, actor, { includeClosed }),
+  const [list, salesUsers, suppressed] = await Promise.all([
+    listAssignmentsOverview(db, actor, { includeClosed, id: focus }),
     listActiveSalesUsers(db, actor),
     listSuppressedCompanies(db, actor),
-    listConsultations(db, actor),
   ]);
-  if (!list.ok || !salesUsers.ok || !suppressed.ok || !consultations.ok) return <Forbidden />;
+  if (!list.ok || !salesUsers.ok || !suppressed.ok) return <Forbidden />;
   const here = includeClosed ? "/ops/assignments?all=1" : "/ops/assignments";
   // 運営確認待ちを先頭に
   const rows = [...list.value].sort(
@@ -47,7 +45,15 @@ export default async function AssignmentsPage({
 
   return (
     <>
-      <PageHeader title="3. 担当状況・営業拒否・引き継ぎ" />
+      <PageHeader title="担当・引き継ぎ" description="営業の担当状況と運営への相談を確認します。" />
+      {focus && (
+        <p className="mb-4 text-sm">
+          今日の仕事から選んだ案件を表示中です。{" "}
+          <Link href="/ops/assignments" className="text-primary underline">
+            全件を表示
+          </Link>
+        </p>
+      )}
       <Flash searchParams={sp} />
 
       <Section
@@ -79,7 +85,11 @@ export default async function AssignmentsPage({
             {rows.map(({ a, companyName, suppression, userName, userStatus }) => {
               const active = !["completed", "released", "lost"].includes(a.status);
               return (
-                <TableRow key={a.id} className={a.status === "awaiting_ops" ? "bg-warning/5" : undefined}>
+                <TableRow
+                  id={`assignment-${a.id}`}
+                  key={a.id}
+                  className={a.status === "awaiting_ops" ? "bg-warning/5" : undefined}
+                >
                   <TableCell className="min-w-40">
                     <Link href={`/ops/companies/${a.companyId}`} className="font-medium">
                       {companyName}
@@ -112,8 +122,18 @@ export default async function AssignmentsPage({
                     次回 {fmtDate(a.nextActionAt)}
                   </TableCell>
                   <TableCell className="min-w-96">
+                    <Link
+                      href={`/ops/assignments/${a.id}/history`}
+                      prefetch={false}
+                      className="mb-3 inline-flex min-h-11 items-center text-primary text-sm underline"
+                    >
+                      活動履歴を確認 →
+                    </Link>
                     {active ? (
                       <div className="grid gap-2">
+                        <Link href={`/ops/assignments/${a.id}/conditions`} className="text-primary text-sm underline">
+                          商談の条件変更・履歴
+                        </Link>
                         <form action={extendAssignmentAction} className={inlineFormClass}>
                           <ReturnTo path={here} />
                           <input type="hidden" name="assignmentId" value={a.id} />
@@ -192,40 +212,10 @@ export default async function AssignmentsPage({
         </Table>
       </Section>
 
-      <Section
-        title={`運営への相談（${consultations.value.length}件）`}
-        description="対応済みの管理は未実装です（core・スキーマに列がありません）。"
-      >
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>日時</TableHead>
-              <TableHead>企業</TableHead>
-              <TableHead>営業ユーザー</TableHead>
-              <TableHead>活動</TableHead>
-              <TableHead>メモ</TableHead>
-              <TableHead>次回対応</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {consultations.value.map(({ activity, companyName, userName }) => (
-              <TableRow key={activity.id}>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(activity.occurredAt)}</TableCell>
-                <TableCell className="min-w-40">
-                  <Link href={`/ops/companies/${activity.companyId}`}>{companyName}</Link>
-                </TableCell>
-                <TableCell>{userName}</TableCell>
-                <TableCell>
-                  <Badge variant="secondary">{label(ACTIVITY_LABEL, activity.kind)}</Badge>
-                </TableCell>
-                <TableCell className="min-w-48">{activity.note ?? "—"}</TableCell>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                  {fmtDate(activity.nextActionAt)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      <Section title="営業からの相談" description="相談の担当・回答・対応完了は、相談画面で管理できます。">
+        <Link href="/ops/consultations" className={buttonVariants({ variant: "outline" })}>
+          未対応・対応中の相談を見る
+        </Link>
       </Section>
 
       <Section

@@ -29,27 +29,31 @@ const PROTOCOL_V3 = 196608;
 /** PGlite を1つの接続に専有させる錠。トランザクションをまたいで持ち続けられる */
 class SessionLock {
   private owner: number | null = null;
-  private waiters: { id: number; resolve: () => void }[] = [];
+  private waiters: { id: number; resolve: (granted: boolean) => void }[] = [];
 
-  async acquire(id: number): Promise<void> {
-    if (this.owner === id) return;
+  async acquire(id: number): Promise<boolean> {
+    if (this.owner === id) return true;
     if (this.owner === null) {
       this.owner = id;
-      return;
+      return true;
     }
-    await new Promise<void>((resolve) => this.waiters.push({ id, resolve }));
+    return new Promise<boolean>((resolve) => this.waiters.push({ id, resolve }));
   }
 
   release(id: number): void {
     if (this.owner !== id) return;
     const next = this.waiters.shift();
     this.owner = next ? next.id : null;
-    next?.resolve();
+    next?.resolve(true);
   }
 
   /** 待っている接続を外す（接続が切れたとき） */
   forget(id: number): void {
-    this.waiters = this.waiters.filter((w) => w.id !== id);
+    this.waiters = this.waiters.filter((w) => {
+      if (w.id !== id) return true;
+      w.resolve(false);
+      return false;
+    });
   }
 
   isOwner(id: number): boolean {
@@ -58,15 +62,30 @@ class SessionLock {
 }
 
 export interface PGliteServer {
+  port: number;
+  exclusive<T>(read: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T>;
   stop(): Promise<void>;
 }
 
 export async function startPGliteServer(db: PGliteLike, opts: { port: number; host: string }): Promise<PGliteServer> {
   const lock = new SessionLock();
   const sockets = new Set<net.Socket>();
+  const stopping = new AbortController();
+  const exclusiveTasks = new Set<Promise<unknown>>();
+  const sessions = new Set<Promise<void>>();
+  const sessionErrors: unknown[] = [];
   let nextId = 1;
 
   const server = net.createServer((socket) => {
+    if (stopping.signal.aborted) {
+      socket.destroy();
+      return;
+    }
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    sessions.add(finished);
     const id = nextId++;
     sockets.add(socket);
     socket.setNoDelay(true);
@@ -81,7 +100,7 @@ export async function startPGliteServer(db: PGliteLike, opts: { port: number; ho
     };
 
     const runUnit = async (messages: Uint8Array[]) => {
-      await lock.acquire(id);
+      if (!(await lock.acquire(id))) return;
       try {
         for (const m of messages) {
           if (closed) break;
@@ -161,6 +180,14 @@ export async function startPGliteServer(db: PGliteLike, opts: { port: number; ho
           lock.release(id);
         }
       });
+      void chain
+        .catch((error) => {
+          if (sessionErrors.length < 10) sessionErrors.push(error);
+        })
+        .finally(() => {
+          sessions.delete(finished);
+          finish();
+        });
     };
     socket.on("close", onClose);
     socket.on("error", onClose);
@@ -172,9 +199,43 @@ export async function startPGliteServer(db: PGliteLike, opts: { port: number; ho
   });
 
   return {
+    port: (server.address() as net.AddressInfo).port,
+    exclusive<T>(read: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+      const interrupted = signal ? AbortSignal.any([signal, stopping.signal]) : stopping.signal;
+      const work = (async () => {
+        interrupted.throwIfAborted();
+        const id = nextId++;
+        let cancel!: () => void;
+        const aborted = new Promise<never>((_resolve, reject) => {
+          cancel = () => {
+            lock.forget(id);
+            reject(interrupted.reason);
+          };
+          interrupted.addEventListener("abort", cancel, { once: true });
+        });
+        const acquiring = lock.acquire(id);
+        try {
+          const granted = await Promise.race([acquiring, aborted]);
+          interrupted.throwIfAborted();
+          if (!granted) throw new Error("Database reservation cancelled");
+          return await read(interrupted);
+        } finally {
+          interrupted.removeEventListener("abort", cancel);
+          // If acquisition won at the cancellation boundary, release its reservation as well.
+          lock.release(id);
+        }
+      })();
+      exclusiveTasks.add(work);
+      void work.finally(() => exclusiveTasks.delete(work)).catch(() => {});
+      return work;
+    },
     async stop() {
+      stopping.abort();
       for (const s of sockets) s.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await Promise.allSettled(exclusiveTasks);
+      await Promise.all(sessions);
+      if (sessionErrors.length) throw new AggregateError(sessionErrors, "Database session cleanup failed");
     },
   };
 }

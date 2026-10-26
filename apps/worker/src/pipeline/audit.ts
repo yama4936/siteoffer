@@ -1,21 +1,19 @@
 import { runSiteAudit } from "@siteoffer/audit";
 import { companies, websites } from "@siteoffer/db";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { closeStepAudits } from "../audit-cleanup.ts";
+import { validateAuditRequest } from "../audit-request.ts";
+import { resumeSavedAudit } from "../audit-result.ts";
+import { DISCOVERY_AUDIT_PREFIX } from "../discovery-audit-target.ts";
 import { PermanentError, PreconditionError, type StepDefinition } from "../execute.ts";
-import { type AuditPayload, type ProposalPayload, QUEUES, stepKeys } from "../queues.ts";
+import { dispatchProposalHandoffs, findProposalHandoff } from "../handoff.ts";
+import { type AuditPayload, QUEUES, stepKeys } from "../queues.ts";
 import { checkPublicHttpUrl } from "../url.ts";
-import { moveCompanyStatus, PIPELINE_ACTOR, PRE_REVIEW_STATUSES, PROTECTED } from "./status.ts";
+import { moveCompanyStatus, PIPELINE_ACTOR, PROTECTED } from "./status.ts";
 
-export interface AuditStepResult {
-  companyId: string;
-  /** 診断しなかった理由（営業抑止・公式サイト未確認） */
-  skipped: string | null;
-  auditId: string | null;
-  auditStatus: "evaluated" | "unevaluable" | null;
-  decision: "create" | "skip" | "hold" | null;
-  /** 生成へ送った */
-  proposalQueued: boolean;
-}
+export type { AuditStepResult } from "../audit-result-types.ts";
+
+import type { AuditStepResult } from "../audit-result-types.ts";
 
 /**
  * 企業の公式サイトを診断する（collect.py → 採点 → score.py → decide.py）。
@@ -27,14 +25,41 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
   queue: QUEUES.audit,
   kind: "audit",
   key: stepKeys.audit,
-  async run(deps, payload) {
+  async run(deps, payload, ctx) {
     const { db, clock } = deps;
+    if (ctx.attempt > 1) await ctx.withOwnership((tx) => closeStepAudits(tx, clock, stepKeys.audit(payload)));
+    const requestIssue = await validateAuditRequest(db, payload);
+    if (requestIssue) throw new PreconditionError(requestIssue);
     const [company] = await db.select().from(companies).where(eq(companies.id, payload.companyId));
     if (!company) throw new PreconditionError(`企業がない：${payload.companyId}`);
     const base = { companyId: company.id, auditId: null, auditStatus: null, decision: null, proposalQueued: false };
     if (PROTECTED.includes(company.suppression)) return { ...base, skipped: `営業抑止（${company.suppression}）` };
     if (company.officialSiteStatus !== "confirmed") {
       return { ...base, skipped: `公式サイトが未確認（${company.officialSiteStatus}）` };
+    }
+
+    const key = stepKeys.audit(payload);
+    const previous = await ctx.withOwnership((tx) => findProposalHandoff(tx, key));
+    const dispatch = () =>
+      dispatchProposalHandoffs(deps, key).catch(() => {
+        deps.logger.warn("提案への引き継ぎは保存済みです。定期処理で再送します", { key });
+      });
+    if (previous) {
+      await dispatch();
+      return {
+        ...base,
+        skipped: null,
+        auditId: previous.auditId,
+        auditStatus: "evaluated",
+        decision: "create",
+        proposalQueued: true,
+      };
+    }
+
+    const saved = await ctx.withOwnership((tx) => resumeSavedAudit(tx, clock, payload));
+    if (saved) {
+      if (saved.proposalQueued) await dispatch();
+      return saved;
     }
 
     const [site] = await db
@@ -47,52 +72,43 @@ export const auditStep: StepDefinition<AuditPayload, AuditStepResult> = {
     const urlCheck = checkPublicHttpUrl(site.url);
     if (!urlCheck.ok) throw new PermanentError(`診断できないURL：${urlCheck.reason}`);
 
-    const r = await runSiteAudit(db, clock, deps.audit, { websiteId: site.id, actor: PIPELINE_ACTOR });
+    const r = await runSiteAudit(db, clock, deps.audit, {
+      websiteId: site.id,
+      beforeStart: async (tx) => {
+        const issue = await validateAuditRequest(tx, payload);
+        if (issue) throw new PreconditionError(issue);
+      },
+      actor: PIPELINE_ACTOR,
+      signal: ctx.signal,
+      workerStep: { key, attempt: ctx.attempt },
+      withOwnership: ctx.withOwnership,
+    });
+    await ctx.assertCurrent();
+    if (!r.ok && r.error === "audit_busy") {
+      // A replacement target can wait for an older target without starting another model call.
+      // At the retry limit, stop without marking the other diagnosis/company as failed.
+      if (payload.requestKey.startsWith(DISCOVERY_AUDIT_PREFIX) && ctx.attempt < deps.policies.audit.maxAttempts)
+        throw new Error(r.message);
+      throw new PreconditionError(r.message);
+    }
     if (!r.ok) throw new PermanentError(`${r.error}: ${r.message ?? ""}`);
     const out = r.value;
     if (out.status === "failed") throw new Error(`診断に失敗した：${out.failureReason ?? "理由不明"}`);
 
-    const meta = { auditId: out.auditId, decision: out.decision };
-    if (out.status === "evaluated" && out.decision === "create") {
-      await moveCompanyStatus(db, clock, {
-        companyId: company.id,
-        from: [...PRE_REVIEW_STATUSES],
-        to: "audited",
-        reason: "診断済み（判定：create）",
-        meta,
-      });
-      const next: ProposalPayload = { companyId: company.id, auditId: out.auditId, revision: "initial" };
-      await deps.queue.send(QUEUES.proposal, next, { singletonKey: stepKeys.proposal(next) });
-      return {
-        ...base,
-        skipped: null,
-        auditId: out.auditId,
-        auditStatus: out.status,
-        decision: out.decision,
-        proposalQueued: true,
-      };
-    }
-
-    const hold = out.decision !== "skip";
-    await moveCompanyStatus(db, clock, {
-      companyId: company.id,
-      from: [...PRE_REVIEW_STATUSES],
-      to: hold ? "on_hold" : "audited",
-      reason: hold
-        ? `判定保留（${out.status === "unevaluable" ? "評価不能" : "閾値未設定・カバー率不足など"}）。生成しない`
-        : "判定：skip（提案書を作らない）。生成しない",
-      meta,
-    });
-    return {
-      ...base,
-      skipped: null,
-      auditId: out.auditId,
-      auditStatus: out.status,
-      decision: out.decision,
-      proposalQueued: false,
-    };
+    const result = await ctx.withOwnership((tx) =>
+      resumeSavedAudit(tx, clock, payload, { auditId: out.auditId, reused: false }),
+    );
+    if (!result)
+      throw new PreconditionError(
+        "診断中に公式サイトが変更されたため、結果の引き継ぎを止めました。対象を確認して再診断してください",
+      );
+    if (result.proposalQueued) await dispatch();
+    return result;
   },
   async onGiveUp(deps, payload, reason) {
+    await deps.db.transaction((tx) => closeStepAudits(tx, deps.clock, stepKeys.audit(payload)));
+    // 引き継ぎ確定後の終了通知の失敗で、診断済みの企業を失敗へ戻さない。
+    if (await findProposalHandoff(deps.db, stepKeys.audit(payload))) return;
     await moveCompanyStatus(deps.db, deps.clock, {
       companyId: payload.companyId,
       from: ["collected", "site_confirmed", "audited", "on_hold"],

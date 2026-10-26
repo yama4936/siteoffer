@@ -3,7 +3,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./images": "./src/images.ts",
+    "./lease": "./src/lease.ts",
+    "./feedback": "./src/feedback.ts",
+    "./stop-reference": "./src/sandbox/types.ts",
+    "./docker-process": "./src/sandbox/docker-process.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
@@ -14,6 +19,7 @@
     "@siteoffer/db": "workspace:*",
     "@siteoffer/schemas": "workspace:*",
     "drizzle-orm": "0.45.4",
+    "sharp": "^0.35.5",
     "zod": "4.6.7"
   }
 }

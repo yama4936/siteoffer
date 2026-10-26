@@ -1,19 +1,31 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { siteGenerationToSiteInput } from "@siteoffer/astro-site";
-import { type Actor, addDeliveryVersion, canTransition, transitionDelivery } from "@siteoffer/core";
 import {
-  companies,
-  contracts,
-  deliveries,
-  deliveryVersions,
-  discoveryJobs,
-  proposalVersions,
-  siteAudits,
-} from "@siteoffer/db";
+  type Actor,
+  assertCompanyProfileCurrent,
+  CompanyProfileError,
+  claimDeliveryBuild,
+  completeDeliveryBuild,
+  type DeliveryBuildClaim,
+  failDeliveryBuild,
+  INTERRUPTED_BUILD_MESSAGE,
+  loadDeliveryInputSource,
+  renewDeliveryBuild,
+} from "@siteoffer/core";
+import type { IntakeLane, IntakePhase } from "@siteoffer/db";
+import { contentEntries, deliveries, deliveryBuilds, discoveryJobs } from "@siteoffer/db";
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
-import { and, asc, desc, eq, gte } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
+import { withDeliveryChange } from "./delivery-change.ts";
+import { applyDeliveryMaterials, prepareDeliveryMaterials } from "./delivery-materials.ts";
+import { withDeliveryRevision } from "./delivery-revision.ts";
 import type { WorkerDeps } from "./deps.ts";
+import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignReference } from "./design.ts";
+import { siteGenerationInputIssue } from "./input.ts";
+import { readStepState } from "./ledger.ts";
+import { stopDiscoveryJob } from "./pipeline/discovery.ts";
 import { type DiscoveryPayload, QUEUES, stepKeys } from "./queues.ts";
 
 /**
@@ -31,24 +43,35 @@ const BATCH = 20;
 export interface IntakeState {
   /** このプロセスで送った収集ジョブ（同じ行を何度も送らない。プロセスをまたぐ二重投入はキューの singletonKey と実行台帳で防ぐ） */
   sentDiscovery: Set<string>;
-  /** このプロセスで制作版の作成をあきらめた回（同じ失敗を繰り返さない）。キーは deliveryRoundKey */
-  failedDeliveryRounds: Set<string>;
 }
 
 export function createIntakeState(): IntakeState {
-  return { sentDiscovery: new Set(), failedDeliveryRounds: new Set() };
+  return { sentDiscovery: new Set() };
 }
 
 /** status=queued の収集ジョブを収集キューへ送る。送ったジョブIDを返す */
 export async function intakeDiscoveryJobs(deps: WorkerDeps, state: IntakeState): Promise<string[]> {
   const rows = await deps.db
-    .select({ id: discoveryJobs.id })
+    .select({ id: discoveryJobs.id, provider: discoveryJobs.provider })
     .from(discoveryJobs)
     .where(eq(discoveryJobs.status, "queued"))
     .orderBy(asc(discoveryJobs.createdAt))
     .limit(BATCH);
   const sent: string[] = [];
   for (const r of rows) {
+    if (!deps.discovery.providers[r.provider]) {
+      await stopDiscoveryJob(
+        deps,
+        r.id,
+        `取得元「${r.provider}」はこのワーカーで有効になっていません。設定後に再試行してください`,
+      );
+      continue;
+    }
+    const ledger = await readStepState(deps.db, stepKeys.discovery({ discoveryJobId: r.id }));
+    if (ledger.gaveUp) {
+      await stopDiscoveryJob(deps, r.id, ledger.lastFailure ?? "前回の処理が停止しました。再試行してください");
+      continue;
+    }
     if (state.sentDiscovery.has(r.id)) continue;
     const payload: DiscoveryPayload = { discoveryJobId: r.id };
     await deps.queue.send(QUEUES.discovery, payload, { singletonKey: stepKeys.discovery(payload) });
@@ -61,12 +84,10 @@ export async function intakeDiscoveryJobs(deps: WorkerDeps, state: IntakeState):
 
 type DeliveryRow = typeof deliveries.$inferSelect;
 
-/**
- * 制作の「回」のキー。制作（building）に入った時刻（deliveries.updated_at。状態の変更でだけ更新される）で区別する。
- * 運営確認・顧客確認から制作へ戻すと新しい回になり、新しい版を作る。
- */
-export function deliveryRoundKey(d: Pick<DeliveryRow, "id" | "updatedAt">): string {
-  return `delivery:${d.id}:${d.updatedAt.getTime()}`;
+/** 制作回のIDで区別する。同じ時刻のやり直しも別の依頼になる。 */
+export function deliveryRoundKey(d: Pick<DeliveryRow, "id" | "currentBuildId">): string {
+  if (!d.currentBuildId) throw Error("制作回が未受付です");
+  return `delivery:${d.id}:${d.currentBuildId}`;
 }
 
 export type DeliveryIntakeResult =
@@ -77,52 +98,108 @@ export type DeliveryIntakeResult =
 
 /**
  * 制作中（building）で、その回の制作版がない納品に版を作る。
- * 生成（delivery_site）→ Astroで納品サイトをビルド・検査 → addDeliveryVersion（system）→ 遷移規則に従って運営確認（ops_review）へ。
+ * DBの実行権限を保持して生成・ビルドし、版追加と運営確認への移行を一括確定する。
  * その回の版がすでにあり、まだ制作中のもの（前回の運営確認への移動が失敗した等）は、移動だけを行う。
  */
-export async function intakeDeliveries(deps: WorkerDeps, state: IntakeState): Promise<DeliveryIntakeResult[]> {
+export async function intakeDeliveries(deps: WorkerDeps, _state: IntakeState): Promise<DeliveryIntakeResult[]> {
   const rows = await deps.db
-    .select()
+    .select(getTableColumns(deliveries))
     .from(deliveries)
-    .where(eq(deliveries.status, "building"))
+    .leftJoin(
+      deliveryBuilds,
+      and(eq(deliveryBuilds.id, deliveries.currentBuildId), eq(deliveryBuilds.deliveryId, deliveries.id)),
+    )
+    // 失敗済み・他ワーカーの実行中案件が受付枠を埋めないよう、上限を適用する前に絞る。
+    .where(
+      and(
+        eq(deliveries.status, "building"),
+        isNull(deliveries.lockedVersionId),
+        or(
+          isNull(deliveryBuilds.id),
+          eq(deliveryBuilds.status, "queued"),
+          and(
+            eq(deliveryBuilds.status, "running"),
+            or(isNull(deliveryBuilds.leaseUntil), lte(deliveryBuilds.leaseUntil, deps.clock.now())),
+          ),
+        ),
+      ),
+    )
     .orderBy(asc(deliveries.updatedAt))
     .limit(BATCH);
   const results: DeliveryIntakeResult[] = [];
   for (const d of rows) {
-    const round = deliveryRoundKey(d);
-    if (state.failedDeliveryRounds.has(round)) continue;
-    const r = await processDelivery(deps, d, round);
-    if (r.status === "failed") {
-      state.failedDeliveryRounds.add(round);
-      deps.logger.error("納品の制作版を作れなかった", { deliveryId: d.id, reason: r.reason });
-    } else if (r.status !== "skipped") {
-      deps.logger.info("納品の制作版を処理した", { ...r });
+    const ownerId = randomUUID();
+    const claimed = await claimDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, d.id, ownerId);
+    if (!claimed.ok) {
+      if (claimed.error === "interrupted")
+        results.push({ deliveryId: d.id, status: "failed", reason: INTERRUPTED_BUILD_MESSAGE });
+      continue;
     }
+    if (claimed.value.completed) {
+      results.push({ deliveryId: d.id, status: "moved_to_ops_review", movedToOpsReview: true });
+      continue;
+    }
+    const current = claimed.value.delivery;
+    const claim = { deliveryId: d.id, buildId: current.currentBuildId!, ownerId };
+    const controller = new AbortController();
+    let ping: Promise<unknown> | null = null;
+    const timer = setInterval(() => {
+      if (!ping)
+        ping = renewDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, claim)
+          .then((owned) => {
+            if (!owned) controller.abort();
+          })
+          .catch(() => {
+            controller.abort();
+          })
+          .finally(() => {
+            ping = null;
+          });
+    }, 20000);
+    timer.unref();
+    let r: DeliveryIntakeResult;
+    try {
+      r = await processDelivery(deps, current, deliveryRoundKey(current), claim, controller.signal);
+    } catch (error) {
+      r = {
+        deliveryId: d.id,
+        status: "failed",
+        reason:
+          error instanceof CompanyProfileError
+            ? error.message
+            : "制作処理を完了できませんでした。ワーカーと設定を確認して再試行してください。",
+      };
+    } finally {
+      clearInterval(timer);
+      if (ping) await ping;
+    }
+    if (r.status === "failed") {
+      await failDeliveryBuild(deps.db, deps.clock, INTAKE_ACTOR, claim, r.reason);
+      deps.logger.error("納品の制作版を作れなかった", { deliveryId: d.id, reason: r.reason });
+    } else if (r.status !== "skipped") deps.logger.info("納品の制作版を処理した", { ...r });
     results.push(r);
   }
   return results;
 }
 
-async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string): Promise<DeliveryIntakeResult> {
+async function processDelivery(
+  deps: WorkerDeps,
+  d: DeliveryRow,
+  round: string,
+  claim: DeliveryBuildClaim,
+  signal: AbortSignal,
+): Promise<DeliveryIntakeResult> {
   const { db, clock } = deps;
-  const [existing] = await db
-    .select({ id: deliveryVersions.id })
-    .from(deliveryVersions)
-    .where(and(eq(deliveryVersions.deliveryId, d.id), gte(deliveryVersions.createdAt, d.updatedAt)))
-    .limit(1);
-  if (existing) {
-    const moved = await moveToOpsReview(deps, d.id);
-    return moved
-      ? { deliveryId: d.id, status: "moved_to_ops_review", movedToOpsReview: true }
-      : { deliveryId: d.id, status: "skipped", reason: "その回の制作版はあるが、運営確認へ進めない" };
-  }
-
-  const [contract] = await db.select().from(contracts).where(eq(contracts.id, d.contractId));
-  if (!contract) return { deliveryId: d.id, status: "failed", reason: "契約がない" };
-  const [company] = await db.select().from(companies).where(eq(companies.id, contract.companyId));
-  if (!company) return { deliveryId: d.id, status: "failed", reason: "企業がない" };
-  const audit = await findAuditForContract(deps, contract);
-  if (!audit) return { deliveryId: d.id, status: "failed", reason: "生成の入力にする診断がない" };
+  const stale = (): DeliveryIntakeResult => ({
+    deliveryId: d.id,
+    status: "skipped",
+    reason: "制作の実行権限が更新されたため、この結果は反映しません",
+  });
+  const source = await loadDeliveryInputSource(db, d.id, claim.buildId);
+  if (!source) return { deliveryId: d.id, status: "failed", reason: "契約と企業の情報を確認できません" };
+  if (source.blockers.length) return { deliveryId: d.id, status: "failed", reason: source.blockers.join(" / ") };
+  const { company, contract } = source;
+  const audit = source.audit!;
 
   const genDeps: GenerationDeps = {
     db,
@@ -132,92 +209,183 @@ async function processDelivery(deps: WorkerDeps, d: DeliveryRow, round: string):
     ...(deps.generation.limits ? { limits: deps.generation.limits } : {}),
     ...(deps.generation.limiter ? { limiter: deps.generation.limiter } : {}),
   };
-  const input = await deps.buildGenerationInput(db, { company, audit });
+  let updatesUrl: string | undefined;
+  try {
+    updatesUrl = contentSiteUrl(company.id, "delivery");
+  } catch {
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "記事配信先の設定が不正です。SITEOFFER_CONTENT_ORIGIN を確認してください",
+    };
+  }
+  const [article] = await db
+    .select({ id: contentEntries.id })
+    .from(contentEntries)
+    .where(eq(contentEntries.companyId, company.id))
+    .limit(1);
+  if (article && !updatesUrl)
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "記事があるため、納品前に SITEOFFER_CONTENT_ORIGIN の設定が必要です",
+    };
+  let input = await deps.buildGenerationInput(db, { company, audit });
+  const inputIssue = siteGenerationInputIssue(input);
+  if (inputIssue) return { deliveryId: d.id, status: "failed", reason: inputIssue };
+  if (source.design)
+    input = await withDesignReference(
+      input,
+      source.design,
+      path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId, "reference"),
+    );
+  // 契約書・報酬・担当者の個人情報を生成器へ渡さず、確定時の制作範囲だけを引き継ぐ。
+  input = {
+    ...input,
+    context: {
+      ...input.context,
+      deliveryContract: {
+        contractId: contract.id,
+        preparationId: source.preparation?.id ?? null,
+        proposalVersionId: source.proposal?.id ?? null,
+        scope: source.scope?.scope ?? null,
+        instruction:
+          "契約時の制作範囲に従う。追加の機能・ページ・更新運用を契約済みと推測しない。不明な会社情報・権利・ドメインの取得状況を確定事実として補わない。",
+      },
+    },
+  };
+  const change = await withDeliveryChange(db, d.id, company.id, claim.buildId, input);
+  input = await withDeliveryRevision(db, d.id, company.id, change.input, change.baseVersion);
+  const workDir = path.join(deps.deliveryArtifactRoot, d.id, claim.buildId, claim.ownerId);
+  const materials = await prepareDeliveryMaterials(db, d.id, claim.buildId, workDir, input);
+  input = materials.input;
+  if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
   const gen = await runGenerationJob(genDeps, {
     idempotencyKey: `${round}:delivery_site`,
     companyId: company.id,
     purpose: "delivery_site",
     input,
+    signal,
   });
-  if (!gen.ok) return { deliveryId: d.id, status: "failed", reason: `生成に失敗した：${gen.message ?? gen.error}` };
+  if (signal.aborted) return stale();
+  if (!gen.ok)
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason:
+        gen.error === "sandbox_stop_unconfirmed" || gen.error === "sandbox_stop_pending"
+          ? "生成処理の停止確認を待っています。ワーカーの稼働と生成履歴を確認してください。停止確認が済むまで再試行は行いません。"
+          : "サイトの生成に失敗しました。生成履歴と設定を確認して再試行してください。",
+    };
   if (gen.value.output === null) {
-    return { deliveryId: d.id, status: "failed", reason: `生成ジョブが ${gen.value.job.status}（出力なし）` };
+    return {
+      deliveryId: d.id,
+      status: "failed",
+      reason: "生成結果を確認できませんでした。生成履歴を確認して再試行してください。",
+    };
   }
   const output = gen.value.output as SiteGenerationOutput;
 
-  const workDir = path.join(deps.deliveryArtifactRoot, d.id, String(d.updatedAt.getTime()));
+  if (!(await renewDeliveryBuild(db, clock, INTAKE_ACTOR, claim))) return stale();
   const built = await deps.siteBuilder.buildDelivery({
-    siteInput: siteGenerationToSiteInput(output, { mode: "delivery" }),
+    siteInput: {
+      ...applyDeliveryMaterials(siteGenerationToSiteInput(output, { mode: "delivery" }), materials.images),
+      updatesUrl,
+    },
     workDir,
+    signal,
   });
+  if (signal.aborted) return stale();
   if (!built.ok) {
     return {
       deliveryId: d.id,
       status: "failed",
-      reason: `納品サイトのビルド・検査に失敗した（${built.reason}）：${built.message}`,
+      reason: "納品サイトのビルド・検査に失敗しました。生成内容と制作環境を確認して再試行してください。",
     };
   }
 
-  const added = await addDeliveryVersion(db, clock, INTAKE_ACTOR, d.id, {
-    artifactDir: built.distDir,
-    generationJobId: gen.value.job.id,
+  const added = await db.transaction(async (tx) => {
+    await assertCompanyProfileCurrent(tx, company.id, input.context.companyProfileRevision);
+    return completeDeliveryBuild(tx, clock, INTAKE_ACTOR, claim, {
+      artifactDir: built.distDir,
+      generationJobId: gen.value.job.id,
+    });
   });
-  if (!added.ok) {
-    return { deliveryId: d.id, status: "failed", reason: `制作版を追加できなかった：${added.message ?? added.error}` };
-  }
-  const moved = await moveToOpsReview(deps, d.id);
+  if (!added.ok)
+    return added.error === "stale_build"
+      ? stale()
+      : {
+          deliveryId: d.id,
+          status: "failed",
+          reason: "制作版を確定できませんでした。制作の状態を確認して再試行してください。",
+        };
   return {
     deliveryId: d.id,
     status: "version_added",
     versionId: added.value.id,
     version: added.value.version,
-    movedToOpsReview: moved,
+    movedToOpsReview: true,
   };
 }
 
-/** 遷移規則（DELIVERY_TRANSITIONS）で許される場合だけ運営確認へ進める */
-async function moveToOpsReview(deps: WorkerDeps, deliveryId: string): Promise<boolean> {
-  const [d] = await deps.db.select().from(deliveries).where(eq(deliveries.id, deliveryId));
-  if (!d || !canTransition(d.status, "ops_review")) return false;
-  const r = await transitionDelivery(
-    deps.db,
-    deps.clock,
-    INTAKE_ACTOR,
-    deliveryId,
-    "ops_review",
-    "ワーカーが制作版を作成したため運営確認へ",
-  );
-  if (!r.ok) deps.logger.warn("運営確認へ進められなかった", { deliveryId, error: r.error, message: r.message });
-  return r.ok;
-}
+type IntakeReporter = (phase: IntakePhase, lane: IntakeLane) => Promise<void>;
 
-/** 契約で選んだ提案版の診断。なければ企業の最新の評価済み診断 */
-async function findAuditForContract(deps: WorkerDeps, contract: typeof contracts.$inferSelect) {
-  const { db } = deps;
-  if (contract.proposalVersionId) {
-    const [pv] = await db
-      .select({ auditId: proposalVersions.auditId })
-      .from(proposalVersions)
-      .where(eq(proposalVersions.id, contract.proposalVersionId));
-    if (pv?.auditId) {
-      const [a] = await db.select().from(siteAudits).where(eq(siteAudits.id, pv.auditId));
-      if (a) return a;
+async function runDispatch(deps: WorkerDeps, state: IntakeState, report?: IntakeReporter) {
+  let failed: { reason: unknown } | undefined;
+  try {
+    if (!deps.discoveryOnly) {
+      await report?.("designs", "dispatch");
+      await intakeDesignBuilds(deps);
     }
+  } catch (reason) {
+    failed = { reason };
   }
-  const [latest] = await db
-    .select()
-    .from(siteAudits)
-    .where(and(eq(siteAudits.companyId, contract.companyId), eq(siteAudits.status, "evaluated")))
-    .orderBy(desc(siteAudits.createdAt))
-    .limit(1);
-  return latest ?? null;
+  try {
+    await report?.("discovery", "dispatch");
+    const discovery = await intakeDiscoveryJobs(deps, state);
+    if (failed) throw failed.reason;
+    await report?.("idle", "dispatch");
+    return discovery;
+  } catch (error) {
+    await report?.("error", "dispatch");
+    throw error;
+  }
 }
 
-/** 受付処理を1回実行する（収集 → 納品の順） */
-export async function runIntakeOnce(deps: WorkerDeps, state: IntakeState) {
-  const discovery = await intakeDiscoveryJobs(deps, state);
-  const deliveriesResult = await intakeDeliveries(deps, state);
-  return { discovery, deliveries: deliveriesResult };
+async function runImages(deps: WorkerDeps, report?: IntakeReporter) {
+  try {
+    await report?.("images", "images");
+    await processDesignJobs(deps);
+    await report?.("idle", "images");
+  } catch (error) {
+    await report?.("error", "images");
+    throw error;
+  }
+}
+
+async function runDeliveries(deps: WorkerDeps, state: IntakeState, report?: IntakeReporter) {
+  try {
+    await report?.("deliveries", "deliveries");
+    const result = await intakeDeliveries(deps, state);
+    await report?.("idle", "deliveries");
+    return result;
+  } catch (error) {
+    await report?.("error", "deliveries");
+    throw error;
+  }
+}
+
+/** 全処理を一度ずつ開始し、全ての結果を待つ。他の処理を一つの失敗で止めない。 */
+export async function runIntakeOnce(deps: WorkerDeps, state: IntakeState, report?: IntakeReporter) {
+  const [dispatch, images, delivery] = await Promise.allSettled([
+    runDispatch(deps, state, report),
+    deps.discoveryOnly ? Promise.resolve() : runImages(deps, report),
+    deps.discoveryOnly ? Promise.resolve([]) : runDeliveries(deps, state, report),
+  ]);
+  if (dispatch.status === "rejected") throw dispatch.reason;
+  if (images.status === "rejected") throw images.reason;
+  if (delivery.status === "rejected") throw delivery.reason;
+  return { discovery: dispatch.value, deliveries: delivery.value };
 }
 
 export interface IntakeLoop {
@@ -225,32 +393,52 @@ export interface IntakeLoop {
 }
 
 /**
- * 受付処理を一定間隔で動かす。前の回が終わってから次の回を予約する（重ならない）。
- * 例外はログに出して次の回へ進む。
+ * 受付・画像生成・納品制作を独立して動かす。各処理は完了後に次回を予約し、同じ処理は重ねない。
+ * 長時間の生成や一つの例外が他の受付を止めない。停止時は全ての実行中処理の完了を待つ。
  */
-export function startIntakeLoop(deps: WorkerDeps, intervalMs: number, state = createIntakeState()): IntakeLoop {
+export function startIntakeLoop(
+  deps: WorkerDeps,
+  intervalMs: number,
+  state = createIntakeState(),
+  report?: IntakeReporter,
+): IntakeLoop {
   let stopped = false;
-  let timer: NodeJS.Timeout | null = null;
-  let current: Promise<void> | null = null;
-  const tick = () => {
-    timer = null;
-    if (stopped) return;
-    current = runIntakeOnce(deps, state)
-      .then(
-        () => {},
-        (e: unknown) => deps.logger.error("受付処理に失敗した", { message: (e as Error).message }),
-      )
-      .finally(() => {
-        current = null;
-        if (!stopped) timer = setTimeout(tick, intervalMs);
-      });
-  };
-  timer = setTimeout(tick, 0);
+  const tasks: {
+    lane: IntakeLane;
+    run: () => Promise<unknown>;
+    timer: NodeJS.Timeout | null;
+    current: Promise<void> | null;
+  }[] = [
+    { lane: "dispatch", run: () => runDispatch(deps, state, report), timer: null, current: null },
+    ...(!deps.discoveryOnly
+      ? [
+          { lane: "images" as const, run: () => runImages(deps, report), timer: null, current: null },
+          { lane: "deliveries" as const, run: () => runDeliveries(deps, state, report), timer: null, current: null },
+        ]
+      : []),
+  ];
+  for (const task of tasks) {
+    const tick = () => {
+      task.timer = null;
+      if (stopped) return;
+      task.current = task
+        .run()
+        .then(
+          () => {},
+          (e: unknown) => deps.logger.error("受付処理に失敗した", { lane: task.lane, message: (e as Error).message }),
+        )
+        .finally(() => {
+          task.current = null;
+          if (!stopped) task.timer = setTimeout(tick, intervalMs);
+        });
+    };
+    task.timer = setTimeout(tick, 0);
+  }
   return {
     async stop() {
       stopped = true;
-      if (timer) clearTimeout(timer);
-      await current;
+      for (const task of tasks) if (task.timer) clearTimeout(task.timer);
+      await Promise.all(tasks.map((task) => task.current));
     },
   };
 }

@@ -13,6 +13,7 @@ export const discoveryJobStatus = pgEnum("discovery_job_status", [
 
 export const discoveryJobs = pgTable("discovery_jobs", {
   id: id(),
+  retryOfJobId: uuid("retry_of_job_id").unique(),
   provider: text("provider").notNull(),
   /** 都道府県・市区町村・業種・キーワード・上限など */
   criteria: jsonb("criteria").notNull(),
@@ -53,3 +54,48 @@ export const discoverySources = pgTable(
   },
   (t) => [uniqueIndex("discovery_sources_provider_external").on(t.provider, t.externalId)],
 );
+
+export type IntakePhase = "starting" | "designs" | "images" | "discovery" | "deliveries" | "idle" | "error";
+export type IntakeLane = "dispatch" | "images" | "deliveries";
+export interface WorkerCapabilities {
+  version: 1;
+  discoveryOnly: boolean;
+  imageConfigured: boolean;
+  generator: "mock" | "codex" | "unknown";
+  intakeIntervalMs: number;
+  /** Absent on old workers and generators that cannot inspect isolated execution termination. */
+  generationStopRecovery?: 1;
+  /** Absent on older workers. Search connectivity is not proved by configuration. */
+  siteSearch?: { provider: "fixture" | "none" | "tavily" | "unknown"; maxPerRun: number };
+  /** Public preparation snapshot; absent on older workers. Never includes paths or credentials. */
+  preparation?: {
+    auditCollector: "python" | "fixture" | "unknown";
+    generationInput: "default" | "fixture" | "unknown";
+    decision: {
+      status: "configured" | "pending" | "invalid";
+      threshold: number | null;
+      criticalFlagsTrigger: boolean | null;
+      demo: boolean;
+    };
+  };
+}
+export interface WorkerLaneProgress {
+  phase: IntakePhase;
+  since: string;
+  completedAt: string | null;
+  lastErrorAt: string | null;
+}
+export interface WorkerProgress extends WorkerLaneProgress {
+  /** Absent on older workers, whose intake tasks ran sequentially. */
+  lanes?: Partial<Record<IntakeLane, WorkerLaneProgress>>;
+}
+
+/** Only public capabilities and liveness; never credentials or connection strings. */
+export const workerRuntimes = pgTable("worker_runtimes", {
+  id: uuid("id").primaryKey(),
+  providers: jsonb("providers").$type<string[]>().notNull(),
+  mode: text("mode").notNull(),
+  heartbeatAt: ts("heartbeat_at").notNull(),
+  capabilities: jsonb("capabilities").$type<WorkerCapabilities>(),
+  progress: jsonb("progress").$type<WorkerProgress>(),
+});

@@ -1,5 +1,6 @@
 import { ACTIVE_ASSIGNMENT_STATUSES, assignments, type DbOrTx, domainPreferences } from "@siteoffer/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { lockAssignmentCompany } from "../assignment/shared.ts";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -50,7 +51,8 @@ export type DomainPreferenceError =
   | "invalid_input"
   | "secret_like_value"
   | "assignment_not_found"
-  | "not_found";
+  | "not_found"
+  | "conflict";
 
 export interface SavedDomainPreference {
   preference: DomainPreference;
@@ -130,12 +132,22 @@ export async function saveDomainPreference(
   if (currentDomain && !DOMAIN_RE.test(currentDomain)) return err("invalid_input", "currentDomain");
 
   return db.transaction(async (tx) => {
+    // Parent -> assignment, including the FK write for the first saved preference.
+    if (input.assignmentId && (await lockAssignmentCompany(tx, input.assignmentId)) !== input.companyId)
+      return err("assignment_not_found");
+    const [assignment] = input.assignmentId
+      ? await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId)).for("update")
+      : [];
     const [existing] = input.assignmentId
-      ? await tx.select().from(domainPreferences).where(eq(domainPreferences.assignmentId, input.assignmentId))
+      ? await tx
+          .select()
+          .from(domainPreferences)
+          .where(eq(domainPreferences.assignmentId, input.assignmentId))
+          .for("update")
       : [];
 
     if (input.assignmentId) {
-      const [a] = await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId));
+      const a = assignment;
       if (!a || a.companyId !== input.companyId) return err("assignment_not_found");
       // 権限：ドメイン希望の所有者は担当の営業ユーザー（読んだ担当の行から渡す）
       const auth = authorizeUser(actor, existing ? "update" : "create", {
@@ -172,7 +184,7 @@ export async function saveDomainPreference(
       // 内容が変わったら運営確認をやり直す
       const [row] = await tx
         .update(domainPreferences)
-        .set({ ...values, confirmedAt: null, confirmedBy: null })
+        .set({ ...values, revision: sql`${domainPreferences.revision} + 1`, confirmedAt: null, confirmedBy: null })
         .where(eq(domainPreferences.id, existing.id))
         .returning();
       saved = row!;
@@ -207,14 +219,23 @@ export async function confirmDomainPreference(
   db: DbOrTx,
   clock: Clock,
   actor: Actor,
-  input: { id: string },
+  input: { id: string; revision: number },
 ): Promise<Result<DomainPreference, DomainPreferenceError>> {
   // 対象を読む前に確かめる（所有者を限定しない確認。営業は常に拒否される）
   const auth = authorizeUser(actor, "confirm", { type: "domainPreference", ownerUserId: null });
   if (!auth.ok) return auth;
+  if (!Number.isSafeInteger(input.revision) || input.revision < 1) {
+    return err("invalid_input", "確認対象の版が不正です。画面を再読み込みしてください");
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.id)) return err("not_found");
   return db.transaction(async (tx) => {
-    const [before] = await tx.select().from(domainPreferences).where(eq(domainPreferences.id, input.id));
+    const [before] = await tx.select().from(domainPreferences).where(eq(domainPreferences.id, input.id)).for("update");
     if (!before) return err("not_found");
+    if (before.revision !== input.revision) {
+      return err("conflict", "聞き取り内容が更新されています。最新の内容を確認してから、もう一度操作してください");
+    }
+    // 応答消失・別タブからの同じ確認は成功として返し、確認者・日時・履歴を増やさない。
+    if (before.confirmedAt) return ok(before);
     const [after] = await tx
       .update(domainPreferences)
       .set({ confirmedAt: clock.now(), confirmedBy: auth.value.userId, updatedAt: clock.now() })

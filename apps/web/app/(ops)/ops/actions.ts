@@ -1,10 +1,14 @@
 "use server";
 
+import { type Actor, type PaymentTargetStatus, type Result, retryDeliveryBuild, systemClock } from "@siteoffer/core";
 /**
  * 運営画面の Server Function。直接POSTでも呼べるため、権限は各処理（lib/ops/commands.ts → core）で判定する。
  * ここでは FormData を読み、処理を呼び、結果の文言を付けて元の画面へ戻すだけにする。
  */
-import { type Actor, type PaymentTargetStatus, type Result, systemClock } from "@siteoffer/core";
+import { requestPreparedAudits } from "@siteoffer/worker/audit-preparation";
+import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
+import { requestAuditByOps } from "@siteoffer/worker/audit-request";
+import { cancelAuditRequest } from "@siteoffer/worker/audit-request-management";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -15,7 +19,6 @@ import {
   confirmDomainPreferenceByOps,
   createDiscoveryJobByOps,
   createImageAsset,
-  createProductTermsVersion,
   excludeCandidate,
   extendAssignmentByOps,
   liftSuppressionByOps,
@@ -27,6 +30,7 @@ import {
   recordPaymentByOps,
   rejectContractByOps,
   releaseAssignmentByOps,
+  retryDiscoveryJobByOps,
   reviewProposalVersion,
   scheduleRewardByOps,
   setOfficialSiteStatus,
@@ -47,6 +51,7 @@ import {
 } from "@/lib/ops/delivery";
 import type { CustomerReviewLinkState } from "@/lib/ops/delivery-state";
 import { jstDate, optInt, optStr, safeReturnTo, str, withFlash } from "@/lib/ops/form";
+import { reviewLinkError } from "@/lib/ops/review-links";
 import { getCurrentActor } from "@/lib/session";
 
 async function run(
@@ -86,7 +91,7 @@ export async function createDiscoveryJobAction(fd: FormData) {
   await run(
     fd,
     (d, a) => createDiscoveryJobByOps(d, a, { provider: str(fd, "provider"), criteria }),
-    "収集ジョブを登録しました。ワーカーが処理します（数秒〜）。この画面を再読み込みすると、ジョブの状態と候補の企業が最新になります",
+    "稼働中の収集ワーカーを確認して登録しました。状態は自動更新されます。処理時間は取得元と件数によって変わります",
   );
 }
 
@@ -162,6 +167,8 @@ export async function updateImageAssetPolicyAction(fd: FormData) {
         rightsStatus: str(fd, "rightsStatus") as Parameters<typeof updateImageAssetPolicy>[2]["rightsStatus"],
         allowSalesDemo: fd.has("allowSalesDemo"),
         allowProduction: fd.has("allowProduction"),
+        placement: str(fd, "placement") as "reference" | "hero" | "logo",
+        expectedRevision: Number(str(fd, "expectedRevision")),
         note: str(fd, "note"),
       }),
     "画像素材の権利状態と利用範囲を更新しました",
@@ -183,7 +190,12 @@ export async function reviewProposalAction(fd: FormData) {
 export async function makeSellableAction(fd: FormData) {
   await run(
     fd,
-    (d, a) => makeSellable(d, a, { companyId: str(fd, "companyId"), productTermsId: optStr(fd, "productTermsId") }),
+    (d, a) =>
+      makeSellable(d, a, {
+        companyId: str(fd, "companyId"),
+        productTermsId: optStr(fd, "productTermsId"),
+        expectedProposalVersionId: str(fd, "proposalVersionId"),
+      }),
     "営業可能にしました",
   );
 }
@@ -246,30 +258,6 @@ export async function liftSuppressionAction(fd: FormData) {
 }
 
 // 4. 商品条件・契約確認・入金・報酬
-
-export async function createProductTermsAction(fd: FormData) {
-  const rewardType = str(fd, "rewardType");
-  const rewardValue = optInt(fd, "rewardValue");
-  const rewardRule =
-    rewardType === "fixed" && rewardValue !== null
-      ? { type: "fixed", amount: rewardValue }
-      : rewardType === "rate" && rewardValue !== null
-        ? { type: "rate", basisPoints: rewardValue }
-        : null;
-  await run(
-    fd,
-    (d, a) =>
-      createProductTermsVersion(d, a, {
-        version: str(fd, "version"),
-        name: str(fd, "name"),
-        scopeText: str(fd, "scope"),
-        price: optInt(fd, "price"),
-        monthlyFee: optInt(fd, "monthlyFee"),
-        rewardRule,
-      }),
-    "販売条件・報酬条件の版を作成しました",
-  );
-}
 
 export async function setProductTermsActiveAction(fd: FormData) {
   const active = str(fd, "active") === "true";
@@ -373,7 +361,11 @@ export async function cancelRewardAction(fd: FormData) {
 // 5. ドメイン希望
 
 export async function confirmDomainPreferenceAction(fd: FormData) {
-  await run(fd, (d, a) => confirmDomainPreferenceByOps(d, a, str(fd, "id")), "ドメイン希望を確認済みにしました");
+  await run(
+    fd,
+    (d, a) => confirmDomainPreferenceByOps(d, a, str(fd, "id"), optInt(fd, "revision") ?? Number.NaN),
+    "ドメイン希望を確認済みにしました",
+  );
 }
 
 // 5. 納品（制作・運営確認・顧客確認・公開の記録・納品）
@@ -381,14 +373,18 @@ export async function confirmDomainPreferenceAction(fd: FormData) {
 export async function createDeliveryAction(fd: FormData) {
   await run(
     fd,
-    (d, a) => createDeliveryByOps(d, a, str(fd, "contractId")),
+    async (d, a) => {
+      const result = await createDeliveryByOps(d, a, str(fd, "contractId"));
+      if (result.ok)
+        fd.set("returnTo", `/ops/delivery?focus=${result.value.deliveryId}#delivery-${result.value.deliveryId}`);
+      return result;
+    },
     "納品を作成しました（情報確認）。準備ができたら「制作に進める」を押してください",
   );
 }
 
 const STEP_MESSAGES: Record<string, string> = {
-  building:
-    "制作に進めました。ワーカーが制作版を作ります（数秒〜。再読み込みで最新の状態を表示します）。版ができたら運営確認に回してください",
+  building: "制作を受け付けました。制作・検査が完了すると運営確認へ進みます。進行状態は自動更新されます",
   ops_review: "運営確認に回しました。版を確認し、顧客確認に回してください",
   delivered: "納品済みにしました",
 };
@@ -425,27 +421,34 @@ export async function sendToCustomerReviewAction(
 ): Promise<CustomerReviewLinkState> {
   const actor = await getCurrentActor();
   const ttl = optInt(fd, "ttlHours");
-  if (ttl !== null && !Number.isFinite(ttl)) return { status: "error", message: "有効期間を確認してください" };
-  let r: Result<{ reviewUrl: string; expiresAt: Date }, string>;
+  if (ttl !== null && (!Number.isFinite(ttl) || ttl <= 0))
+    return { status: "error", message: reviewLinkError("invalid_ttl") };
+  const requestKey = str(fd, "requestKey");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestKey))
+    return { status: "error", message: reviewLinkError("invalid_request") };
   try {
-    r = await sendToCustomerReviewByOps({ db: getDb(), clock: systemClock }, actor, {
+    const r = await sendToCustomerReviewByOps({ db: getDb(), clock: systemClock }, actor, {
       deliveryId: str(fd, "deliveryId"),
       versionId: str(fd, "versionId"),
+      requestKey,
       ...(ttl !== null ? { ttlHours: ttl } : {}),
     });
-  } catch (e) {
-    console.error("ops action failed", e);
-    return { status: "error", message: "処理に失敗しました。入力内容を確認してください" };
+    if (!r.ok) return { status: "error", message: reviewLinkError(r.error) };
+    refresh();
+    return {
+      status: "ok",
+      message: "顧客確認のリンクを用意しました。発行履歴からも再表示できます。",
+      reviewUrl: r.value.reviewUrl,
+      expiresAt: r.value.expiresAt.toISOString(),
+      linkId: r.value.linkId,
+      versionId: r.value.versionId,
+    };
+  } catch {
+    return {
+      status: "unknown",
+      message: "発行結果を確認できませんでした。同じ発行を再確認すると、リンクを増やさず結果を取得できます。",
+    };
   }
-  if (!r.ok) return { status: "error", message: r.message ? `${r.message}（${r.error}）` : r.error };
-  refresh();
-  return {
-    status: "ok",
-    message:
-      "顧客確認に回しました。このURLを顧客に渡してください。URLはこの画面でだけ表示し、再表示はできません（必要なら同じ版で再発行できます）",
-    reviewUrl: r.value.reviewUrl,
-    expiresAt: r.value.expiresAt.toISOString(),
-  };
 }
 
 // 6. 設定・利用停止
@@ -472,4 +475,99 @@ export async function reactivateUserAction(fd: FormData) {
     (d, a) => reactivateSalesUser(d, a, { userId: str(fd, "userId"), reason: str(fd, "reason") }),
     "利用停止を解除しました",
   );
+}
+
+export async function retryDiscoveryJobAction(fd: FormData) {
+  await run(
+    fd,
+    (d, a) => retryDiscoveryJobByOps(d, a, str(fd, "jobId")),
+    "同じ条件の再試行ジョブを登録しました。収集一覧で新しいジョブを確認できます",
+  );
+}
+
+export async function retryDeliveryBuildAction(deliveryId: string, buildId: string) {
+  const actor = await getCurrentActor();
+  const r = await retryDeliveryBuild(getDb(), systemClock, actor, deliveryId, buildId);
+  if (!r.ok && r.error === "preparation_required") {
+    refresh();
+    return { message: r.message ?? "制作の準備画面で不足情報を確認してください。" };
+  }
+  if (!r.ok)
+    return {
+      message:
+        r.error === "forbidden"
+          ? "運営のログイン状態を確認してください。"
+          : "制作状態が更新されています。最新の状態を確認してください。",
+    };
+  refresh();
+  return { message: "制作の再試行を受け付けました。進行状態を確認してください。" };
+}
+
+export async function resumeAuditAction(auditId: string) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await resumeAuditByOps(getDb(), systemClock, actor, auditId);
+    if (!result.ok) return { ok: false, message: result.message ?? "診断と操作権限を確認してください" };
+    revalidatePath("/ops");
+    revalidatePath("/ops/processing");
+    revalidatePath(`/ops/companies/${result.value.companyId}`);
+    return {
+      ok: true,
+      message: result.value.proposalQueued
+        ? "保存済みの診断から制作依頼を受け付けました。ワーカーが自動で引き継ぎます。"
+        : "保存済みの判定を反映しました。採点のやり直しは行っていません。",
+    };
+  } catch {
+    return { ok: false, message: "受付結果を確認できませんでした。もう一度操作しても、同じ依頼は重複しません。" };
+  }
+}
+
+export async function requestCompanyAuditAction(input: { companyId: string; requestId: string }) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await requestAuditByOps(getDb(), systemClock, actor, input);
+    if (!result.ok) return { ok: false, message: result.message ?? "診断の対象と操作権限を確認してください" };
+    revalidatePath(`/ops/companies/${input.companyId}`);
+    revalidatePath("/ops/processing");
+    revalidatePath("/ops");
+    return {
+      ok: true,
+      message: result.value.alreadyAccepted
+        ? "診断依頼は受付済みです。同じ依頼を追加していません。"
+        : "診断を受け付けました。ワーカーが順次処理し、結果を反映します。",
+    };
+  } catch {
+    return { ok: false, message: "受付結果を確認できませんでした。同じ操作でもう一度確認してください。" };
+  }
+}
+
+export async function cancelCompanyAuditAction(requestId: string) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await cancelAuditRequest(getDb(), systemClock, actor, requestId);
+    if (!result.ok) return { ok: false, message: result.message ?? "依頼と操作権限を確認してください" };
+    revalidatePath("/ops");
+    revalidatePath("/ops/processing");
+    revalidatePath(`/ops/companies/${result.value.companyId}`);
+    return {
+      ok: true,
+      message: result.value.alreadyCancelled ? "この診断依頼は取消済みです。" : "開始前の診断依頼を取り消しました。",
+    };
+  } catch {
+    return { ok: false, message: "取消結果を確認できませんでした。同じ操作でもう一度確認してください。" };
+  }
+}
+
+export async function requestPreparedAuditsAction(input: unknown) {
+  const actor = await getCurrentActor();
+  try {
+    const result = await requestPreparedAudits(getDb(), systemClock, actor, input);
+    if (!result.ok) return { ok: false as const, message: result.message ?? "対象と操作権限を確認してください。" };
+    revalidatePath("/ops");
+    revalidatePath("/ops/processing");
+    for (const item of result.value.items) revalidatePath(`/ops/companies/${item.companyId}`);
+    return { ok: true as const, items: result.value.items };
+  } catch {
+    return { ok: false as const, message: "受付結果を確認できません。同じ選択で再度操作してください。" };
+  }
 }

@@ -6,18 +6,23 @@ import {
   proposals,
   proposalVersions,
   rewards,
+  salesOfferChanges,
   users,
 } from "@siteoffer/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { lockAssignmentCompany } from "../assignment/shared.ts";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { createDeliveryForContract } from "../delivery/delivery.ts";
 import { findDomainPreferenceForContract } from "../domain-preference/domain-preference.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { authorizeUser } from "../permissions/policy.ts";
 import type { Reward } from "../reward/reward.ts";
 import { calculateRewardAmount, parseRewardRule, type RewardRule, termsReadinessIssues } from "../reward/rule.ts";
+import { getSalesOffer } from "../sales-offer/offer.ts";
+import { findSalesContract } from "./customer.ts";
 
 export type Contract = typeof contracts.$inferSelect;
 
@@ -64,11 +69,15 @@ export type ContractError =
   | "assignment_not_found"
   | "invalid_state"
   | "already_reported"
+  | "company_contracted"
   | "secret_like_value"
   | "terms_not_found"
   | "terms_not_ready"
   | "document_required"
-  | "proposal_version_mismatch";
+  | "proposal_version_mismatch"
+  | "offer_not_ready"
+  | "offer_mismatch"
+  | "offer_change_pending";
 
 const REPORTABLE_ASSIGNMENT_STATUSES = [
   "claimed",
@@ -99,6 +108,7 @@ export async function reportContract(
   actor: Actor,
   input: {
     assignmentId: string;
+    salesOfferId?: string | null;
     productTermsId?: string | null;
     proposalVersionId?: string | null;
     documentRef?: string | null;
@@ -112,7 +122,13 @@ export async function reportContract(
 
   try {
     return await db.transaction(async (tx) => {
-      const [a] = await tx.select().from(assignments).where(eq(assignments.id, input.assignmentId)).for("update");
+      const companyId = await lockAssignmentCompany(tx, input.assignmentId);
+      if (!companyId) return err("assignment_not_found");
+      const [a] = await tx
+        .select()
+        .from(assignments)
+        .where(and(eq(assignments.id, input.assignmentId), eq(assignments.companyId, companyId)))
+        .for("update");
       if (!a) return err("assignment_not_found");
       // 権限：契約の report。所有者は読んだ担当の営業ユーザー
       const auth = authorizeUser(actor, "report", { type: "contract", ownerUserId: a.userId });
@@ -128,6 +144,33 @@ export async function reportContract(
       if (open) return err("already_reported");
       if (!(REPORTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status)) return err("invalid_state");
 
+      // 有効な担当は企業ごとに一件。担当ロックと契約の確認で重複報告を防ぐ。
+      // The parent was locked before the assignment, matching suppression and FK writes.
+      if (await findSalesContract(tx, a.companyId))
+        return err("company_contracted", "この企業には確認中または完了した契約があります");
+      const bound = await getSalesOffer(tx, a.companyId, a.salesOfferId);
+      if (a.salesOfferId && !bound)
+        return err("offer_not_ready", "引き継ぎ条件を確認できません。運営に相談してください");
+      if (input.salesOfferId && input.salesOfferId.toLowerCase() !== bound?.offer.id)
+        return err("offer_mismatch", "引き継ぎ条件が更新されています。画面を開き直して確認してください");
+      if (bound) {
+        if (!a.salesOfferId && !input.salesOfferId)
+          return err("offer_mismatch", "運営が確認した引き継ぎ条件を画面で確認してください");
+        if (
+          (input.productTermsId && input.productTermsId.toLowerCase() !== bound.terms.id) ||
+          (input.proposalVersionId && input.proposalVersionId.toLowerCase() !== bound.proposal.id)
+        )
+          return err("offer_mismatch", "担当案件の提案版・販売条件と一致しません");
+      }
+      const [pendingChange] = await tx
+        .select({ id: salesOfferChanges.id })
+        .from(salesOfferChanges)
+        .where(and(eq(salesOfferChanges.assignmentId, a.id), eq(salesOfferChanges.status, "pending")));
+      if (pendingChange)
+        return err(
+          "offer_change_pending",
+          "販売条件の変更が確認待ちです。変更内容に回答してから成約を報告してください",
+        );
       const now = clock.now();
       const [contract] = await tx
         .insert(contracts)
@@ -136,8 +179,9 @@ export async function reportContract(
           assignmentId: a.id,
           salesUserId: actor.userId,
           status: "reported",
-          productTermsId: input.productTermsId ?? null,
-          proposalVersionId: input.proposalVersionId ?? null,
+          salesOfferId: bound?.offer.id ?? null,
+          productTermsId: bound?.terms.id ?? input.productTermsId ?? null,
+          proposalVersionId: bound?.proposal.id ?? input.proposalVersionId ?? null,
           documentRef: input.documentRef?.trim() || null,
           reportNote: input.reportNote?.trim() || null,
           reportedAt: now,
@@ -146,7 +190,7 @@ export async function reportContract(
         .returning();
       const [assignmentAfter] = await tx
         .update(assignments)
-        .set({ status: "contract_pending", lastActivityAt: now })
+        .set({ status: "contract_pending", lastActivityAt: now, salesOfferId: bound?.offer.id ?? a.salesOfferId })
         .where(eq(assignments.id, a.id))
         .returning();
 
@@ -205,6 +249,12 @@ export async function startContractReview(
   });
 }
 
+async function ensureDelivery(db: DbOrTx, clock: Clock, actor: Actor, contractId: string) {
+  const result = await createDeliveryForContract(db, clock, actor, contractId);
+  // 契約・報酬だけを確定して納品準備を取り残さない。失敗時は外側の取引ごと巻き戻す。
+  if (!result.ok) throw new Error(`contract delivery handoff failed: ${result.error}`);
+}
+
 export interface ConfirmContractResult {
   contract: Contract;
   reward: Reward;
@@ -251,18 +301,50 @@ export async function confirmContract(
       const [existing] = await tx.select().from(rewards).where(eq(rewards.contractId, contract.id));
       // 完了済みなのに報酬がない状態は、この関数を通っていれば起こらない
       if (!existing) throw new Error(`completed contract ${contract.id} has no reward`);
+      await ensureDelivery(tx, clock, actor, contract.id);
       return ok({ contract, reward: existing, alreadyCompleted: true });
     }
     if (!(OPEN_CONTRACT_STATUSES as readonly string[]).includes(contract.status)) return err("invalid_state");
 
+    // 有効担当の企業単位の一意制約と担当ロックで確定を直列化する。
+    // 確認中の契約も新規営業を止めるので、企業行を追加ロックする必要はない。
+    // 終了済み担当の古い報告を確定しない。
+    const [assignmentBefore] = await tx
+      .select()
+      .from(assignments)
+      .where(eq(assignments.id, contract.assignmentId))
+      .for("update");
+    if (
+      !assignmentBefore ||
+      assignmentBefore.companyId !== contract.companyId ||
+      assignmentBefore.userId !== contract.salesUserId ||
+      !(REPORTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(assignmentBefore.status)
+    )
+      return err("invalid_state", "報告時の担当が終了または変更されています。成約報告を差し戻して確認してください");
+    if (await findSalesContract(tx, contract.companyId, { exceptId: contract.id, completedOnly: true }))
+      return err("company_contracted", "この企業はすでに契約完了しています。重複した報告を確認してください");
+
     const documentRef = input.documentRef?.trim() || contract.documentRef;
     if (!documentRef) return err("document_required", "契約資料を登録してから確認してください");
 
-    const termsId = input.productTermsId ?? contract.productTermsId;
+    const bound = contract.salesOfferId ? await getSalesOffer(tx, contract.companyId, contract.salesOfferId) : null;
+    if (contract.salesOfferId && !bound) return err("offer_not_ready", "契約の引き継ぎ条件を確認できません");
+    if (
+      bound &&
+      (contract.productTermsId !== bound.terms.id ||
+        contract.proposalVersionId !== bound.proposal.id ||
+        (input.productTermsId && input.productTermsId.toLowerCase() !== bound.terms.id) ||
+        (input.proposalVersionId && input.proposalVersionId.toLowerCase() !== bound.proposal.id))
+    )
+      return err(
+        "offer_mismatch",
+        "報告済みの販売条件・提案版は変更できません。条件変更が必要な場合は理由を添えて差し戻してください",
+      );
+    const termsId = bound?.terms.id ?? input.productTermsId ?? contract.productTermsId;
     if (!termsId) return err("terms_not_found");
-    const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, termsId));
+    const [terms] = await tx.select().from(productTerms).where(eq(productTerms.id, termsId)).for("share");
     if (!terms) return err("terms_not_found");
-    const issues = termsReadinessIssues(terms);
+    const issues = termsReadinessIssues(bound ? { ...terms, active: true } : terms);
     if (issues.length > 0) return err("terms_not_ready", issues.join(","));
     const rule = parseRewardRule(terms.rewardRule);
     if (!rule.ok) return err("terms_not_ready", rule.error);
@@ -337,7 +419,10 @@ export async function confirmContract(
       // 行ロックがあるため通常は起こらない。起きた場合は先に完了した側の報酬を返す
       const [c] = await tx.select().from(contracts).where(eq(contracts.id, contract.id));
       const [r] = await tx.select().from(rewards).where(eq(rewards.contractId, contract.id));
-      if (c?.status === "completed" && r) return ok({ contract: c, reward: r, alreadyCompleted: true });
+      if (c?.status === "completed" && r) {
+        await ensureDelivery(tx, clock, actor, contract.id);
+        return ok({ contract: c, reward: r, alreadyCompleted: true });
+      }
       return err("invalid_state");
     }
 
@@ -355,7 +440,6 @@ export async function confirmContract(
       .returning();
     const reward = inserted ?? (await tx.select().from(rewards).where(eq(rewards.contractId, contract.id)))[0]!;
 
-    const [assignmentBefore] = await tx.select().from(assignments).where(eq(assignments.id, contract.assignmentId));
     if (assignmentBefore && assignmentBefore.status !== "completed") {
       await tx
         .update(assignments)
@@ -388,6 +472,7 @@ export async function confirmContract(
         after: reward,
       });
     }
+    await ensureDelivery(tx, clock, actor, contract.id);
     return ok({ contract: completed, reward, alreadyCompleted: !inserted });
   });
 }

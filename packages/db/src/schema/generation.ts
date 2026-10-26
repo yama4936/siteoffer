@@ -33,6 +33,8 @@ export const generationJobs = pgTable(
     companyId: uuid("company_id").references(() => companies.id),
     purpose: generationPurpose("purpose").notNull(),
     status: generationJobStatus("status").notNull().default("queued"),
+    /** 実行者が更新する生存期限。成功済み・失敗済みはnull。 */
+    leaseUntil: ts("lease_until"),
     attempts: integer("attempts").notNull().default(0),
     /** codex / mock など */
     generator: text("generator").notNull(),
@@ -55,5 +57,8 @@ export const generationJobs = pgTable(
     finishedAt: ts("finished_at"),
     createdAt: createdAt(),
   },
-  (t) => [index("generation_jobs_company").on(t.companyId, t.purpose)],
+  (t) => [
+    index("generation_jobs_company").on(t.companyId, t.purpose),
+    index("generation_jobs_lease").on(t.status, t.leaseUntil),
+  ],
 );

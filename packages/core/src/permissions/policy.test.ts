@@ -120,6 +120,9 @@ describe("権限の表（AC-17）", () => {
     expect(check(null, action, resource)).toBe(false);
   });
 
+  it.each(table)("顧客アカウント：%s（%s）は拒否", (_label, action, resource) => {
+    expect(check({ kind: "customer_user", userId: SALES_A }, action, resource)).toBe(false);
+  });
   it.each(table)("顧客（提案リンク）：%s（%s）は拒否", (_label, action, resource) => {
     expect(check(customer, action, resource)).toBe(false);
   });

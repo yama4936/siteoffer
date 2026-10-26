@@ -20,7 +20,7 @@ export class NoopSandboxRunner implements SandboxRunner {
   async run(spec: SandboxRunSpec): Promise<SandboxRunOutcome> {
     this.calls.push(spec);
     const r = this.responses[Math.min(this.calls.length - 1, this.responses.length - 1)]!;
-    if ("fail" in r) return { ok: false, error: r.fail, message: r.message ?? r.fail, result: null };
+    if ("fail" in r) return { ok: false, error: r.fail, message: r.message ?? r.fail, result: null, stopped: true };
     const result: SandboxResult = {
       ok: true,
       threadId: null,
@@ -32,7 +32,8 @@ export class NoopSandboxRunner implements SandboxRunner {
       error: null,
       ...r,
     };
-    if (!result.ok) return { ok: false, error: "sandbox_error", message: result.error ?? "失敗", result };
-    return { ok: true, result };
+    if (!result.ok)
+      return { ok: false, error: "sandbox_error", message: result.error ?? "失敗", result, stopped: true };
+    return { ok: true, result, stopped: true };
   }
 }

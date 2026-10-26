@@ -6,12 +6,14 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { cn } from "@/lib/utils";
 
 export function SectionCard({
+  id,
   title,
   description,
   actions,
   className,
   children,
 }: {
+  id?: string;
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
@@ -19,7 +21,7 @@ export function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <Card className={cn("mb-6", className)}>
+    <Card id={id} className={cn("mb-6 scroll-mt-5", className)}>
       <CardHeader>
         <CardTitle>
           <h2 className="font-semibold text-lg tracking-tight">{title}</h2>

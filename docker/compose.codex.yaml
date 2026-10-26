@@ -3,7 +3,7 @@
 #   docker compose -f compose.yaml -f docker/compose.codex.yaml up -d
 #
 # 重ねたときの相対パスは、最初のファイル（リポジトリ直下の compose.yaml）の場所が基準になる。
-# 状態：用意のみ。この開発環境にはDockerがなく、未起動・未検証。
+# compose一式の稼働は別途確認が必要。出口プロキシの隔離検証はdocs/DECISIONS.mdを参照。
 #
 # 注意（docker/README.md に詳しく書く）：
 # - ChatGPTログインでワーカーから Codex を自動実行する使い方は、ローカルの試験に限る（利用条件は未確認。24.3）。
@@ -24,8 +24,9 @@ services:
       # 生成用イメージ（docker/codex-sandbox/Dockerfile を事前にビルドしておく）
       SITEOFFER_CODEX_IMAGE: ${SITEOFFER_CODEX_IMAGE:-siteoffer-codex-sandbox:local}
       # 生成用コンテナのネットワーク名。既定は送信先を絞らない試験用ネットワーク（下の codex-open）。
-      # 出口プロキシ経由（siteoffer-codex-egress）は、HTTPS_PROXY を Codex CLI へ渡す変更が入るまで使えない
+      # 出口プロキシを使う場合はsiteoffer-codex-egressとhttp://siteoffer-codex-proxy:3128を両方設定する。
       SITEOFFER_CODEX_NETWORK: ${SITEOFFER_CODEX_NETWORK:-siteoffer-codex-open}
+      SITEOFFER_CODEX_HTTPS_PROXY: ${SITEOFFER_CODEX_HTTPS_PROXY:-}
       # ホスト側の auth.json の絶対パス。Docker デーモンがホスト上で解決して読み取り専用でマウントする。
       # ワーカーのコンテナ自体には認証ファイルをマウントしない
       SITEOFFER_CODEX_AUTH_FILE: ${SITEOFFER_CODEX_AUTH_FILE:?.env に SITEOFFER_CODEX_AUTH_FILE（ホスト上の auth.json の絶対パス）を設定}
@@ -40,16 +41,30 @@ services:
     group_add:
       - ${DOCKER_GID:?.env に DOCKER_GID（ホストの docker.sock のグループID）を設定}
 
-  # 出口プロキシ（案・未検証）。許可リストのドメインへの HTTPS だけを中継する
+  # 明示起動する出口プロキシ。実OpenAI接続と許可リストの妥当性は別途確認する。
   egress-proxy:
+    profiles: [codex-proxy]
     build:
       context: .
       dockerfile: docker/egress-proxy/Dockerfile
     image: siteoffer-egress-proxy:local
+    environment:
+      SITEOFFER_EGRESS_CLIENT_CIDR: ${SITEOFFER_CODEX_PROXY_SUBNET:-172.30.240.0/24}
     networks:
       codex-egress:
-        ipv4_address: 172.30.240.2
+        aliases: [siteoffer-codex-proxy]
       default: {}
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,uid=13,gid=13,mode=0700
+      - /var/spool/squid:rw,noexec,nosuid,size=16m,uid=13,gid=13,mode=0700
+      - /var/log/squid:rw,noexec,nosuid,size=16m,uid=13,gid=13,mode=0700
     restart: unless-stopped
 
 # 送信先を絞らない試験用ネットワーク siteoffer-codex-open は、どのサービスも使わないため compose では作られない。
@@ -63,4 +78,4 @@ networks:
     internal: true
     ipam:
       config:
-        - subnet: 172.30.240.0/24
+        - subnet: ${SITEOFFER_CODEX_PROXY_SUBNET:-172.30.240.0/24}

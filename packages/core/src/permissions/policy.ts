@@ -36,7 +36,7 @@ export interface ResourceMap {
   /** 操作履歴 */
   auditLog: Record<never, never>;
   /** ユーザー（営業・運営） */
-  user: { userId: string; role: "sales" | "ops" };
+  user: { userId: string; role: "sales" | "ops" | "customer" };
   /**
    * 共有リンク（11章）。purpose は proposal（提案デモ）か delivery（制作版の顧客確認）。
    * assignedUserId は対象企業の有効な担当の営業ユーザー、createdBy はリンクの発行者（発行前は null）。
@@ -138,10 +138,10 @@ const salesPolicies: { [K in ResourceType]: SalesPolicy<K> } = {
   delivery: () => false,
 };
 
-/** 運営にも許さない操作。利用停止の対象は営業ユーザーだけ（運営アカウントは seed・管理手順で扱う） */
+/** 運営にも許さない操作。利用停止の対象は営業・顧客ユーザー（運営アカウントは seed・管理手順で扱う） */
 function opsRule(actor: Extract<Actor, { kind: "ops" }>, action: string, resource: Resource): boolean {
   if (resource.type === "user" && (action === "suspend" || action === "reactivate")) {
-    return resource.role === "sales" && resource.userId !== actor.userId;
+    return (resource.role === "sales" || resource.role === "customer") && resource.userId !== actor.userId;
   }
   return true;
 }
@@ -162,6 +162,7 @@ export function can<K extends ResourceType>(
       return opsRule(actor, action, resource as Resource);
     case "system":
       return true;
+    case "customer_user":
     case "customer":
       return false;
     case "sales": {

@@ -1,5 +1,7 @@
 import type { z } from "zod";
+import { referenceVisualValid, requiresReferenceVisual } from "./design-reference.ts";
 import { checkFacts } from "./facts.ts";
+import { type GenerationFeedback, validationFeedback } from "./feedback.ts";
 import type { GenerationInput, GenerationPurpose } from "./schemas.ts";
 import type { GeneratorErrorCode } from "./types.ts";
 
@@ -9,6 +11,7 @@ export type ValidationResult<T> =
       ok: false;
       error: Extract<GeneratorErrorCode, "empty_response" | "invalid_json" | "schema_violation" | "fact_violation">;
       message: string;
+      feedback: GenerationFeedback;
     };
 
 /** 生成の生の応答（JSON文字列）を、JSON解析→Zod検証→事実検査の順に通す */
@@ -18,12 +21,18 @@ export function validateRawOutput<T>(
   schema: z.ZodType<T>,
   raw: string | null,
 ): ValidationResult<T> {
-  if (raw === null || raw.trim() === "") return { ok: false, error: "empty_response", message: "応答が空" };
+  if (raw === null || raw.trim() === "")
+    return { ok: false, error: "empty_response", message: "応答が空", feedback: validationFeedback("empty_response") };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
-    return { ok: false, error: "invalid_json", message: `JSONとして解析できない: ${(e as Error).message}` };
+    return {
+      ok: false,
+      error: "invalid_json",
+      message: `JSONとして解析できない: ${(e as Error).message}`,
+      feedback: validationFeedback("invalid_json"),
+    };
   }
   return validateOutput(purpose, input, schema, parsed);
 }
@@ -40,15 +49,27 @@ export function validateOutput<T>(
       .slice(0, 10)
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
       .join("; ");
-    return { ok: false, error: "schema_violation", message: issues };
+    return { ok: false, error: "schema_violation", message: issues, feedback: validationFeedback("schema_violation") };
   }
+  if (requiresReferenceVisual(purpose, input) && !referenceVisualValid(parsed.data, input))
+    return {
+      ok: false,
+      error: "schema_violation",
+      message: "承認画像に基づく書体・配色・余白・構成が未指定、または参照画像の配色候補と一致しません",
+      feedback: validationFeedback("schema_violation", [{ kind: "reference_visual", path: "theme.visual" }]),
+    };
   const violations = checkFacts(purpose, input, parsed.data);
   if (violations.length > 0) {
     const msg = violations
       .slice(0, 10)
       .map((v) => `${v.path}: ${v.detail}`)
       .join("; ");
-    return { ok: false, error: "fact_violation", message: msg };
+    return {
+      ok: false,
+      error: "fact_violation",
+      message: msg,
+      feedback: validationFeedback("fact_violation", violations),
+    };
   }
   return { ok: true, output: parsed.data };
 }

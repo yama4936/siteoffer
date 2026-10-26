@@ -17,7 +17,8 @@ export default async function LogoutPage() {
           <h1>ログアウト</h1>
         </CardTitle>
         <CardDescription>
-          {user.displayName} さん（{user.role === "ops" ? "運営" : "営業"}）としてログイン中です。
+          {user.displayName} さん（{user.role === "ops" ? "運営" : user.role === "customer" ? "顧客" : "営業"}
+          ）としてログイン中です。
         </CardDescription>
       </CardHeader>
       <CardContent>

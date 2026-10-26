@@ -453,3 +453,126 @@ html[data-style="bold"] .card {
   border: 2px solid #1a1a1a;
   border-top: 8px solid var(--accent);
 }
+
+/* Explicit reference-image design axes override the general-purpose industry preset. */
+html[data-visual-profile="specified"] body {
+  background: var(--visual-background);
+  color: var(--visual-text);
+  font-family: var(--visual-body-font);
+}
+html[data-visual-profile="specified"] :is(h1, h2, h3, .logo) {
+  font-family: var(--visual-heading-font);
+}
+html[data-visual-profile="specified"] :is(.hero h1, .section-title) {
+  font-weight: 500;
+  letter-spacing: 0.025em;
+}
+html[data-visual-profile="specified"] .hero h1 {
+  font-size: var(--visual-heading-size);
+  line-height: 1.35;
+}
+html[data-visual-profile="specified"] .container {
+  max-width: var(--visual-width);
+}
+html[data-visual-profile="specified"] .site-header {
+  background: var(--visual-header);
+  color: var(--visual-header-text);
+  box-shadow: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--visual-header-text) 14%, transparent);
+}
+html[data-visual-profile="specified"]:not([data-hero-layout="statement"]) .hero {
+  background: var(--visual-background);
+  padding: var(--visual-hero-space) 0;
+}
+html[data-visual-profile="specified"] .hero-inner {
+  gap: var(--visual-gap);
+}
+html[data-visual-profile="specified"] :is(.hero-img, .card-img, .card, .contact-box, .btn) {
+  border-radius: var(--visual-radius);
+  box-shadow: none;
+}
+html[data-visual-profile="specified"] .hero-img {
+  width: 100%;
+  aspect-ratio: var(--visual-image-ratio);
+  height: 100%;
+  object-fit: cover;
+}
+html[data-visual-profile="specified"] .hero-company {
+  color: inherit;
+}
+html[data-visual-profile="specified"] .btn-primary {
+  background: var(--visual-button);
+  color: var(--visual-button-text);
+  border-color: var(--visual-button);
+}
+html[data-visual-profile="specified"] .btn-secondary {
+  background: var(--visual-surface);
+  color: var(--visual-text);
+  border-color: var(--visual-button);
+}
+html[data-visual-profile="specified"] .section {
+  padding-block: var(--visual-section-space);
+  background: transparent;
+}
+html[data-visual-profile="specified"][data-section-rhythm="alternating"] .section:nth-of-type(even) {
+  background: var(--visual-surface);
+}
+html[data-visual-profile="specified"] .section-title {
+  padding-left: 0;
+  border-left: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--visual-text) 20%, transparent);
+}
+html[data-visual-profile="specified"] :is(.card, .contact-box) {
+  background: var(--visual-surface);
+}
+html[data-visual-profile="specified"] .card-meta {
+  color: inherit;
+}
+html[data-visual-profile="specified"][data-service-layout="list"] .section-services .cards {
+  display: block;
+}
+html[data-visual-profile="specified"][data-service-layout="list"] .section-services .card {
+  padding: 24px 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--visual-text) 20%, transparent);
+  background: transparent;
+}
+@media (min-width: 768px) {
+  html[data-visual-profile="specified"][data-hero-layout="split"] .hero-inner:has(.hero-media) {
+    grid-template-columns: var(--visual-hero-columns);
+  }
+  html[data-visual-profile="specified"][data-hero-layout="split"][data-hero-frame="edge-to-edge"] .hero {
+    padding: 0;
+  }
+  html[data-visual-profile="specified"][data-hero-layout="split"][data-hero-frame="edge-to-edge"] .hero-inner {
+    max-width: none;
+    padding: 0;
+    gap: 0;
+    align-items: stretch;
+  }
+  html[data-visual-profile="specified"][data-hero-layout="split"][data-hero-frame="edge-to-edge"] .hero-text {
+    align-self: center;
+    padding: var(--visual-hero-space) clamp(24px, 6vw, 96px);
+  }
+  html[data-visual-profile="specified"][data-hero-layout="split"][data-hero-frame="edge-to-edge"] .hero-img {
+    border-radius: 0;
+  }
+}
+@media (max-width: 767px) {
+  html[data-visual-profile="specified"] .hero h1 {
+    font-size: clamp(1.9rem, 7.5vw, 2.6rem);
+  }
+  html[data-visual-profile="specified"] :is(.hero, .section) {
+    padding-block: min(var(--visual-section-space), 48px);
+  }
+  html[data-visual-profile="specified"] .hero-img {
+    height: auto;
+    aspect-ratio: 8 / 5;
+  }
+  html[data-visual-profile="specified"][data-mobile-hero-order="image-first"] .hero-inner:has(.hero-media) .hero-media {
+    grid-row: 1;
+  }
+  html[data-visual-profile="specified"][data-mobile-hero-order="image-first"] .hero-inner:has(.hero-media) .hero-text {
+    grid-row: 2;
+  }
+}

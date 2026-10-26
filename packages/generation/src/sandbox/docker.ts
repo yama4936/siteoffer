@@ -1,6 +1,11 @@
-import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
+import { runIsolatedContainer } from "./docker-process.ts";
+import { CODEX_PROXY_ENV, codexProxyUrl, isInternalProxyNetwork } from "./environment.ts";
+import { recoverDockerExecution } from "./stop-recovery.ts";
 import {
   SANDBOX_REQUEST_FILE,
   SANDBOX_RESULT_FILE,
@@ -9,6 +14,7 @@ import {
   type SandboxRunner,
   type SandboxRunOutcome,
   type SandboxRunSpec,
+  type SandboxStopReference,
   sandboxResultSchema,
 } from "./types.ts";
 
@@ -26,6 +32,8 @@ export interface DockerSandboxConfig {
    * 送信先を限定したネットワーク（出口プロキシ付き等）を指定する。host は拒否する。
    */
   network: string;
+  /** Explicit HTTP CONNECT proxy on the selected internal Docker network; no proxy credentials. */
+  httpsProxy?: string;
   cpus: number;
   memoryMb: number;
   pidsLimit: number;
@@ -45,12 +53,7 @@ export const DEFAULT_DOCKER_SANDBOX_CONFIG: Omit<DockerSandboxConfig, "image" | 
   memoryMb: 2048,
   pidsLimit: 256,
   tmpfsMb: 256,
-  entryCommand: [
-    "node",
-    "--import",
-    "/app/node_modules/tsx/dist/loader.mjs",
-    "/app/packages/generation/src/sandbox/container-entry.ts",
-  ],
+  entryCommand: ["node", "/app/packages/generation/src/sandbox/container-entry.ts"],
   user: "1000:1000",
 };
 
@@ -61,6 +64,12 @@ const CONTAINER_CODEX_HOME = `${CONTAINER_HOME}/.codex`;
 const DOCKER_CLIENT_ENV_ALLOWLIST = [
   "PATH",
   "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "TEMP",
+  "TMP",
   "DOCKER_HOST",
   "DOCKER_CONTEXT",
   "DOCKER_CONFIG",
@@ -76,26 +85,40 @@ export function containerName(jobId: string): string {
 /** docker run の引数を組み立てる（純粋関数。テスト対象） */
 export function buildDockerRunArgs(
   config: DockerSandboxConfig,
-  spec: Pick<SandboxRunSpec, "jobId" | "workDir" | "timeoutMs">,
+  spec: Pick<SandboxRunSpec, "jobId" | "workDir" | "timeoutMs"> & { executionId?: string },
 ): string[] {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(spec.jobId)) throw new Error("生成ジョブの識別子が不正です");
   if (config.network === "host") throw new Error("生成コンテナに host ネットワークは使わない");
+  const proxy = codexProxyUrl(config.httpsProxy);
+  if (proxy && !/^[a-z0-9][a-z0-9_.-]{0,127}$/i.test(config.network))
+    throw new Error("生成用プロキシには内部専用のDockerネットワーク名が必要です。");
   if (!/^\d+:\d+$/.test(config.user)) throw new Error("実行ユーザーは数値のUID:GIDで指定する");
   if (!path.isAbsolute(spec.workDir)) throw new Error("作業ディレクトリは絶対パスで指定する");
   if (!path.isAbsolute(config.codexAuthFile)) throw new Error("Codex認証ファイルは絶対パスで指定する");
   for (const p of [spec.workDir, config.codexAuthFile]) {
-    // -v の区切り文字を含むパスは別のマウント指定として解釈されうるため拒否する
-    if (p.includes(":") || p.includes(",")) throw new Error(`マウントに使えないパス: ${p}`);
+    // --mount uses comma-separated options. A Windows drive colon belongs to the source path.
+    const drivePath = /^[a-z]:[\\/][^:]*$/i.test(p);
+    if (
+      (p.includes(":") && !drivePath) ||
+      p.includes(",") ||
+      p.includes('"') ||
+      Array.from(p).some((char) => char.charCodeAt(0) < 32)
+    )
+      throw new Error("マウント先のパスに使えない文字があります");
   }
   const tmpfs = `rw,noexec,nosuid,size=${config.tmpfsMb}m`;
   const [uid, gid] = config.user.split(":");
   return [
     "run",
     "--rm",
+    "--pull",
+    "never",
     "--init",
     "--name",
-    containerName(spec.jobId),
+    containerName(spec.executionId ?? spec.jobId),
     "--label",
     `siteoffer.generation.job=${spec.jobId}`,
+    ...(spec.executionId ? ["--label", `siteoffer.generation.execution=${spec.executionId}`] : []),
     // ネットワーク
     "--network",
     config.network,
@@ -140,6 +163,7 @@ export function buildDockerRunArgs(
     `CODEX_HOME=${CONTAINER_CODEX_HOME}`,
     "--env",
     `SITEOFFER_TIMEOUT_MS=${spec.timeoutMs}`,
+    ...(proxy ? ["--env", `${CODEX_PROXY_ENV}=${proxy}`] : []),
     config.image,
     ...config.entryCommand,
   ];
@@ -153,46 +177,6 @@ export function buildDockerClientEnv(source: NodeJS.ProcessEnv): Record<string, 
     if (v !== undefined) env[k] = v;
   }
   return env;
-}
-
-function runProcess(
-  cmd: string,
-  args: string[],
-  env: Record<string, string>,
-  timeoutMs: number,
-  signal: AbortSignal | undefined,
-  onTimeout: () => void,
-): Promise<{ code: number | null; timedOut: boolean; aborted: boolean; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { env, stdio: ["ignore", "ignore", "pipe"] });
-    let stderr = "";
-    let timedOut = false;
-    let aborted = false;
-    child.stderr?.on("data", (d: Buffer) => {
-      if (stderr.length < 4000) stderr += d.toString("utf8");
-    });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      onTimeout();
-      child.kill("SIGTERM");
-    }, timeoutMs);
-    const onAbort = () => {
-      aborted = true;
-      onTimeout();
-      child.kill("SIGTERM");
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const done = (code: number | null) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ code, timedOut, aborted, stderr });
-    };
-    child.once("error", (e) => {
-      stderr += e.message;
-      done(null);
-    });
-    child.once("close", (code) => done(code));
-  });
 }
 
 export class DockerSandboxRunner implements SandboxRunner {
@@ -209,36 +193,146 @@ export class DockerSandboxRunner implements SandboxRunner {
   }
 
   async run(spec: SandboxRunSpec): Promise<SandboxRunOutcome> {
-    await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify(spec.request));
-    const args = buildDockerRunArgs(this.config, spec);
-    const name = containerName(spec.jobId);
-    const kill = () => {
-      // 時間切れ・中断時はコンテナを確実に止める（docker run の終了だけではコンテナが残りうる）
-      spawn(this.config.dockerPath, ["rm", "--force", name], { env: this.env, stdio: "ignore" }).on("error", () => {});
+    if (spec.signal?.aborted)
+      return { ok: false, error: "aborted", message: "中断された", result: null, stopped: true };
+    const executionId = randomUUID();
+    let stopReference: SandboxStopReference = {
+      executionId,
+      jobId: spec.jobId,
+      containerName: containerName(executionId),
+      host: hostname(),
+      clientPid: null,
+      clientClosed: false,
+      stopped: false,
     };
-    const r = await runProcess(this.config.dockerPath, args, this.env, spec.timeoutMs, spec.signal, kill);
-    const result = await this.readResult(spec.workDir);
-    if (r.timedOut) return { ok: false, error: "timeout", message: `${spec.timeoutMs}msで打ち切った`, result };
-    if (r.aborted) return { ok: false, error: "aborted", message: "中断された", result };
-    if (result === null) {
+    let executing = false;
+    let checkingProxyNetwork = false;
+    try {
+      const args = buildDockerRunArgs(this.config, { ...spec, executionId });
+      if (codexProxyUrl(this.config.httpsProxy)) {
+        checkingProxyNetwork = true;
+        const { execFile } = await import("node:child_process");
+        const { stdout } = await promisify(execFile)(
+          this.config.dockerPath,
+          ["network", "inspect", "--format", "{{json .}}", this.config.network],
+          { env: this.env, timeout: 5000, maxBuffer: 16384, windowsHide: true, signal: spec.signal },
+        );
+        if (!isInternalProxyNetwork(stdout)) throw new Error("生成用プロキシには内部専用のbridgeが必要です。");
+        checkingProxyNetwork = false;
+      }
+      await writeFile(path.join(spec.workDir, SANDBOX_REQUEST_FILE), JSON.stringify({ ...spec.request, executionId }));
+      await spec.saveStopReference?.(stopReference);
+      if (spec.signal?.aborted) {
+        stopReference = { ...stopReference, clientClosed: true, stopped: true };
+        await spec.saveStopReference?.(stopReference);
+        return {
+          ok: false,
+          error: "aborted",
+          message: "開始前に中断しました",
+          result: null,
+          stopped: true,
+          stopReference,
+        };
+      }
+      executing = true;
+      const r = await runIsolatedContainer(
+        this.config.dockerPath,
+        args,
+        stopReference.containerName,
+        this.env,
+        spec.timeoutMs,
+        spec.signal,
+        async (pid) => {
+          stopReference = { ...stopReference, clientPid: pid };
+          await spec.saveStopReference?.(stopReference);
+        },
+      );
+      stopReference = { ...stopReference, clientPid: r.pid, clientClosed: r.closed, stopped: r.stopped };
+      await spec.saveStopReference?.(stopReference);
+      if (!r.stopped)
+        return {
+          ok: false,
+          error: "sandbox_stop_unconfirmed",
+          message: "生成コンテナの停止を確認できません。自動再試行を止め、作業データを保持しました。",
+          result: null,
+          stopped: false,
+          stopReference,
+        };
+      const result = await this.readResult(spec.workDir, executionId);
+      if (r.registrationFailed)
+        return {
+          ok: false,
+          error: "aborted",
+          message: "実行情報を保存できなかったため中断しました",
+          result: null,
+          stopped: true,
+          stopReference,
+        };
+      if (r.timedOut)
+        return {
+          ok: false,
+          error: "timeout",
+          message: `${spec.timeoutMs}msで停止を指示し、終了を確認しました`,
+          result,
+          stopped: true,
+          stopReference,
+        };
+      if (r.aborted)
+        return {
+          ok: false,
+          error: "aborted",
+          message: "中断して終了を確認しました",
+          result,
+          stopped: true,
+          stopReference,
+        };
+      if (result === null) {
+        return {
+          ok: false,
+          error: "sandbox_error",
+          message: `現在の実行と一致する結果ファイルがありません（終了コード ${r.code}）`,
+          result,
+          stopped: true,
+          stopReference,
+        };
+      }
+      if (!result.ok || r.code !== 0)
+        return {
+          ok: false,
+          error: "sandbox_error",
+          message: `隔離生成の実行に失敗しました（終了コード ${r.code}）`,
+          result,
+          stopped: true,
+          stopReference,
+        };
+      return { ok: true, result, stopped: true, stopReference };
+    } catch {
+      if (!executing) stopReference = { ...stopReference, clientClosed: true, stopped: true };
       return {
         ok: false,
-        error: "sandbox_error",
-        message: `結果ファイルがない（終了コード ${r.code}）: ${r.stderr.slice(0, 1000)}`,
-        result,
+        error: executing ? "sandbox_stop_unconfirmed" : "sandbox_error",
+        message: executing
+          ? "生成の終了を確認できません。停止確認が済むまで再試行を停止します。"
+          : checkingProxyNetwork
+            ? "生成用プロキシの内部専用ネットワークを確認できません。管理者はpnpm demo:doctorで設定を確認してください。"
+            : "隔離生成を開始できません。設定と作業場所を確認してください。",
+        result: null,
+        stopped: !executing,
+        stopReference,
       };
     }
-    if (!result.ok)
-      return { ok: false, error: "sandbox_error", message: result.error ?? `終了コード ${r.code}`, result };
-    return { ok: true, result };
   }
 
-  private async readResult(workDir: string): Promise<SandboxResult | null> {
+  recoverStop(reference: SandboxStopReference) {
+    return recoverDockerExecution(this.config.dockerPath, this.env, reference);
+  }
+
+  private async readResult(workDir: string, executionId: string): Promise<SandboxResult | null> {
     try {
       const parsed = sandboxResultSchema.safeParse(
         JSON.parse(await readFile(path.join(workDir, SANDBOX_RESULT_FILE), "utf8")),
       );
-      return parsed.success ? parsed.data : null;
+      return parsed.success && parsed.data.executionId === executionId ? parsed.data : null;
     } catch {
       return null;
     }

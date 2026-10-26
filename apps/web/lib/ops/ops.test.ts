@@ -9,6 +9,7 @@ import {
   imageAssets,
   proposalVersions,
   rewards,
+  workerRuntimes,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
@@ -322,6 +323,9 @@ describe("候補・収集ジョブ", () => {
       ok: false,
       error: "invalid_provider",
     });
+    await db
+      .insert(workerRuntimes)
+      .values({ id: crypto.randomUUID(), mode: "demo", providers: ["fixture"], heartbeatAt: clock.now() });
     const r = await createDiscoveryJobByOps(deps, ops, {
       provider: "fixture",
       criteria: { prefecture: "愛知県", city: "名古屋市", industry: "建設", limit: 10 },

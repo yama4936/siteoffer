@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { type Clock, isShareTokenFormat, systemClock, verifyShareLink } from "@siteoffer/core";
+import { type Clock, isShareTokenFormat, systemClock, verifyDeliveryPreview, verifyShareLink } from "@siteoffer/core";
 import type { DbOrTx } from "@siteoffer/db";
 import { contentTypeFor, resolveArtifactFile } from "./static.ts";
 
@@ -32,6 +32,7 @@ export function securityHeaders(frameAncestors: string[]): Record<string, string
   const csp = [
     "default-src 'none'",
     "script-src 'self'",
+    "worker-src 'none'",
     // テンプレートは CSS を HTML に埋め込む（inlineStylesheets: always）
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
@@ -74,12 +75,12 @@ export function injectDemoNotice(html: string): string {
   return html.slice(0, at) + DEMO_NOTICE_HTML + html.slice(at);
 }
 
-/** `/s/<token>` と、その後ろの生のパス（デコード前）に分ける */
-function splitSharePath(rawUrl: string): { token: string; rest: string | null } | null {
+/** 顧客共有 /s/ と運営専用 /internal/ を分け、後続の生パスを保持する。 */
+function splitSharePath(rawUrl: string): { token: string; rest: string | null; internal: boolean } | null {
   const rawPath = rawUrl.split(/[?#]/, 1)[0] ?? "";
-  const m = /^\/s\/([^/]*)(\/.*)?$/.exec(rawPath);
+  const m = /^\/(s|internal)\/([^/]*)(\/.*)?$/.exec(rawPath);
   if (!m) return null;
-  return { token: m[1] ?? "", rest: m[2] ?? null };
+  return { token: m[2] ?? "", rest: m[3] ?? null, internal: m[1] === "internal" };
 }
 
 type ResolvedOptions = PreviewServerOptions & {
@@ -96,8 +97,16 @@ async function handle(opts: ResolvedOptions, req: IncomingMessage, res: ServerRe
   }
   const parts = splitSharePath(req.url ?? "");
   if (!parts || !isShareTokenFormat(parts.token)) return notFound(res);
+  // 運営画面はHEADで配信成功を確認してから埋め込む。許可済みの管理画面オリジンだけ。
+  if (parts.internal) {
+    res.setHeader("Vary", "Origin");
+    if (req.headers.origin && opts.frameAncestors.includes(req.headers.origin))
+      res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
+  }
 
-  const verified = await verifyShareLink(opts.db, opts.clock, parts.token);
+  const verified = parts.internal
+    ? await verifyDeliveryPreview(opts.db, opts.clock, parts.token)
+    : await verifyShareLink(opts.db, opts.clock, parts.token);
   if (!verified.ok) {
     opts.log(`share link rejected: ${verified.message ?? verified.error}`);
     return notFound(res);
@@ -106,7 +115,7 @@ async function handle(opts: ResolvedOptions, req: IncomingMessage, res: ServerRe
 
   if (parts.rest === null) {
     // 相対リンクが解決できるよう、末尾に / を付ける
-    res.writeHead(308, { Location: `/s/${parts.token}/` });
+    res.writeHead(308, { Location: `/${parts.internal ? "internal" : "s"}/${parts.token}/` });
     res.end();
     return;
   }
@@ -160,7 +169,8 @@ async function handle(opts: ResolvedOptions, req: IncomingMessage, res: ServerRe
 
 /**
  * プレビュー配信のHTTPサーバーを作る（listen はしない）。
- * `/s/<token>/...` でトークンを検証し、対象の版の成果物ディレクトリから静的ファイルだけを返す。
+ * `/s/<token>/...` は顧客共有、`/internal/<token>/...` は運営セッションに結び付く確認用。
+ * 対象の版の成果物ディレクトリから静的ファイルだけを返す。
  * 不明・期限切れ・取り消し済みのトークンは 404（存在を明かさない）。
  */
 export function createPreviewServer(options: PreviewServerOptions): Server {

@@ -19,3 +19,8 @@ next-env.d.ts
 
 # subagentの作業用worktree
 .claude/worktrees/
+
+# Isolated production verification build
+.next-quality/
+.next-backup-build/
+.next-backup-qa/

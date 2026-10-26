@@ -10,9 +10,10 @@ export type SiteBuildOutcome =
 
 /** デモ・納品サイトのビルドと検査。テストではビルドを差し替えられる（Astroのビルドは時間とメモリを使う） */
 export interface SiteBuilder {
-  buildDemo(input: { siteInput: SiteInputRaw; workDir: string }): Promise<SiteBuildOutcome>;
+  readonly kind?: "local" | "docker";
+  buildDemo(input: { siteInput: SiteInputRaw; workDir: string; signal?: AbortSignal }): Promise<SiteBuildOutcome>;
   /** 納品サイト（mode=delivery：要確認マーカーが残っていればビルドしない）。公開はしない */
-  buildDelivery(input: { siteInput: SiteInputRaw; workDir: string }): Promise<SiteBuildOutcome>;
+  buildDelivery(input: { siteInput: SiteInputRaw; workDir: string; signal?: AbortSignal }): Promise<SiteBuildOutcome>;
 }
 
 export function summarizeCheck(report: CheckReport): DemoCheckSummary {
@@ -75,6 +76,7 @@ export function createAstroSiteBuilder(options: { timeoutMs?: number; mobileChec
     return { ok: true, distDir: built.outDir, check };
   }
   return {
+    kind: "local",
     buildDemo: (input) => build("demo", input),
     buildDelivery: (input) => build("delivery", input),
   };

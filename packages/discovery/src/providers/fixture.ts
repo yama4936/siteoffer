@@ -23,7 +23,11 @@ export interface FixtureCompany {
 const DEFAULT_FIXTURE = new URL("../../../../fixtures/discovery/companies.json", import.meta.url);
 
 export function loadFixtureCompanies(path: URL | string = DEFAULT_FIXTURE): FixtureCompany[] {
-  const json = JSON.parse(readFileSync(path, "utf8")) as { companies: FixtureCompany[] };
+  const json = JSON.parse(
+    path === DEFAULT_FIXTURE
+      ? readFileSync(DEFAULT_FIXTURE, "utf8")
+      : readFileSync(/* turbopackIgnore: true */ path, "utf8"),
+  ) as { companies: FixtureCompany[] };
   return json.companies;
 }
 

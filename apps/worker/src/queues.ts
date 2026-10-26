@@ -15,6 +15,10 @@ export const QUEUES = {
   expireAssignments: "maintenance.expire-assignments",
   /** 定期：実行中のまま残った収集ジョブを失敗に戻す */
   recoverDiscovery: "maintenance.recover-stale-discovery",
+  /** 定期：稼働通知が途切れた生成ジョブの履歴を閉じる */
+  recoverGeneration: "maintenance.recover-stale-generation",
+  dispatchHandoffs: "maintenance.dispatch-proposal-handoffs",
+  recoverPipeline: "maintenance.recover-pipeline",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -28,7 +32,7 @@ export const auditPayloadSchema = z.strictObject({
   companyId: z.uuid(),
   /**
    * 同じ企業の診断を区別するキー。同じ値の二重投入は1回しか実行しない。
-   * 収集から送るときは収集ジョブID、再診断は新しい値（運営の操作ID等）にする。
+   * 自動収集は対象サイトIDとURLのハッシュで共有する。明示的な再診断は新しい値（運営の操作ID等）にする。
    */
   requestKey: z.string().min(1).max(200),
 });
@@ -37,6 +41,7 @@ export type AuditPayload = z.infer<typeof auditPayloadSchema>;
 export const proposalPayloadSchema = z.strictObject({
   companyId: z.uuid(),
   auditId: z.uuid(),
+  designVersionId: z.uuid().optional(),
   /** 再生成の識別。省略時は初回（initial）。再生成は新しい値で送り、新しい版として保存する */
   revision: z.string().min(1).max(200).default("initial"),
 });
@@ -49,7 +54,8 @@ export const emptyPayloadSchema = z.object({}).passthrough();
 export const stepKeys = {
   discovery: (p: DiscoveryPayload) => `discovery:${p.discoveryJobId}`,
   audit: (p: AuditPayload) => `audit:${p.companyId}:${p.requestKey}`,
-  proposal: (p: ProposalPayload) => `proposal:${p.companyId}:${p.auditId}:${p.revision}`,
+  proposal: (p: ProposalPayload) =>
+    `proposal:${p.companyId}:${p.auditId}:${p.revision}${p.designVersionId ? `:${p.designVersionId}` : ""}`,
 };
 
 export interface StepPolicy {
@@ -75,4 +81,7 @@ export const DEFAULT_POLICIES: Record<StepKind, StepPolicy> = {
 export const DEFAULT_SCHEDULES = {
   expireAssignments: "*/10 * * * *",
   recoverDiscovery: "*/15 * * * *",
+  recoverGeneration: "* * * * *",
+  dispatchHandoffs: "* * * * *",
+  recoverPipeline: "* * * * *",
 } as const;

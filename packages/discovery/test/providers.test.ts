@@ -170,3 +170,20 @@ describe("NtaCorporateNumberProvider", () => {
     expect(parseNtaXml("not xml")).toMatchObject({ ok: false, error: "nta_unexpected_response" });
   });
 });
+
+it("NTA transport timeout and remote errors never expose the application ID", async () => {
+  for (const fetch of [
+    async () => {
+      throw new Error(`failed https://example.test/?id=${env.NTA_APPLICATION_ID}`);
+    },
+    async () => ({ status: 400, text: async () => env.NTA_APPLICATION_ID }),
+    async () => ({ status: 200, text: async () => new Promise<string>(() => {}) }),
+  ] as FetchLike[]) {
+    const r = await new NtaCorporateNumberProvider({ env, fetch, requestTimeoutMs: 20 }).discover(
+      { prefecture: "愛知県" },
+      ctx,
+    );
+    expect(r.ok).toBe(false);
+    expect(JSON.stringify(r)).not.toContain(env.NTA_APPLICATION_ID);
+  }
+});

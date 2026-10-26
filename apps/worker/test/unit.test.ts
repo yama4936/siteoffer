@@ -18,6 +18,7 @@ describe("設定", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.generator).toEqual({ kind: "mock" });
+    expect(r.value.siteBuild).toEqual({ kind: "local" });
     expect(r.value.discoveryProviders).toEqual(["fixture"]);
     expect(r.value.auditCollector.kind).toBe("fixture");
     expect(r.value.databaseUrl).toBeNull();
@@ -38,6 +39,7 @@ describe("設定", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.generator).toMatchObject({ kind: "codex", model: null });
+    expect(r.value.siteBuild).toMatchObject({ kind: "docker", image: "siteoffer-site:local" });
     // 生成器を作るだけで、Codex・Dockerは呼ばない
     expect(createGenerator(r.value.generator, {}).kind).toBe("codex");
     // ログ用の要約に認証ファイルのパスや接続文字列を出さない
@@ -50,18 +52,42 @@ describe("設定", () => {
     expect(r.ok && r.value.discoveryProviders).toEqual(["fixture", "nta"]);
     expect(resolveWorkerConfig({ SITEOFFER_DISCOVERY_PROVIDERS: "google" })).toMatchObject({ ok: false });
   });
+  it("実Codexをホストビルドへ戻さず、イメージ・時間の不正な設定を拒否する", () => {
+    const env = {
+      SITEOFFER_GENERATOR: "codex",
+      SITEOFFER_CODEX_IMAGE: "test",
+      SITEOFFER_CODEX_NETWORK: "bridge",
+      SITEOFFER_CODEX_AUTH_FILE: "/secure/auth.json",
+    };
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILDER: "local" })).toMatchObject({
+      ok: false,
+      error: "invalid_config",
+    });
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_IMAGE: "--privileged" }).ok).toBe(false);
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_TIMEOUT_MS: "Infinity" }).ok).toBe(false);
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_TIMEOUT_MS: "0" }).ok).toBe(false);
+    expect(resolveWorkerConfig({ ...env, SITEOFFER_SITE_BUILD_USER: "0:0" }).ok).toBe(false);
+  });
 });
 
 describe("pg-boss への登録（pg-boss の代わりの記録用オブジェクト）", () => {
   function fakeBoss() {
     const queues: Record<string, unknown> = {};
-    const handlers: Record<string, (jobs: { data: unknown }[]) => Promise<unknown>> = {};
+    const handlers: Record<
+      string,
+      (jobs: { data: unknown; id?: string; retryCount?: number; signal?: AbortSignal }[]) => Promise<unknown>
+    > = {};
+    const workOptions: Record<string, unknown> = {};
     const schedules: Record<string, string> = {};
     const boss = {
+      async updateQueue(name: string, options: object) {
+        queues[name] = { ...(queues[name] as object), ...options };
+      },
       async createQueue(name: string, options?: unknown) {
         queues[name] = options;
       },
       async work(name: string, a: unknown, b?: unknown) {
+        workOptions[name] = typeof a === "function" ? {} : a;
         handlers[name] = (typeof a === "function" ? a : b) as (typeof handlers)[string];
         return name;
       },
@@ -72,13 +98,39 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
         return null;
       },
     } as unknown as BossLike;
-    return { boss, queues, handlers, schedules };
+    return { boss, queues, handlers, schedules, workOptions };
   }
+
+  it("収集専用モードは診断・制作のキューを購読しない", async () => {
+    const f = fakeBoss();
+    await registerQueues(
+      f.boss,
+      { run: async () => ({ status: "invalid_payload", reason: "unused" }) },
+      {
+        policies: DEFAULT_POLICIES,
+        schedules: { ...DEFAULT_SCHEDULES },
+        concurrency: { discovery: 1, audit: 1, proposal: 1 },
+        discoveryOnly: true,
+      },
+      silentLogger,
+    );
+    expect(f.handlers[QUEUES.discovery]).toBeDefined();
+    expect(f.handlers[QUEUES.audit]).toBeUndefined();
+    expect(f.handlers[QUEUES.proposal]).toBeUndefined();
+    expect(f.handlers[QUEUES.dispatchHandoffs]).toBeUndefined();
+    expect(f.handlers[QUEUES.recoverPipeline]).toBeUndefined();
+  });
 
   it("処理のキューは exclusive・再試行上限・制限時間付きで作り、retry の結果は例外にして再試行させる", async () => {
     const f = fakeBoss();
     let next: RunOutcome = { status: "retry", key: "k", attempt: 1, reason: "一時的な失敗" };
-    const runtime: WorkerRuntime = { run: async () => next };
+    const calls: Parameters<WorkerRuntime["run"]>[] = [];
+    const runtime: WorkerRuntime = {
+      run: async (...args) => {
+        calls.push(args);
+        return next;
+      },
+    };
     await registerQueues(
       f.boss,
       runtime,
@@ -91,15 +143,32 @@ describe("pg-boss への登録（pg-boss の代わりの記録用オブジェク
     );
     expect(f.queues[QUEUES.proposal]).toMatchObject({
       policy: "exclusive",
+      heartbeatSeconds: 120,
       retryLimit: DEFAULT_POLICIES.proposal.maxAttempts - 1,
       expireInSeconds: DEFAULT_POLICIES.proposal.timeoutMs / 1000 + 60,
     });
     expect(f.schedules).toEqual({
       [QUEUES.expireAssignments]: DEFAULT_SCHEDULES.expireAssignments,
       [QUEUES.recoverDiscovery]: DEFAULT_SCHEDULES.recoverDiscovery,
+      [QUEUES.recoverGeneration]: DEFAULT_SCHEDULES.recoverGeneration,
+      [QUEUES.dispatchHandoffs]: DEFAULT_SCHEDULES.dispatchHandoffs,
+      [QUEUES.recoverPipeline]: DEFAULT_SCHEDULES.recoverPipeline,
     });
 
+    expect(f.queues[QUEUES.audit]).toMatchObject({ heartbeatSeconds: 120 });
+    expect(f.queues[QUEUES.discovery]).not.toHaveProperty("heartbeatSeconds");
+    expect(f.workOptions[QUEUES.audit]).toMatchObject({ heartbeatRefreshSeconds: 20 });
+    expect(f.workOptions[QUEUES.proposal]).toMatchObject({ heartbeatRefreshSeconds: 20 });
+    const signal = new AbortController().signal;
     const handler = f.handlers[QUEUES.proposal]!;
+    await expect(handler([{ id: "job-proof", retryCount: 2, data: { companyId: "company" }, signal }])).rejects.toThrow(
+      "一時的な失敗",
+    );
+    expect(calls.at(-1)).toEqual([
+      QUEUES.proposal,
+      { companyId: "company" },
+      { queueClaim: { id: "job-proof", retryCount: 2 }, signal },
+    ]);
     await expect(handler([{ data: {} }])).rejects.toThrow("一時的な失敗");
     next = { status: "failed", key: "k", attempt: 3, reason: "上限" };
     await expect(handler([{ data: {} }])).resolves.toBeUndefined();

@@ -1,4 +1,4 @@
-import { assignments, type DbOrTx, salesActivities } from "@siteoffer/db";
+import { assignments, companies, type DbOrTx, salesActivities } from "@siteoffer/db";
 import { and, desc, eq, gte } from "drizzle-orm";
 import {
   type Assignment,
@@ -15,6 +15,7 @@ import { err, ok, type Result } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { authorizeUser, requireUser } from "../permissions/policy.ts";
+import { cancelOfferChangesOnAssignmentEnd } from "../sales-offer/lifecycle.ts";
 import { applySuppression, type DeclineKind } from "./suppression.ts";
 
 export type SalesActivity = typeof salesActivities.$inferSelect;
@@ -29,6 +30,8 @@ export interface RecordActivityInput {
   note?: string;
   /** 次回対応日。再連絡予定（callback_scheduled）では必須 */
   nextActionAt?: Date;
+  /** Omitted preserves the legacy behavior: replace when a date is supplied, otherwise keep. */
+  nextActionMode?: "keep" | "replace" | "clear";
   /** 運営への相談 */
   consultOps?: boolean;
   /** 営業拒否（declined）のときの内容 */
@@ -95,6 +98,17 @@ export async function recordActivity(
   const actorUserId = user.value.userId;
   const now = clock.now();
   const occurredAt = input.occurredAt ?? now;
+  const nextActionMode = input.nextActionMode ?? (input.nextActionAt ? "replace" : "keep");
+  if (
+    !["keep", "replace", "clear"].includes(nextActionMode) ||
+    (nextActionMode === "replace" && !input.nextActionAt) ||
+    (nextActionMode !== "replace" && input.nextActionAt)
+  )
+    return err("invalid_input", "次回予定の変更方法と日時を確認してください");
+  if (!Number.isFinite(occurredAt.getTime()) || (input.nextActionAt && !Number.isFinite(input.nextActionAt.getTime())))
+    return err("invalid_input", "日時の形式を確認してください");
+  if ((input.note?.length ?? 0) > 2000 || (input.decline?.reason?.length ?? 0) > 500)
+    return err("invalid_input", "メモは2000文字、理由は500文字以内で入力してください");
 
   if (occurredAt.getTime() > now.getTime()) return err("invalid_input", "活動日時に未来は指定できません");
   if (input.kind === "callback_scheduled" && !input.nextActionAt) {
@@ -114,6 +128,17 @@ export async function recordActivity(
   if (secret) return err("secret_like_value", `${secret.field} に秘密らしき値が含まれているため保存しませんでした`);
 
   return runTx<{ activity: SalesActivity; assignment: Assignment }, RecordActivityError>(db, async (tx, fail) => {
+    // Suppression locks company -> assignment. Use that same order before recording a refusal.
+    if (input.decline) {
+      const [candidate] = await tx
+        .select({ companyId: assignments.companyId, userId: assignments.userId })
+        .from(assignments)
+        .where(eq(assignments.id, input.assignmentId));
+      if (!candidate) return fail("not_found");
+      const access = authorizeUser(actor, "create", { type: "salesActivity", ownerUserId: candidate.userId });
+      if (!access.ok) return fail("forbidden");
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, candidate.companyId)).for("update");
+    }
     const loaded = await loadAssignmentForActor(tx, actor, input.assignmentId, {
       type: "salesActivity",
       action: "create",
@@ -132,6 +157,7 @@ export async function recordActivity(
         occurredAt,
         note: input.note ?? null,
         nextActionAt: input.nextActionAt ?? null,
+        nextActionMode,
         consultOps: input.consultOps ?? false,
         createdAt: now,
       })
@@ -147,6 +173,7 @@ export async function recordActivity(
         kind: input.kind,
         occurredAt: occurredAt.toISOString(),
         nextActionAt: input.nextActionAt?.toISOString() ?? null,
+        nextActionMode,
         consultOps: input.consultOps ?? false,
         decline: input.decline
           ? { kind: input.decline.kind, recontactAfter: input.decline.recontactAfter ?? null }
@@ -168,7 +195,19 @@ export async function recordActivity(
         { status: "lost", reason: `declined:${input.decline.kind}` },
       );
       if (!r.ok) return fail(r.error, r.message);
-      const [ended] = await tx.select().from(assignments).where(eq(assignments.id, before.id));
+      const [ended] =
+        nextActionMode === "clear"
+          ? await tx.update(assignments).set({ nextActionAt: null }).where(eq(assignments.id, before.id)).returning()
+          : await tx.select().from(assignments).where(eq(assignments.id, before.id));
+      if (nextActionMode === "clear" && before.nextActionAt)
+        await recordEvent(tx, clock, {
+          actor,
+          action: "assignment.update_by_activity",
+          targetType: "assignment",
+          targetId: before.id,
+          before: snapshot(before),
+          after: { ...snapshot(ended!), activityId: activity!.id },
+        });
       return { activity: activity!, assignment: ended! };
     }
 
@@ -185,9 +224,16 @@ export async function recordActivity(
       patch.expiresAt = new Date(Math.max(...candidates));
     }
     if (input.nextActionAt) patch.nextActionAt = input.nextActionAt;
+    else if (nextActionMode === "clear") patch.nextActionAt = null;
 
     const [after] = await tx.update(assignments).set(patch).where(eq(assignments.id, before.id)).returning();
-    if (before.status !== after!.status || before.expiresAt?.getTime() !== after!.expiresAt?.getTime()) {
+    if (status === "lost")
+      await cancelOfferChangesOnAssignmentEnd(tx, clock, actor, before.id, "失注により担当が終了しました。");
+    if (
+      before.status !== after!.status ||
+      before.expiresAt?.getTime() !== after!.expiresAt?.getTime() ||
+      before.nextActionAt?.getTime() !== after!.nextActionAt?.getTime()
+    ) {
       await recordEvent(tx, clock, {
         actor,
         action: "assignment.update_by_activity",
@@ -221,7 +267,7 @@ export async function listActivities(
   return ok(rows);
 }
 
-/** 運営への相談がある活動（運営のみ）。対応済みの管理は未実装（スキーマに列がない） */
+/** 運営への相談がある活動（運営のみ）。対応状況と回答は consultation の業務関数で扱う */
 export async function listOpsConsultations(
   db: DbOrTx,
   actor: Actor,

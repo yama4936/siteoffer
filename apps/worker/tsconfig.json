@@ -1,4 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src", "test", "*.ts"]
+  "include": ["src", "test", "*.ts"],
+  "exclude": ["node_modules", "test/postgres-sales.ts", "test/postgres-content.ts"]
 }

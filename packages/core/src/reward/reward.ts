@@ -1,5 +1,5 @@
 import { type DbOrTx, rewardAdjustments, rewards } from "@siteoffer/db";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray, type SQL } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
@@ -24,14 +24,37 @@ export interface RewardSummary {
 }
 
 export async function getRewardSummary(db: DbOrTx, rewardId: string): Promise<RewardSummary | null> {
-  const [reward] = await db.select().from(rewards).where(eq(rewards.id, rewardId));
-  if (!reward) return null;
+  return [...(await readRewardSummaries(db, eq(rewards.id, rewardId))).values()][0] ?? null;
+}
+
+/** Internal read helper; callers authorize the contracts before supplying their IDs. */
+export async function getRewardSummariesForContracts(db: DbOrTx, contractIds: string[]) {
+  if (!contractIds.length) return new Map<string, RewardSummary>();
+  const summaries = await readRewardSummaries(db, inArray(rewards.contractId, contractIds));
+  return new Map([...summaries.values()].map((summary) => [summary.reward.contractId, summary]));
+}
+
+async function readRewardSummaries(db: DbOrTx, where: SQL) {
+  const rows = await db.select().from(rewards).where(where);
+  const result = new Map<string, RewardSummary>();
+  for (const reward of rows) result.set(reward.id, { reward, adjustments: [], currentAmount: reward.amount });
+  if (!rows.length) return result;
   const adjustments = await db
     .select()
     .from(rewardAdjustments)
-    .where(eq(rewardAdjustments.rewardId, rewardId))
+    .where(
+      inArray(
+        rewardAdjustments.rewardId,
+        rows.map((reward) => reward.id),
+      ),
+    )
     .orderBy(asc(rewardAdjustments.createdAt));
-  return { reward, adjustments, currentAmount: reward.amount + adjustments.reduce((s, a) => s + a.delta, 0) };
+  for (const adjustment of adjustments) {
+    const summary = result.get(adjustment.rewardId)!;
+    summary.adjustments.push(adjustment);
+    summary.currentAmount += adjustment.delta;
+  }
+  return result;
 }
 
 /** 営業本人は自分の報酬を、運営は全件を見られる */

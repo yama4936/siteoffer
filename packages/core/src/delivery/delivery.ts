@@ -4,24 +4,31 @@ import {
   contracts,
   type DbOrTx,
   deliveries,
+  deliveryBuilds,
+  deliveryChanges,
   deliveryVersions,
   deployments,
   generationJobs,
 } from "@siteoffer/db";
-import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, max } from "drizzle-orm";
 import type { Actor } from "../common/actor.ts";
 import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
+import { deliveryImageAssetsValid, deliveryVersionImagesValid } from "../image-assets.ts";
 import { authorize } from "../permissions/policy.ts";
-import { type IssuedShareLink, issueShareLink } from "../share-link/share-link.ts";
+import { type IssuedShareLink, type IssueShareLinkError, issueShareLink } from "../share-link/share-link.ts";
+import type { ShareTokenRecovery } from "../share-link/token.ts";
+import type { DeliveryBuildClaim } from "./build.ts";
+import { beginDeliveryBuild } from "./build-state.ts";
+import { loadDeliveryInputSource } from "./preparation.ts";
 
 /**
  * 納品（15・18章）。
  * 状態：情報確認 → 制作 → 運営確認 → 顧客確認 → 公開準備 → 公開 → 納品。
  * - 契約が完了（completed）した契約ごとに1件（deliveries.contract_id の一意制約）。
  * - 制作版は追加するだけで書き換えない。再生成は新しい版。
- * - 顧客が承認した版を deliveries.locked_version_id に固定し、以後は変えない（AC-18）。
+ * - 顧客が承認した版を deliveries.locked_version_id に固定し、通常の操作では変えない。承認後の変更は change.ts で履歴を残して再承認する。
  * - 公開・納品の実処理（AWS）は作らない。状態と記録（deployments）だけを持つ。
  * 運営（と system）だけが操作する。営業ユーザーは操作できない（5.2・AC-18）。
  * 顧客の承認・修正依頼は customer.ts（共有リンクの検証）で扱う。
@@ -44,8 +51,8 @@ export const DELIVERY_STATUSES: readonly DeliveryStatus[] = [
 ];
 
 /**
- * 許可する遷移。戻りは「運営確認・顧客確認から制作へ」だけ。
- * 公開準備（ready）以降は戻らないため、固定した版は変わらない。
+ * 通常の遷移。戻りは「運営確認・顧客確認から制作へ」だけ。
+ * 公開準備以降の再制作は、change.ts の明示的な変更受付と再承認を必要とする。
  */
 export const DELIVERY_TRANSITIONS: Readonly<Record<DeliveryStatus, readonly DeliveryStatus[]>> = {
   info_gathering: ["building"],
@@ -92,6 +99,7 @@ const snapshot = (d: DeliveryRow) => ({
   status: d.status,
   lockedVersionId: d.lockedVersionId,
   reviewVersionId: d.reviewVersionId,
+  currentBuildId: d.currentBuildId,
 });
 
 // ---------------------------------------------------------------------------
@@ -149,6 +157,8 @@ export interface AddDeliveryVersionInput {
   artifactDir: string;
   /** 生成ジョブ（generation_jobs.id）。手作業の版などで無ければ省略 */
   generationJobId?: string | null;
+  /** ワーカーの完了処理だけが渡す実行権限 */
+  buildClaim?: DeliveryBuildClaim;
 }
 
 export type AddDeliveryVersionError =
@@ -156,7 +166,9 @@ export type AddDeliveryVersionError =
   | "not_found"
   | "invalid_state"
   | "invalid_input"
-  | "generation_job_not_found";
+  | "generation_job_not_found"
+  | "stale_build"
+  | "image_rights_changed";
 
 /**
  * 制作版を追加する。版番号は納品ごとに1から連番。既存の版は書き換えない（再生成は新しい版）。
@@ -182,18 +194,47 @@ export async function addDeliveryVersion(
     const delivery = await lockDelivery(tx, deliveryId);
     if (!delivery) return err("not_found");
     if (delivery.status === "delivered") return err("invalid_state", "納品済みの案件には版を追加できません");
+    const [build] = delivery.currentBuildId
+      ? await tx
+          .select()
+          .from(deliveryBuilds)
+          .where(and(eq(deliveryBuilds.id, delivery.currentBuildId), eq(deliveryBuilds.deliveryId, delivery.id)))
+          .for("update")
+      : [];
+    if (input.buildClaim) {
+      const claim = input.buildClaim;
+      if (
+        staff.value.kind !== "system" ||
+        delivery.status !== "building" ||
+        delivery.lockedVersionId ||
+        delivery.currentBuildId !== claim.buildId ||
+        claim.deliveryId !== delivery.id ||
+        !build ||
+        build.status !== "running" ||
+        build.ownerId !== claim.ownerId ||
+        !build.leaseUntil ||
+        build.leaseUntil <= clock.now()
+      )
+        return err("stale_build");
+    } else if (build?.status === "running") return err("invalid_state", "制作処理の実行中は別の版を追加できません");
+    if (!(await deliveryImageAssetsValid(tx, delivery.currentBuildId, delivery.id, true)))
+      return err("image_rights_changed", "制作に使った画像の許諾が変更されています。素材を確認して再制作してください");
     if (jobId !== null) {
       const [job] = await tx
-        .select({ companyId: generationJobs.companyId })
+        .select({ companyId: generationJobs.companyId, purpose: generationJobs.purpose, status: generationJobs.status })
         .from(generationJobs)
         .where(eq(generationJobs.id, jobId));
-      if (!job) return err("generation_job_not_found");
+      if (!job || (input.buildClaim && (job.purpose !== "delivery_site" || job.status !== "succeeded")))
+        return err("generation_job_not_found");
       // 別企業の生成ジョブを紐づけない
       const [contract] = await tx
         .select({ companyId: contracts.companyId })
         .from(contracts)
         .where(eq(contracts.id, delivery.contractId));
-      if (job.companyId !== null && job.companyId !== contract?.companyId) {
+      if (
+        (input.buildClaim && job.companyId !== contract?.companyId) ||
+        (job.companyId !== null && job.companyId !== contract?.companyId)
+      ) {
         return err("generation_job_not_found", "この企業の生成ジョブではありません");
       }
     }
@@ -204,14 +245,21 @@ export async function addDeliveryVersion(
     const version = (agg?.v ?? 0) + 1;
     const [row] = await tx
       .insert(deliveryVersions)
-      .values({ deliveryId: delivery.id, version, artifactDir, generationJobId: jobId, createdAt: clock.now() })
+      .values({
+        deliveryId: delivery.id,
+        version,
+        artifactDir,
+        generationJobId: jobId,
+        buildId: delivery.currentBuildId,
+        createdAt: clock.now(),
+      })
       .returning();
     await recordEvent(tx, clock, {
       actor: staff.value,
       action: "delivery.version_add",
       targetType: "delivery",
       targetId: delivery.id,
-      after: { versionId: row!.id, version, artifactDir, generationJobId: jobId },
+      after: { versionId: row!.id, version, artifactDir, generationJobId: jobId, buildId: delivery.currentBuildId },
     });
     return ok(row!);
   });
@@ -230,7 +278,7 @@ export async function addDeliveryVersion(
  */
 export type SimpleTransitionTarget = "building" | "ops_review" | "delivered";
 
-export type TransitionError = "forbidden" | "not_found" | "invalid_transition" | "no_version";
+export type TransitionError = "forbidden" | "not_found" | "invalid_transition" | "no_version" | "preparation_required";
 
 export async function transitionDelivery(
   db: DbOrTx,
@@ -252,16 +300,46 @@ export async function transitionDelivery(
       return err("invalid_transition", `${delivery.status} から ${to} へは変更できません`);
     }
     if (to === "ops_review") {
+      const [build] = delivery.currentBuildId
+        ? await tx
+            .select()
+            .from(deliveryBuilds)
+            .where(and(eq(deliveryBuilds.id, delivery.currentBuildId), eq(deliveryBuilds.deliveryId, delivery.id)))
+            .for("update")
+        : [];
+      if (build?.status === "running") return err("invalid_transition", "制作処理が実行中です。完了までお待ちください");
       const [v] = await tx
         .select({ id: deliveryVersions.id })
         .from(deliveryVersions)
-        .where(eq(deliveryVersions.deliveryId, delivery.id))
+        .where(
+          and(
+            eq(deliveryVersions.deliveryId, delivery.id),
+            isNotNull(deliveryVersions.artifactDir),
+            delivery.currentBuildId ? eq(deliveryVersions.buildId, delivery.currentBuildId) : undefined,
+          ),
+        )
         .limit(1);
-      if (!v) return err("no_version", "運営確認に回す制作版がありません");
+      if (!v) return err("no_version", "今回の制作に対応する版がありません。制作の完了をお待ちください");
+      if (build && build.status !== "succeeded")
+        await tx
+          .update(deliveryBuilds)
+          .set({ status: "succeeded", leaseUntil: null, finishedAt: clock.now() })
+          .where(eq(deliveryBuilds.id, build.id));
     }
+    if (to === "building") {
+      const source = await loadDeliveryInputSource(tx, delivery.id);
+      if (!source || source.blockers.length)
+        return err("preparation_required", source?.blockers.join(" / ") ?? "制作情報を確認してください。");
+    }
+    const build = to === "building" ? await beginDeliveryBuild(tx, clock, delivery) : null;
     const [row] = await tx
       .update(deliveries)
-      .set({ status: to, reviewVersionId: null, updatedAt: clock.now() })
+      .set({
+        status: to,
+        reviewVersionId: null,
+        currentBuildId: build?.id ?? delivery.currentBuildId,
+        updatedAt: clock.now(),
+      })
       .where(and(eq(deliveries.id, delivery.id), eq(deliveries.status, delivery.status)))
       .returning();
     await recordEvent(tx, clock, {
@@ -280,6 +358,8 @@ export async function transitionDelivery(
 // 顧客確認に回す（運営）
 
 export interface SendToCustomerReviewInput {
+  /** 同じ発行の再送を識別する受付キー */
+  requestKey?: string;
   /** 運営が確認した版（この納品の版） */
   versionId: string;
   /** 共有リンクの有効期間（時間）。省略時は運営設定の既定値 */
@@ -292,7 +372,9 @@ export type SendToCustomerReviewError =
   | "version_not_found"
   | "invalid_transition"
   | "no_artifact"
-  | "link_failed";
+  | IssueShareLinkError
+  | "version_requires_revision"
+  | "image_rights_changed";
 
 /**
  * 運営が確認した版を顧客確認に回し、納品用の共有リンク（期限付き）を発行する。
@@ -305,6 +387,7 @@ export async function sendToCustomerReview(
   actor: Actor | null,
   deliveryId: string,
   input: SendToCustomerReviewInput,
+  recovery?: ShareTokenRecovery,
 ): Promise<Result<{ delivery: DeliveryRow; issued: IssuedShareLink }, SendToCustomerReviewError>> {
   const ops = requireOps(actor);
   if (!ops.ok) return ops;
@@ -318,19 +401,41 @@ export async function sendToCustomerReview(
       .from(deliveryVersions)
       .where(and(eq(deliveryVersions.id, input.versionId), eq(deliveryVersions.deliveryId, delivery.id)));
     if (!version) return err("version_not_found");
+    if (delivery.currentBuildId && version.buildId !== delivery.currentBuildId)
+      return err("version_requires_revision", "前の制作回の版は再提出できません。今回の制作版を確認してください");
 
+    const [rejected] = await tx
+      .select({ version: max(deliveryVersions.version) })
+      .from(approvals)
+      .innerJoin(deliveryVersions, eq(deliveryVersions.id, approvals.deliveryVersionId))
+      .where(and(eq(deliveryVersions.deliveryId, delivery.id), eq(approvals.decision, "changes_requested")));
+    if (rejected?.version !== null && rejected?.version !== undefined && version.version <= rejected.version)
+      return err(
+        "version_requires_revision",
+        "修正依頼を受けた版以前の内容は再提出できません。修正版を作成し、運営で内容を確認してください",
+      );
     const reissue = delivery.status === "customer_review" && delivery.reviewVersionId === version.id;
     if (!reissue && !canTransition(delivery.status, "customer_review")) {
       return err("invalid_transition", "運営確認中の納品だけを顧客確認に回せます");
     }
     if (!version.artifactDir) return err("no_artifact", "この版には成果物がありません");
+    if (!(await deliveryVersionImagesValid(tx, version.id, true)))
+      return err("image_rights_changed", "画像の利用許諾が変更されています。素材を確認して再制作してください");
 
-    const issued = await issueShareLink(tx, clock, ops.value, {
-      purpose: "delivery",
-      targetId: version.id,
-      ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
-    });
-    if (!issued.ok) return err("link_failed", issued.message ?? issued.error);
+    const issued = await issueShareLink(
+      tx,
+      clock,
+      ops.value,
+      {
+        purpose: "delivery",
+        targetId: version.id,
+        ...(input.requestKey !== undefined ? { requestKey: input.requestKey } : {}),
+        ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
+      },
+      recovery,
+    );
+    if (!issued.ok) return issued;
+    if (reissue && !issued.value.created) return ok({ delivery, issued: issued.value });
 
     const [row] = await tx
       .update(deliveries)
@@ -359,7 +464,13 @@ export interface RecordPublicationInput {
   url?: string | null;
 }
 
-export type RecordPublicationError = "forbidden" | "not_found" | "invalid_transition" | "not_locked" | "invalid_input";
+export type RecordPublicationError =
+  | "forbidden"
+  | "not_found"
+  | "invalid_transition"
+  | "not_locked"
+  | "invalid_input"
+  | "image_rights_changed";
 
 /**
  * 公開準備（ready）→ 公開（published）。固定した版で deployments に記録を1行残す。
@@ -396,6 +507,8 @@ export async function recordPublication(
       return err("invalid_transition", "公開準備の納品だけを公開済みにできます");
     }
     if (!delivery.lockedVersionId) return err("not_locked", "公開対象の版が固定されていません");
+    if (!(await deliveryVersionImagesValid(tx, delivery.lockedVersionId, true)))
+      return err("image_rights_changed", "画像の利用許諾が変更されています。公開前に確認してください");
     const now = clock.now();
     const [deployment] = await tx
       .insert(deployments)
@@ -431,6 +544,7 @@ export async function recordPublication(
 // 読み取り（運営）
 
 export interface DeliveryDetail {
+  build: typeof deliveryBuilds.$inferSelect | null;
   delivery: DeliveryRow;
   companyId: string;
   companyName: string;
@@ -438,6 +552,7 @@ export interface DeliveryDetail {
   versions: DeliveryVersionRow[];
   approvals: ApprovalRow[];
   deployments: DeploymentRow[];
+  changes: (typeof deliveryChanges.$inferSelect)[];
 }
 
 /** 納品の詳細（運営の画面用）。版は新しい順、承認・修正依頼は新しい順 */
@@ -461,6 +576,12 @@ export async function getDeliveryDetail(
     .from(deliveryVersions)
     .where(eq(deliveryVersions.deliveryId, deliveryId))
     .orderBy(desc(deliveryVersions.version));
+  const [build] = head.delivery.currentBuildId
+    ? await db
+        .select()
+        .from(deliveryBuilds)
+        .where(and(eq(deliveryBuilds.id, head.delivery.currentBuildId), eq(deliveryBuilds.deliveryId, deliveryId)))
+    : [];
   const versionIds = versions.map((v) => v.id);
   const approvalRows =
     versionIds.length === 0
@@ -477,11 +598,18 @@ export async function getDeliveryDetail(
     .orderBy(asc(deployments.createdAt));
   return ok({
     delivery: head.delivery,
+    build: build ?? null,
     companyId: head.companyId,
     companyName: head.companyName,
     contractId: head.delivery.contractId,
     versions,
     approvals: approvalRows,
     deployments: deploymentRows,
+    changes: await db
+      .select()
+      .from(deliveryChanges)
+      .where(eq(deliveryChanges.deliveryId, deliveryId))
+      .orderBy(desc(deliveryChanges.createdAt))
+      .limit(20),
   });
 }

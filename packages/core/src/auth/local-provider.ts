@@ -5,6 +5,7 @@ import { HOUR } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok } from "../common/result.ts";
 import { getSetting } from "../common/settings.ts";
+import { authAttemptKey, claimAuthAttempt, clearAuthAttempts } from "./attempts.ts";
 import { generateToken, hashPassword, hashToken, verifyPassword } from "./crypto.ts";
 import type { AuthenticatedUser, AuthProvider } from "./provider.ts";
 import { getLatestTerms } from "./terms.ts";
@@ -19,7 +20,7 @@ import {
 type UserRow = typeof users.$inferSelect;
 
 function toAuthenticated(u: UserRow): AuthenticatedUser {
-  const actor = u.role === "ops" ? { kind: "ops" as const, userId: u.id } : { kind: "sales" as const, userId: u.id };
+  const actor = { kind: u.role === "customer" ? ("customer_user" as const) : u.role, userId: u.id };
   return { actor, userId: u.id, email: u.email, displayName: u.displayName, role: u.role };
 }
 
@@ -88,24 +89,35 @@ export function createLocalAuthProvider({ db, clock, sessionTtlMs }: LocalAuthPr
     },
 
     async login(input) {
-      const email = normalizeEmail(input.email);
-      const [user] = await db.select().from(users).where(eq(users.email, email));
-      if (!user) {
-        dummyHash ??= hashPassword("dummy-password-for-timing");
-        await verifyPassword(input.password, await dummyHash);
+      if (
+        !input ||
+        typeof input.email !== "string" ||
+        typeof input.password !== "string" ||
+        input.email.length > 254 ||
+        input.password.length > 200
+      )
         return err("invalid_credentials", "メールアドレスまたはパスワードが違います");
-      }
-      if (!(await verifyPassword(input.password, user.passwordHash))) {
-        return err("invalid_credentials", "メールアドレスまたはパスワードが違います");
-      }
-      if (user.status !== "active") return err("suspended", "このアカウントは利用停止中です");
-
+      const email = normalizeEmail(input.email),
+        key = authAttemptKey("credential", email);
+      if (!(await claimAuthAttempt(db, clock, key)))
+        return err("rate_limited", "試行回数の上限に達しました。15分ほど待ってからお試しください");
       const ttl = sessionTtlMs ?? (await getSetting(db, "session.ttlHours")) * HOUR;
-      const token = generateToken();
-      const now = clock.now();
-      const expiresAt = new Date(now.getTime() + ttl);
-      const authed = toAuthenticated(user);
-      await db.transaction(async (tx) => {
+      const result = await db.transaction(async (tx) => {
+        // Password change/suspension takes an exclusive user lock and removes sessions.
+        // A concurrent login therefore either finishes before revocation, or verifies the new state.
+        const [user] = await tx.select().from(users).where(eq(users.email, email)).for("share");
+        if (!user) {
+          dummyHash ??= hashPassword("dummy-password-for-timing");
+          await verifyPassword(input.password, await dummyHash);
+          return err("invalid_credentials", "メールアドレスまたはパスワードが違います");
+        }
+        if (!(await verifyPassword(input.password, user.passwordHash)))
+          return err("invalid_credentials", "メールアドレスまたはパスワードが違います");
+        if (user.status !== "active") return err("suspended", "このアカウントは利用停止中です");
+        const token = generateToken(),
+          now = clock.now(),
+          expiresAt = new Date(now.getTime() + ttl),
+          authed = toAuthenticated(user);
         const [session] = await tx
           .insert(sessions)
           .values({ tokenHash: hashToken(token), userId: user.id, expiresAt, createdAt: now })
@@ -117,8 +129,10 @@ export function createLocalAuthProvider({ db, clock, sessionTtlMs }: LocalAuthPr
           targetId: session!.id,
           after: { expiresAt: expiresAt.toISOString() },
         });
+        return ok({ token, expiresAt, user: authed });
       });
-      return ok({ token, expiresAt, user: authed });
+      if (result.ok) await clearAuthAttempts(db, key);
+      return result;
     },
 
     async authenticate(token) {
@@ -145,7 +159,10 @@ export function createLocalAuthProvider({ db, clock, sessionTtlMs }: LocalAuthPr
         if (!s) return;
         const [u] = await tx.select({ role: users.role }).from(users).where(eq(users.id, s.userId));
         await recordEvent(tx, clock, {
-          actor: u?.role === "ops" ? { kind: "ops", userId: s.userId } : { kind: "sales", userId: s.userId },
+          actor: {
+            kind: u?.role === "customer" ? "customer_user" : u?.role === "ops" ? "ops" : "sales",
+            userId: s.userId,
+          },
           action: "session.deleted",
           targetType: "session",
           targetId: s.id,

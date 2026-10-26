@@ -1,2 +1,9 @@
 export * from "./share-link.ts";
-export { generateShareToken, hashShareToken, isShareTokenFormat, shareLinkUrl } from "./token.ts";
+export {
+  createShareTokenRecovery,
+  generateShareToken,
+  hashShareToken,
+  isShareTokenFormat,
+  type ShareTokenRecovery,
+  shareLinkUrl,
+} from "./token.ts";

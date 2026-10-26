@@ -16,10 +16,12 @@ import {
   FixtureProvider,
   MockSearchProvider,
   NtaCorporateNumberProvider,
+  TavilySearchProvider,
 } from "@siteoffer/discovery";
 import {
   CodexGenerator,
   ConcurrencyLimiter,
+  codexProxyUrl,
   DEFAULT_GENERATION_LIMITS,
   DockerSandboxRunner,
   type Generator,
@@ -29,20 +31,38 @@ import type { JobQueue, Logger, WorkerDeps } from "./deps.ts";
 import { defaultGenerationInputBuilder, fixtureGenerationInputBuilder } from "./input.ts";
 import { DEFAULT_POLICIES, DEFAULT_SCHEDULES, type StepKind, type StepPolicy } from "./queues.ts";
 import { createAstroSiteBuilder } from "./site-builder.ts";
+import {
+  createDockerSiteBuilder,
+  DEFAULT_SITE_BUILD_IMAGE,
+  DEFAULT_SITE_BUILD_TIMEOUT_MS,
+  siteBuildUserValid,
+} from "./site-builder-docker.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 export type GeneratorConfig =
   | { kind: "mock" }
-  | { kind: "codex"; image: string; network: string; codexAuthFile: string; model: string | null; user?: string };
+  | {
+      kind: "codex";
+      image: string;
+      network: string;
+      codexAuthFile: string;
+      model: string | null;
+      user?: string;
+      httpsProxy?: string;
+    };
 
 export type DiscoveryProviderName = "fixture" | "nta";
 
 export interface WorkerConfig {
   /** pg-boss とDBの接続先。値はログに出さない */
   databaseUrl: string | null;
+  discoveryOnly: boolean;
   generator: GeneratorConfig;
+  siteBuild: { kind: "local" } | { kind: "docker"; image: string; timeoutMs: number; user: string };
   discoveryProviders: DiscoveryProviderName[];
+  siteSearch: "fixture" | "none" | "tavily";
+  searchLimit: number;
   auditCollector: { kind: "fixture"; collectedPath: string } | { kind: "python" };
   auditOptions: AuditOptions;
   demoArtifactRoot: string;
@@ -56,7 +76,13 @@ export interface WorkerConfig {
   /** DBを見てジョブを受け付ける間隔（ミリ秒）。0 なら受付処理を動かさない */
   intakeIntervalMs: number;
   policies: Record<StepKind, StepPolicy>;
-  schedules: { expireAssignments: string; recoverDiscovery: string };
+  schedules: {
+    expireAssignments: string;
+    recoverDiscovery: string;
+    recoverGeneration: string;
+    dispatchHandoffs: string;
+    recoverPipeline: string;
+  };
   discoveryStaleAfterMs: number;
   /** キューごとの同時実行数（このプロセス内） */
   concurrency: Record<StepKind, number>;
@@ -81,6 +107,14 @@ export function resolveWorkerConfig(
     const image = v("SITEOFFER_CODEX_IMAGE");
     const network = v("SITEOFFER_CODEX_NETWORK");
     const codexAuthFile = v("SITEOFFER_CODEX_AUTH_FILE");
+    let httpsProxy: string | undefined;
+    try {
+      httpsProxy = codexProxyUrl(v("SITEOFFER_CODEX_HTTPS_PROXY"));
+    } catch {
+      problems.push(
+        "SITEOFFER_CODEX_HTTPS_PROXY は認証情報・パス・クエリを含まないhttp://ホスト:ポートで指定してください。",
+      );
+    }
     const missing = [
       !image && "SITEOFFER_CODEX_IMAGE",
       !network && "SITEOFFER_CODEX_NETWORK",
@@ -95,13 +129,41 @@ export function resolveWorkerConfig(
         codexAuthFile: codexAuthFile!,
         model: v("SITEOFFER_CODEX_MODEL") ?? null,
         user: v("SITEOFFER_CODEX_USER"),
+        ...(httpsProxy ? { httpsProxy } : {}),
       };
   } else if (genKind !== "mock") {
     problems.push(`SITEOFFER_GENERATOR は mock か codex（${genKind}）`);
   }
 
+  const siteKind = v("SITEOFFER_SITE_BUILDER") ?? (generator.kind === "codex" ? "docker" : "local");
+  const siteBuildImage = v("SITEOFFER_SITE_BUILD_IMAGE") ?? DEFAULT_SITE_BUILD_IMAGE;
+  const siteBuildTimeout = Number(v("SITEOFFER_SITE_BUILD_TIMEOUT_MS") ?? DEFAULT_SITE_BUILD_TIMEOUT_MS);
+  const siteBuildUser =
+    v("SITEOFFER_SITE_BUILD_USER") ??
+    v("SITEOFFER_CODEX_USER") ??
+    `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+  if (siteKind === "docker" && !siteBuildUserValid(siteBuildUser))
+    problems.push("SITEOFFER_SITE_BUILD_USER は非rootの数値UID:GIDで指定してください");
+  if (!["local", "docker"].includes(siteKind)) problems.push("SITEOFFER_SITE_BUILDER は local・docker のいずれか");
+  if (generator.kind === "codex" && siteKind !== "docker")
+    problems.push("実Codexのサイト制作にはDockerビルドが必要です");
+  if (!/^[a-z0-9][a-z0-9./_:@-]{0,254}$/i.test(siteBuildImage))
+    problems.push("SITEOFFER_SITE_BUILD_IMAGE を確認してください");
+  if (!Number.isSafeInteger(siteBuildTimeout) || siteBuildTimeout < 1000 || siteBuildTimeout > 900_000)
+    problems.push("SITEOFFER_SITE_BUILD_TIMEOUT_MS は1000〜900000の整数");
+  const siteBuild: WorkerConfig["siteBuild"] =
+    siteKind === "docker"
+      ? { kind: "docker", image: siteBuildImage, timeoutMs: siteBuildTimeout, user: siteBuildUser }
+      : { kind: "local" };
+
+  if (v("NODE_ENV") === "production" && generator.kind === "mock" && v("SITEOFFER_ALLOW_MOCK_DEMO") !== "true")
+    problems.push(
+      "本番モードでは実生成の設定が必要です。公開検証デモの場合だけ SITEOFFER_ALLOW_MOCK_DEMO=true を明示してください",
+    );
+
   const discoveryProviders: DiscoveryProviderName[] = [];
-  for (const name of (v("SITEOFFER_DISCOVERY_PROVIDERS") ?? "fixture").split(",").map((s) => s.trim())) {
+  const providerSetting = v("SITEOFFER_DISCOVERY_PROVIDERS") ?? "fixture";
+  for (const name of (providerSetting === "none" ? [] : providerSetting.split(",")).map((s) => s.trim())) {
     if (name === "fixture") discoveryProviders.push("fixture");
     else if (name === "nta") {
       if (!v("NTA_APPLICATION_ID")) problems.push("取得元 nta には環境変数 NTA_APPLICATION_ID が必要");
@@ -110,6 +172,17 @@ export function resolveWorkerConfig(
   }
 
   const collectorKind = v("SITEOFFER_AUDIT_COLLECTOR") ?? "fixture";
+  const siteSearch =
+    v("SITEOFFER_SEARCH_PROVIDER") ??
+    (providerSetting !== "none" && discoveryProviders.every((name) => name === "fixture") ? "fixture" : "none");
+  const searchLimit = Number(v("SITEOFFER_SEARCH_MAX_PER_RUN") ?? 50);
+  if (!["fixture", "none", "tavily"].includes(siteSearch))
+    problems.push("SITEOFFER_SEARCH_PROVIDER は fixture・none・tavily のいずれか");
+  if (siteSearch === "fixture" && discoveryProviders.some((name) => name !== "fixture"))
+    problems.push("実データ収集に模擬の検索結果は使えません");
+  if (siteSearch === "tavily" && !v("TAVILY_API_KEY")) problems.push("実検索には TAVILY_API_KEY が必要です");
+  if (!Number.isSafeInteger(searchLimit) || searchLimit < 1 || searchLimit > 1000)
+    problems.push("SITEOFFER_SEARCH_MAX_PER_RUN は1〜1000の整数");
   let auditCollector: WorkerConfig["auditCollector"];
   if (collectorKind === "python") auditCollector = { kind: "python" };
   else {
@@ -150,8 +223,12 @@ export function resolveWorkerConfig(
   if (problems.length) return err("invalid_config", problems.join("。"));
   return ok({
     databaseUrl: v("DATABASE_URL") ?? null,
+    discoveryOnly: v("SITEOFFER_DISCOVERY_ONLY") === "true",
     generator,
+    siteBuild,
     discoveryProviders,
+    siteSearch: siteSearch as WorkerConfig["siteSearch"],
+    searchLimit,
     auditCollector,
     auditOptions: defaultAuditOptions(env, {
       paths: { repoRoot: REPO_ROOT, ...(evalConfigPath ? { configPath: evalConfigPath } : {}) },
@@ -173,6 +250,7 @@ export function createGenerator(config: GeneratorConfig, env: NodeJS.ProcessEnv 
     {
       image: config.image,
       network: config.network,
+      ...(config.httpsProxy ? { httpsProxy: config.httpsProxy } : {}),
       codexAuthFile: config.codexAuthFile,
       ...(config.user ? { user: config.user } : {}),
     },
@@ -186,6 +264,8 @@ export function buildWorkerDeps(
   config: WorkerConfig,
   base: { db: Db; clock: Clock; queue: JobQueue; logger: Logger },
 ): WorkerDeps {
+  if (config.generator.kind === "codex" && config.siteBuild.kind !== "docker")
+    throw new Error("実Codexのサイト制作にはDockerビルドが必要です");
   const generator = createGenerator(config.generator);
   const limiter = new ConcurrencyLimiter(DEFAULT_GENERATION_LIMITS.maxConcurrent);
   const providers: Record<string, DiscoveryProvider> = {};
@@ -200,10 +280,16 @@ export function buildWorkerDeps(
       : createFixtureCollector(config.auditCollector.collectedPath);
   return {
     ...base,
+    discoveryOnly: config.discoveryOnly,
+    preparation: { auditCollector: config.auditCollector.kind, generationInput: config.generationInput },
     discovery: {
       providers,
-      // 検索系APIの製品は未決（24.6）。実装はモックだけ
-      search: new MockSearchProvider(),
+      ...(config.siteSearch === "fixture"
+        ? { search: new MockSearchProvider() }
+        : config.siteSearch === "tavily"
+          ? { search: new TavilySearchProvider() }
+          : {}),
+      searchLimit: config.searchLimit,
     },
     audit: {
       collector,
@@ -214,7 +300,8 @@ export function buildWorkerDeps(
     generation: { generator, limiter },
     buildGenerationInput:
       config.generationInput === "fixture" ? fixtureGenerationInputBuilder : defaultGenerationInputBuilder,
-    siteBuilder: createAstroSiteBuilder(),
+    siteBuilder:
+      config.siteBuild.kind === "docker" ? createDockerSiteBuilder(config.siteBuild) : createAstroSiteBuilder(),
     demoArtifactRoot: config.demoArtifactRoot,
     deliveryArtifactRoot: config.deliveryArtifactRoot,
     policies: config.policies,
@@ -226,8 +313,12 @@ export function buildWorkerDeps(
 export function describeConfig(config: WorkerConfig): Record<string, unknown> {
   return {
     generator: config.generator.kind,
+    siteBuilder: config.siteBuild.kind,
     requestedModel: config.generator.kind === "codex" ? config.generator.model : null,
     discoveryProviders: config.discoveryProviders,
+    discoveryOnly: config.discoveryOnly,
+    siteSearch: config.siteSearch,
+    searchLimit: config.searchLimit,
     auditCollector: config.auditCollector.kind,
     generationInput: config.generationInput,
     evaluationConfig: path.relative(REPO_ROOT, config.auditOptions.paths.configPath),

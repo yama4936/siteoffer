@@ -94,7 +94,7 @@ export async function seedCandidate(
 
 export async function seedTerms(
   db: Db,
-  values: { version: string; price: number | null; rewardRule: unknown; active?: boolean },
+  values: { version: string; price: number | null; rewardRule: unknown; active?: boolean; monthlyFee?: number | null },
 ) {
   const [t] = await db
     .insert(productTerms)
@@ -103,6 +103,7 @@ export async function seedTerms(
       name: `テスト条件 ${values.version}`,
       scope: { description: "テスト用" },
       price: values.price,
+      monthlyFee: values.monthlyFee ?? null,
       rewardRule: values.rewardRule,
       active: values.active ?? true,
     })

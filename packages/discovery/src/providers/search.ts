@@ -13,11 +13,17 @@ export interface MockSearchResult {
 const DEFAULT_FIXTURE = new URL("../../../../fixtures/discovery/search-results.json", import.meta.url);
 
 export function loadMockSearchResults(path: URL | string = DEFAULT_FIXTURE): Record<string, MockSearchResult[]> {
-  return (JSON.parse(readFileSync(path, "utf8")) as { results: Record<string, MockSearchResult[]> }).results;
+  return (
+    JSON.parse(
+      path === DEFAULT_FIXTURE
+        ? readFileSync(DEFAULT_FIXTURE, "utf8")
+        : readFileSync(/* turbopackIgnore: true */ path, "utf8"),
+    ) as { results: Record<string, MockSearchResult[]> }
+  ).results;
 }
 
 /**
- * 検索系APIのモック。製品が未決（24.6）のため実装はこれだけ。
+ * 外部へアクセスせずに収集を検査するための検索系APIのモック。
  * 企業名をキーにした記録済みの結果を返す（同名企業は同じ結果を受け取る＝実際の検索と同じ曖昧さを持つ）。
  * `failFor` に入れた企業名は失敗を返す（失敗理由の記録の確認用）。
  */

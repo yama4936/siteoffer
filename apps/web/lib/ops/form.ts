@@ -37,7 +37,7 @@ export function isUuid(v: string | undefined | null): v is string {
 }
 
 /** 戻り先は運営画面の中だけに限る（外部への移動に使わせない） */
-export function safeReturnTo(value: FormDataEntryValue | null, fallback = "/ops"): string {
+export function safeReturnTo(value: unknown, fallback = "/ops"): string {
   if (typeof value !== "string") return fallback;
   if (!value.startsWith("/ops") || value.startsWith("//") || value.includes("\\")) return fallback;
   if (value.length > 4 && !["/", "?", "#"].includes(value[4]!)) return fallback;
@@ -46,12 +46,15 @@ export function safeReturnTo(value: FormDataEntryValue | null, fallback = "/ops"
 
 /** 戻り先に結果の文言を付ける（既存の msg / error は置き換える） */
 export function withFlash(path: string, flash: { msg?: string; error?: string }): string {
-  const [base, query = ""] = path.split("?", 2) as [string, string?];
+  const hashAt = path.indexOf("#");
+  const hash = hashAt >= 0 ? path.slice(hashAt) : "";
+  const withoutHash = hashAt >= 0 ? path.slice(0, hashAt) : path;
+  const [base, query = ""] = withoutHash.split("?", 2) as [string, string?];
   const params = new URLSearchParams(query);
   params.delete("msg");
   params.delete("error");
   if (flash.msg) params.set("msg", flash.msg);
   if (flash.error) params.set("error", flash.error);
   const qs = params.toString();
-  return qs ? `${base}?${qs}` : base;
+  return `${qs ? `${base}?${qs}` : base}${hash}`;
 }

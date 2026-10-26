@@ -83,7 +83,8 @@ export type Faq = z.infer<typeof faqSchema>;
 /*
  * 正はテンプレートの SiteInputSchema（templates/astro-site/schema/site-input.ts）。
  * 生成の出力はその同じ形を Codex の構造化出力向けにした SiteGenerationOutputSchema を再利用する
- * （省略可能な項目なし・不明は null・会社情報の行と実績に factRef 必須）。
+ * （新しいSDK応答では全項目必須・不明は null・会社情報の行と実績に factRef 必須）。
+ * 保存済み旧版のために visual だけは省略を読み取れる。
  * テンプレート入力への変換は siteGenerationToSiteInput、逆は siteInputToSiteGeneration。
  * 依存の向きは schemas → astro-site（テンプレートは他パッケージに依存しない）。
  */
@@ -97,6 +98,8 @@ export {
   siteInputToSiteGeneration,
   type ToGenerationResult,
   type ToSiteInputOptions,
+  type VisualDesign,
+  VisualDesignSchema,
 } from "@siteoffer/astro-site/schema/generation";
 
 // ---------- 評価書（evaluation。site-evaluation スキルの evaluation.json） ----------

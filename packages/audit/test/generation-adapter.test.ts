@@ -2,6 +2,7 @@
  * 診断（T7）の採点を、T5の生成ジョブ（MockGenerator。Codexは呼ばない）につないだ場合の確認。
  * モックでの成功は実生成の成功ではない（24.3）。
  */
+import path from "node:path";
 import { type Actor, fixedClock } from "@siteoffer/core";
 import { type Db, generationJobs, siteAudits } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
@@ -84,8 +85,8 @@ describe("生成ジョブにつないだ採点", () => {
     expect(call.purpose).toBe("evaluation");
     expect(call.input.externalData[0]!.content).toContain("kakuu-koumuten.example");
     expect(call.input.attachments.map((a) => a.path)).toEqual([
-      `${options.paths.evaluationSkillDir}/references/rubric.md`,
-      `${options.paths.evaluationSkillDir}/references/output-format.md`,
+      path.join(options.paths.evaluationSkillDir, "references/rubric.md"),
+      path.join(options.paths.evaluationSkillDir, "references/output-format.md"),
     ]);
   });
 

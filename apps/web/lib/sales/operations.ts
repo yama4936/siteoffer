@@ -54,7 +54,8 @@ export function parseJstDateTime(raw: string): Date | undefined | null {
   else if (DATE_ONLY.test(raw)) iso = `${raw}T00:00:00+09:00`;
   else return null;
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, raw.length) === raw ? d : null;
 }
 
 const fail = (message: string): SalesActionState => ({ status: "error", message });
@@ -66,6 +67,7 @@ const MESSAGES: Record<string, string> = {
   not_found: "対象が見つかりません。",
   assignment_not_found: "担当が見つかりません。",
   company_not_found: "企業が見つかりません。",
+  company_contracted: "契約確認中または契約済みです。新しい担当は確保できません。",
   company_not_sellable: "この企業は現在、営業候補として公開されていません。",
   company_suppressed: "この企業は営業拒否などにより、現在は担当を確保できません。",
   already_assigned: "この企業は他の営業ユーザーが担当中です。",
@@ -76,6 +78,7 @@ const MESSAGES: Record<string, string> = {
   not_active: "この担当はすでに終了しています。",
   invalid_input: "入力内容を確認してください。",
   stronger_suppression_exists: "この企業にはより強い営業抑止が記録済みです。",
+  contract_pending: "契約確認中です。担当を手放す場合は、運営に成約報告の差し戻しを依頼してください。",
   already_reported: "この担当はすでに成約報告済みです。",
   invalid_state: "現在の状態ではこの操作は行えません。",
   secret_like_value:
@@ -99,7 +102,7 @@ export async function claimCompany(deps: SalesDeps, fd: FormData): Promise<Sales
   const companyId = id(fd, "companyId");
   if (!companyId) return fail("企業が指定されていません。");
   if (!deps.actor) return fail(MESSAGES.unauthenticated!);
-  const r = await claimAssignment(deps.db, deps.clock, deps.actor, companyId);
+  const r = await claimAssignment(deps.db, deps.clock, deps.actor, companyId, id(fd, "salesOfferId") || "");
   if (!r.ok) return errorState(r);
   return { status: "ok", message: "担当を確保しました。", assignmentId: r.value.id };
 }
@@ -127,6 +130,8 @@ export async function recordSalesActivity(deps: SalesDeps, fd: FormData): Promis
   if (!KIND_VALUES.has(kind)) return fail("活動の種類を選んでください。");
   const occurredAt = parseJstDateTime(str(fd, "occurredAt"));
   const nextActionAt = parseJstDateTime(str(fd, "nextActionAt"));
+  const nextActionMode = str(fd, "nextActionMode") || (nextActionAt ? "replace" : "keep");
+  if (!["keep", "replace", "clear"].includes(nextActionMode)) return fail("次回予定の変更方法を選んでください。");
   if (occurredAt === null) return fail("活動日時の形式が正しくありません。");
   if (nextActionAt === null) return fail("次回対応日の形式が正しくありません。");
 
@@ -152,11 +157,12 @@ export async function recordSalesActivity(deps: SalesDeps, fd: FormData): Promis
     ...(occurredAt ? { occurredAt } : {}),
     ...(note ? { note } : {}),
     ...(nextActionAt ? { nextActionAt } : {}),
+    nextActionMode: nextActionMode as "keep" | "replace" | "clear",
     consultOps: fd.get("consultOps") === "on",
     ...(decline ? { decline } : {}),
   });
   if (!r.ok) return errorState(r);
-  return { status: "ok", message: "活動を記録しました。" };
+  return { status: "ok", message: "活動を記録しました。", activityId: r.value.activity.id };
 }
 
 // ---------- ドメイン希望 ----------
@@ -214,6 +220,7 @@ export async function reportDeal(deps: SalesDeps, fd: FormData): Promise<SalesAc
   if (!deps.actor) return fail(MESSAGES.unauthenticated!);
   const r = await reportContract(deps.db, deps.clock, deps.actor, {
     assignmentId,
+    salesOfferId: id(fd, "salesOfferId") || null,
     productTermsId: id(fd, "productTermsId") || null,
     proposalVersionId: id(fd, "proposalVersionId") || null,
     documentRef: optStr(fd, "documentRef") ?? null,
