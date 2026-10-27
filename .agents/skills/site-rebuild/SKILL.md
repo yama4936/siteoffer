@@ -1,6 +1,6 @@
 ---
 name: site-rebuild
-description: site-evaluation の評価結果と site-proposal の改善提案書（proposal.json）を材料に、元サイトの配色・雰囲気・ページ構成・掲載情報を引き継ぎつつ提案書の施策を反映した改善後サイト（静的HTML/CSSのデモ）を作る。「改善後のサイトを作って」「提案書どおりに作り直して」「デモサイトを作って」「改善案をサイトの形で見せたい」と頼まれたとき、提案書を作った後の次の工程として使う。予約・決済・会員・検索・EC などサーバー処理が中心のサイトは対象外と判定して作らない。提案書がまだなら先に site-proposal を実行する。
+description: site-evaluation の評価結果と site-proposal の改善提案書（proposal.json）から、企業ごとに掲載情報を選定し、出典を追跡できる完成文だけで改善後サイト（静的HTML/CSSのデモ）を作る。「改善後のサイトを作って」「提案書どおりに作り直して」「企業別の情報でそのまま見せられるデモを作って」と頼まれたとき、提案書の次工程として使う。予約・決済・会員・検索・EC などサーバー処理が中心のサイトは対象外と判定する。提案書がまだなら先に site-proposal を実行する。
 ---
 
 # 改善後サイトの作成（site-rebuild）
@@ -10,11 +10,15 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 
 成功条件は、検査に通ることだけではない。会社・業種に合うアートディレクションがあり、PCとスマホの実画面を見て品質基準に合格した状態を完成とする。固定テンプレートへ文章を流し込んだだけの見た目にしない。
 
+掲載内容も固定テンプレートから決めない。企業ごとに、訪問者の判断に必要か、確認済みの根拠があるか、現在も有効と判断できるかを見て選ぶ。HTMLに出すのは、そのまま営業デモとして読める完成文だけとし、仮文言・汎用コピー・空欄を埋めるためのセクションは置かない。
+
 ## 前提として守ること
 
 このデモは企業の許可なく作る**非公式の提案物**。企業の正式なサイトと誤認されたり、事実と違う内容が企業の名前で出回ったりすると、営業の信用と企業との関係を壊す。
 
 - **企業の事実を作らない。** 料金・実績・資格・受賞・お客様の声・スタッフ・受付時間・「無料」・対応エリアなどは、collected.json と evaluation.json で確認できたものだけ使う。未確認項目は営業用HTMLから省き、確認事項を rebuild.json に残す。内部注記を訪問者向け本文に表示しない。
+- **確認済みでも自動採用しない。** 企業名・サービス・連絡先など取得できた情報を全部並べず、主要顧客の疑問と主要行動に必要なものを選ぶ。日付を伴う告知、キャンペーン、採用、価格は取得日時と本文上の有効期間を確認し、鮮度を判断できなければ省く。
+- **コピー例を企業の事実として使わない。** proposal.json の `copy_examples`、一般的な業界知識、元サイトにない標準的な流れやFAQは構成の参考に限る。裏付けのある企業固有情報へ書き直せない場合は掲載しない。
 - **効果を約束しない。** 「問い合わせが増える」「検索で上位に」などをサイトにも rebuild.json にも書かない。
 - **非公式の提案であると全ページに明記する**（REQUIREMENTS.md §11）。上部の帯とフッターの両方。
 - **画像は1点ごとに権利状態と利用範囲を管理する。** 未確認は評価参照のみ、営業デモ許可済みはローカル保存して期限・閲覧制限付きデモだけ、本番許可済みは原則として顧客提供の元データを納品サイトで使う。許諾不明の元画像・ロゴを使わず、ホットリンクもしない。
@@ -75,7 +79,7 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 
 ### 2. 材料を読む
 
-`references/rebuild-guide.md`、`references/design-quality.md`、`references/image-policy.md` を読み、次を集める。読んだ値は rebuild.json の `inherited` に出典付きで残す。
+`references/rebuild-guide.md`、`references/content-selection.md`、`references/design-quality.md`、`references/image-policy.md` を読み、次を集める。読んだ値は rebuild.json の `inherited` に出典付きで残す。
 
 - **配色・雰囲気**：スクリーンショット（Read で画像を見る）のヘッダー・ボタン・見出し・背景の色。主色・補助色・強調色・背景色・文字色を決める。読み取った色は近似値なので `approximate: true`。
 - **ナビゲーション構成**：デスクトップのスクリーンショットのメニュー表記と、collected.json のページの `role`・`title`・`headings`。
@@ -86,7 +90,20 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 - **施策**：`proposal.json` の `actions`（id・target・change.spec・copy_examples・scope・needs_confirmation）と `issues`。
 - **残す良い点**：evaluation の強み（レベル3の項目、evaluation.md の「強み」）。提案で否定しない部分はデモでも残す。
 
-### 3. デザイン方針と画像を決める
+### 3. 企業ごとの掲載情報を確定する
+
+`references/content-selection.md` に従い、HTMLより先に `$OUT/site/content-plan.json` を作る。
+
+- 訪問者が「何の会社か」「自分が対象か」「何を頼めるか」「信頼できるか」「どう連絡するか」を判断するために必要な情報を、対象企業の材料から選ぶ。項目が確認できない場合は定番文で補わず、その問いに答えるセクション自体を省くか、確認済みの別情報で構成する。
+- 掲載する各項目を `selected_content` に記録し、完成文、用途、表示ページ・セクション、出典、採用理由、鮮度判断を持たせる。`status` は `ready` だけを許可する。
+- 取得できたが載せない情報も `excluded_content` に、対象と理由（未確認、古い可能性、権利、主要目的と無関係、重複など）を記録する。
+- 連絡先と外部CTAは、表示文字だけでなく `href` の値まで出典と照合する。電話番号らしい文字列をFAXへ、フォームURLを内部処理へ取り違えない。
+- 書き換えは、意味・条件・数値・固有名詞を変えない編集に限る。複数の出典を合成するときは出典ごとの事実を分けて記録し、組み合わせで新しい主張を作らない。
+- `proposal.json.copy_examples` は、そのまま採用せず `selected_content` の出典で裏付けられる場合だけ企業向けの完成文へ直す。
+
+`content-plan.json` が完成するまでHTMLを書かない。公開本文、title、description、CTA、構造化データは `selected_content` の範囲だけで作る。
+
+### 4. デザイン方針と画像を決める
 
 HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/design-brief.json` を作る。想定顧客、主要行動、ブランド特性、残す要素、変える要素、固有の視覚モチーフ、画像方針を決める。
 
@@ -104,15 +121,16 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 
 文章も同様に、長い本文をそのまま転載しない。要点を再構成し、事実（名称・所在地・電話・業務名など）は元の表記どおりに使う。元の文をそのまま使った箇所は rebuild.json の `inherited.content` に出典URLと一緒に記録する。
 
-### 4. ページ構成を決める
+### 5. ページ構成を決める
 
 `references/rebuild-guide.md` の「ページ構成の決め方」に従う。
 
 - 元サイトの構成を基本にし、提案書の施策で必要なものだけ足す・統合する（例：「ご依頼の流れ」セクションの追加、内容の薄いページをトップのセクションに統合）。
+- 業種ごとの定番構成を先に当てはめない。`content-plan.json` の選定項目が自然な判断順になる最小のページ・セクション構成にする。
 - collected.json に取得されていないページは作らない。ナビゲーションに必要なら rebuild.json の `pages_not_rebuilt` に書く。
 - 提案書の `scope` が `out_of_scope` の施策は反映せず、`actions_not_applied` に理由を書く。
 
-### 5. 作る
+### 6. 作る
 
 `references/rebuild-guide.md` の「作り方の規則」と「セクション別の改善パターン」に沿って `$OUT/site/` に書く。要点：
 
@@ -123,9 +141,10 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - **導線**：ヘッダーに連絡ボタン、スマホは画面下部に固定の電話（確認できた番号があるとき）・問い合わせボタン。各サービス説明の後にも問い合わせへの導線。
 - **非公式の明記**：全ページの上部に細い帯、フッターに「SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません」。本文より強く見せない。
 - **事実**：collected / evaluation で確認できたものだけ。未確認項目はHTMLから省き、rebuild.json の `needs_confirmation` だけに記録する。
+- **完成文だけ**：`content-plan.json.selected_content` の `status: ready` だけを使う。「準備中」「サンプル」「仮」「詳細は後日」などの穴埋めや、出典のない汎用的な売り文句を表示しない。
 - **表現**：design-brief.json の視覚方針をCSS変数とレイアウトへ一貫して反映する。何でもカード化せず、情報の関係に合う表現を選ぶ。
 
-### 6. rebuild.json を書く
+### 7. rebuild.json を書く
 
 `$OUT/site/rebuild.json` に、作ったものの記録を書く。形式は `references/rebuild-guide.md` の「rebuild.json」。
 
@@ -134,16 +153,17 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - `inherited`：元サイトから引き継いだ要素（配色、ロゴの扱い、ナビゲーション、文章・事実、雰囲気）と出典。
 - `images`：画像ごとの出所、権利状態、利用範囲、確認者・確認日時、営業用HTMLでの扱い（`references/image-policy.md`）。
 - `needs_confirmation`：HTMLには出さない確認事項の一覧（対象、関連ページ、企業に何を確認するか）。
+- `content_plan_ref`：`content-plan.json`。`content_selection` に掲載件数、除外件数、全表示主張の追跡確認結果を要約する。
 
 書き終えたら `python3 -m json.tool $OUT/site/rebuild.json > /dev/null` で検証する。
 
-### 7. 検査
+### 8. 検査
 
 ```bash
 python3 <skill>/scripts/check.py $OUT/site > $OUT/site-check.json; echo "exit=$?"
 ```
 
-検査内容：内部リンク切れ、先頭スラッシュの絶対パス、外部リソース、計測タグ、基本メタデータ、代替テキスト、見出し構造、form、非公式表示、営業用HTMLに内部確認注記がないこと、design-brief.json・quality-review.json・rebuild.json の内容。
+検査内容：内部リンク切れ、先頭スラッシュの絶対パス、外部リソース、計測タグ、基本メタデータ、代替テキスト、見出し構造、form、非公式表示、営業用HTMLに内部確認注記・代表的な仮文言がないこと、content-plan.json・design-brief.json・quality-review.json・rebuild.json の内容。
 
 - `errors` が1件でもあれば終了コード1。直して再実行し、0になるまで繰り返す。
 - `warnings` は内容を見て、直すか、直さない理由を rebuild.json の `check.notes` に書く。
@@ -152,7 +172,7 @@ python3 <skill>/scripts/check.py $OUT/site > $OUT/site-check.json; echo "exit=$?
 
 `site-check.json` の結果の要約と quality-review.json の総合点・状態を rebuild.json の `check` に書き写す。
 
-### 8. 報告
+### 9. 報告
 
 アプリのDBに同じ評価が取り込み済みなら、作成したサイトを既存の承認済み版へ上書きせず、会社別の新しい提案版として取り込む。
 
@@ -172,6 +192,7 @@ pnpm demo:import-proposals -- --audit-id <site_audits.id>
 - 作ったページ（ファイル名と役割）
 - 反映した施策（施策IDと反映先ページ）と、反映しなかった施策と理由
 - 元サイトから引き継いだもの（配色・構成）と、画像方針・ロゴを文字にしたこと
+- 企業ごとに選んだ掲載情報の件数・主な選定理由、載せなかった情報の件数・主な理由
 - HTMLから分離した確認事項の件数と主なもの
 - check.py の結果、品質点、PC・スマホの表示確認をしたか
 - 保存場所（`$OUT/site/`）

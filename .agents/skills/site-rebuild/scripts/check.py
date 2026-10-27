@@ -12,7 +12,7 @@
   - form 要素（サーバー処理を前提にしていないか）
   - 非公式の改善案である旨の表示
   - 営業用HTMLへの内部確認注記の露出（1件でもエラー）
-  - design-brief.json / quality-review.json / rebuild.json
+  - content-plan.json / design-brief.json / quality-review.json / rebuild.json
 
 使い方:
   python3 check.py reports/sites/<domain>/<date>/site
@@ -27,7 +27,13 @@ import sys
 import urllib.parse
 from html.parser import HTMLParser
 
-TBC_RE = re.compile(r"【要確認[：:][^】]*】|【要確認】|要確認[：:]|\b(?:TBD|TODO)\b", re.I)
+TBC_RE = re.compile(
+    r"【要確認[：:][^】]*】|【要確認】|要確認[：:]|\b(?:TBD|TODO)\b|"
+    r"(?:サンプル|ダミー|仮)(?:テキスト|文言|文章|コピー|画像)|"
+    r"(?:準備中|差し替え予定|Coming\s+Soon|Lorem\s+ipsum)|"
+    r"ここに.{0,20}(?:入れ|記載|掲載)",
+    re.I,
+)
 DEMO_WORDS = ("非公式",)
 TRACKING_RE = re.compile(
     r"googletagmanager|google-analytics|gtag\(|\bga\(|fbq\(|clarity\.ms|_satellite|hotjar|ptengine", re.I)
@@ -332,7 +338,8 @@ class Checker:
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             self.err(f, None, "rebuild_json", f"JSON として読めない：{e}")
             return None
-        for key in ("pages", "actions_applied", "inherited", "needs_confirmation"):
+        for key in ("pages", "actions_applied", "inherited", "needs_confirmation",
+                    "content_plan_ref", "content_selection"):
             if key not in rb:
                 self.warn(f, None, "rebuild_json", f"{key} がない")
         for pg in rb.get("pages", []) or []:
@@ -348,16 +355,96 @@ class Checker:
             self.warn(f, None, "rebuild_json", "check に quality_status / quality_score がない")
         return rb
 
-    def read_json(self, name):
+    def check_content_plan(self):
+        plan = self.read_json("content-plan.json", check="content_plan")
+        if not isinstance(plan, dict):
+            return None
+        company = plan.get("company")
+        if not isinstance(company, dict) or not company.get("name") or not company.get("source_ref"):
+            self.err("content-plan.json", None, "content_plan", "company.name / company.source_ref が必要")
+
+        selected = plan.get("selected_content")
+        if not isinstance(selected, list) or not selected:
+            self.err("content-plan.json", None, "content_plan", "selected_content は1件以上必要")
+            selected = []
+        seen = set()
+        for index, item in enumerate(selected):
+            label = f"selected_content[{index}]"
+            if not isinstance(item, dict):
+                self.err("content-plan.json", None, "content_plan", f"{label} はオブジェクトでない")
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id.strip():
+                self.err("content-plan.json", None, "content_plan", f"{label}.id がない")
+            elif item_id in seen:
+                self.err("content-plan.json", None, "content_plan", f"id が重複している：{item_id}")
+            else:
+                seen.add(item_id)
+            if item.get("status") != "ready":
+                self.err("content-plan.json", None, "content_plan", f"{label}.status は ready にする")
+            for key in ("purpose", "selection_reason"):
+                if not isinstance(item.get(key), str) or not item[key].strip():
+                    self.err("content-plan.json", None, "content_plan", f"{label}.{key} がない、または空")
+            copy = item.get("copy")
+            if not isinstance(copy, dict) or not copy or not any(
+                    isinstance(value, str) and value.strip() for value in copy.values()):
+                self.err("content-plan.json", None, "content_plan", f"{label}.copy に完成文がない")
+            refs = item.get("source_refs")
+            if not isinstance(refs, list) or not refs:
+                self.err("content-plan.json", None, "content_plan", f"{label}.source_refs がない")
+            else:
+                for ref_index, ref in enumerate(refs):
+                    if not isinstance(ref, dict) or not ref.get("artifact") or not ref.get("path"):
+                        self.err("content-plan.json", None, "content_plan",
+                                 f"{label}.source_refs[{ref_index}] に artifact / path が必要")
+            placements = item.get("placement")
+            if not isinstance(placements, list) or not placements:
+                self.err("content-plan.json", None, "content_plan", f"{label}.placement がない")
+            else:
+                for place_index, place in enumerate(placements):
+                    page = place.get("page") if isinstance(place, dict) else None
+                    if not page or page not in self.pages:
+                        self.err("content-plan.json", None, "content_plan",
+                                 f"{label}.placement[{place_index}].page が実在HTMLと一致しない：{page}")
+            freshness = item.get("freshness")
+            freshness_status = freshness.get("status") if isinstance(freshness, dict) else None
+            if freshness_status not in ("current", "timeless"):
+                self.err("content-plan.json", None, "content_plan",
+                         f"{label}.freshness.status は current / timeless にする")
+            if not isinstance(freshness, dict) or not isinstance(freshness.get("basis"), str) or not freshness["basis"].strip():
+                self.err("content-plan.json", None, "content_plan", f"{label}.freshness.basis がない")
+
+        excluded = plan.get("excluded_content")
+        if not isinstance(excluded, list):
+            self.err("content-plan.json", None, "content_plan", "excluded_content は配列にする")
+        else:
+            allowed_reasons = {"unverified", "stale_or_unclear", "rights", "irrelevant", "duplicate", "conflicting"}
+            for index, item in enumerate(excluded):
+                if not isinstance(item, dict) or not item.get("subject") or item.get("reason") not in allowed_reasons:
+                    self.err("content-plan.json", None, "content_plan",
+                             f"excluded_content[{index}] に subject と既知の reason が必要")
+
+        review = plan.get("review")
+        if not isinstance(review, dict):
+            self.err("content-plan.json", None, "content_plan", "review がない")
+        else:
+            for key in ("visible_claims_traced", "copy_ready", "cta_targets_verified"):
+                if review.get(key) is not True:
+                    self.err("content-plan.json", None, "content_plan", f"review.{key} は照合後に true にする")
+            if not review.get("reviewed_at"):
+                self.err("content-plan.json", None, "content_plan", "review.reviewed_at がない")
+        return plan
+
+    def read_json(self, name, check="quality_artifact"):
         path = os.path.join(self.root, name)
         if not os.path.isfile(path):
-            self.err(name, None, "quality_artifact", f"{name} がない")
+            self.err(name, None, check, f"{name} がない")
             return None
         try:
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            self.err(name, None, "quality_artifact", f"JSON として読めない：{e}")
+            self.err(name, None, check, f"JSON として読めない：{e}")
             return None
 
     def check_quality_artifacts(self):
@@ -450,8 +537,20 @@ class Checker:
         for item in self.tbc:
             self.err(item["file"], item["line"], "internal_annotation",
                      f"営業用HTMLに内部確認注記を表示しない：{item['text']}")
+        content_plan = self.check_content_plan()
         self.check_quality_artifacts()
-        self.check_rebuild_json()
+        rebuild = self.check_rebuild_json()
+        if isinstance(content_plan, dict) and isinstance(rebuild, dict):
+            selection = rebuild.get("content_selection")
+            if isinstance(selection, dict):
+                selected_count = len(content_plan.get("selected_content") or [])
+                excluded_count = len(content_plan.get("excluded_content") or [])
+                if selection.get("selected_count") != selected_count:
+                    self.err("rebuild.json", None, "content_plan", "content_selection.selected_count が content-plan.json と一致しない")
+                if selection.get("excluded_count") != excluded_count:
+                    self.err("rebuild.json", None, "content_plan", "content_selection.excluded_count が content-plan.json と一致しない")
+                if selection.get("visible_claims_traced") is not True:
+                    self.err("rebuild.json", None, "content_plan", "content_selection.visible_claims_traced は照合後に true にする")
 
         by_text = {}
         for t in self.tbc:

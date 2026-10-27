@@ -5,12 +5,13 @@ site-rebuild の手順2〜6で使う。**そのまま貼らない。** 対象サ
 ## 目次
 
 1. 材料の読み方（collected.json の項目対応）
-2. デザインの引き継ぎ
-3. ページ構成の決め方
-4. 作り方の規則
-5. セクション別の改善パターン（A〜G）
-6. ひな形（HTML・CSS）
-7. rebuild.json
+2. 掲載内容の前提
+3. デザインの引き継ぎ
+4. ページ構成の決め方
+5. 作り方の規則
+6. セクション別の改善パターン（A〜G）
+7. ひな形（HTML・CSS）
+8. rebuild.json
 
 ## 1. 材料の読み方
 
@@ -31,7 +32,13 @@ collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの�
 
 `text_excerpt` は3000字で切れている。切れた先の内容を補わない。必要な情報が途中で切れていたら、その内容をHTMLに出さず rebuild.json の確認事項にする。
 
-## 2. デザインの引き継ぎ
+## 2. 掲載内容の前提
+
+HTMLの構成と文章は `content-plan.json` の `selected_content` から作る。取得できた情報を網羅するのではなく、対象企業の訪問者が判断するために必要で、出典と鮮度を確認できた内容だけを選ぶ。詳しい選定基準と形式は [content-selection.md](content-selection.md) に従う。
+
+提案書の `copy_examples` は完成原稿ではない。例文に含まれる事実を `collected.json` または `evaluation.json` で裏付け、企業固有の完成文にできた場合だけ使う。裏付けられない例文、定番のサービス・流れ・FAQ、仮文言は掲載しない。
+
+## 3. デザインの引き継ぎ
 
 目的は「同じ会社のサイトだと分かること」と「改善点が見て分かること」の両立。見た目を全部変えると比較できず、全部残すと改善が伝わらない。
 
@@ -66,7 +73,7 @@ a,b=sorted([L(sys.argv[1]),L(sys.argv[2])]); print(round((b+0.05)/(a+0.05),2))
 
 スクリーンショットがない・色が読み取れないときは、紺系（例：#1f3a5f）＋白の中立配色にし、`inherited.colors` に「元サイトの配色：不明」と書く。
 
-## 3. ページ構成の決め方
+## 4. ページ構成の決め方
 
 1. collected.json で取得できたページを並べる（role ごと）。
 2. 各ページを次のどれかに振り分ける。
@@ -84,7 +91,7 @@ a,b=sorted([L(sys.argv[1]),L(sys.argv[2])]); print(round((b+0.05)/(a+0.05),2))
 
 ページを増やしすぎない。デモは比較・説明に使うもので、目安は1〜6ページ。
 
-## 4. 作り方の規則
+## 5. 作り方の規則
 
 ### ファイル
 
@@ -136,6 +143,7 @@ $OUT/site/
 ### 事実と確認事項
 
 - HTMLに書いてよいのは、collected.json・evaluation.json で確認できた事実（社名・所在地・電話・業務内容の名称・確認済みの強み等）だけ。
+- さらに `content-plan.json.selected_content` で `status: ready` とした完成文だけを書く。確認済みでも主要目的に不要、古い可能性、重複、矛盾がある情報は載せない。
 - 受付時間・料金・「無料」・対応範囲・実績・資格・お客様の声・スタッフ・FAQの答え・創業年が未確認なら、HTMLの該当行・カード・セクションを省く。
 - `【要確認】`、`TBD`、ダミー値をHTMLに表示しない。確認したい内容は rebuild.json の `needs_confirmation` に、対象・関連ページ・質問を書いて残す。
 - 電話・メールが確認できないときは、存在しない連絡ボタンを作らない。確認済みの外部フォームがあればそれだけを使い、連絡手段が何もなければ問い合わせセクション自体を省く。
@@ -148,7 +156,7 @@ $OUT/site/
 - 文字入りの元画像（電話番号画像・見出し画像）は、確認済み内容だけをHTMLテキストに置き換える。
 - 元画像の参照URLと許諾確認の必要性は rebuild.json に記録する。未確認素材と元サイトのスクリーンショットは評価参照だけにし、営業デモへ転用しない。
 
-## 5. セクション別の改善パターン
+## 6. セクション別の改善パターン
 
 提案書の施策IDに対応するパターン。カテゴリは評価項目（A〜G）。使ったら rebuild.json の `actions_applied[].how` に何をしたか書く。
 
@@ -196,7 +204,7 @@ $OUT/site/
 - 代替テキスト（G1）、`lang="ja"`・ボタンやリンクの文字で行き先が分かる（G2）、コントラストとフォーカス表示（G3）。
 - 色だけで情報を伝えない。
 
-## 6. 最低限の構造例
+## 7. 最低限の構造例
 
 これはデザインのひな形ではなく、必須要素の位置関係を示すだけ。クラス名、レイアウト、セクション表現をそのまま全案件へ流用しない。design-brief.json に合わせて構成する。
 
@@ -262,7 +270,7 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
 
 色は元サイトから読んだ値に置き換え、組み合わせごとにコントラストを確認する。
 
-## 7. rebuild.json
+## 8. rebuild.json
 
 ```json
 {
@@ -277,6 +285,8 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
     "scope_ref": "../rebuild-scope.json"
   },
   "company": {"name": "株式会社例", "name_source": "evaluation.json company.name_source"},
+  "content_plan_ref": "content-plan.json",
+  "content_selection": {"selected_count": 8, "excluded_count": 3, "visible_claims_traced": true},
   "demo_notice": "SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません。",
   "pages": [
     {"file": "index.html", "title": "…", "role": "top", "source_urls": ["https://example.co.jp/"], "sections": ["ファーストビュー", "業務内容", "ご依頼の流れ", "お問い合わせ"]}
@@ -318,4 +328,5 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
 ```
 
 - `actions_applied[].action_id` は proposal.json の `actions[].id` と一致させる。全施策が `actions_applied` か `actions_not_applied` のどちらかに入ること。
+- `content_selection` の件数は content-plan.json と一致させる。`visible_claims_traced` は全HTMLの表示内容を照合してから true にする。
 - `needs_confirmation` は営業用HTMLから省いた未確認事項を対象ごとにまとめる。関連するページと、企業へ聞く内容を書く。確認事項があること自体はデモの不合格ではなく、画面に内部注記を露出することが不合格。
