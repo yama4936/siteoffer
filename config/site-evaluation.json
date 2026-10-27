@@ -1,11 +1,11 @@
 {
-  "_comment": "サイト評価・改善提案書スキルの設定。null は未決（ユーザー判断待ち）。値を決めたら docs/DECISIONS.md に変更理由を記録する。",
+  "_comment": "サイト評価・改善提案書スキルの設定。正式設定の変更時は docs/DECISIONS.md に変更理由を記録する。",
   "rubric_version": "0.1",
   "proposal": {
-    "threshold": null,
-    "_threshold_note": "総合点がこの値未満なら改善提案書を作成する。未決（ユーザーが後で判断）。null の間は判定保留とし、提案書を自動作成しない。",
-    "critical_flags_trigger": null,
-    "_critical_flags_trigger_note": "true なら致命項目が1つでもあれば点数に関わらず作成対象にする。未決。null/false の間は致命項目を記録するだけ。",
+    "threshold": 70,
+    "_threshold_note": "総合点が70未満なら改善提案書を作成する。2026-10-27にユーザーが推奨設定を採用。",
+    "critical_flags_trigger": true,
+    "_critical_flags_trigger_note": "致命項目が1つでもあれば点数に関わらず作成対象にする。2026-10-27にユーザーが推奨設定を採用。",
     "min_coverage": 0.7,
     "_min_coverage_note": "推奨案。評価できた配点の割合がこれ未満なら総合点を確定せず判定保留にする。"
   },
