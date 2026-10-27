@@ -72,7 +72,7 @@ export function CompanyWorkspace({
             )}
           </div>
         </header>
-        {c.mock && (
+        {c.mock && !c.preview && (
           <p className="sales-fixture-notice">
             架空データの動作検証です。改善案のサイトはまだ作成していないため、準備中と表示しています。
           </p>

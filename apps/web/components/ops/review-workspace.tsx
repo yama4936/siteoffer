@@ -395,7 +395,7 @@ export function ReviewWorkspace({
                 </a>
               )}
             </header>
-            {content.fixedSample === true && (
+            {content.fixedSample === true && !preview && (
               <div className="review-version-notice" role="note">
                 <strong>動作確認用の提案です</strong>
                 <p>改善案のサイトはまだ作成していないため、準備中と表示しています。</p>
