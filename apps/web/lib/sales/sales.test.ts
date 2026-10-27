@@ -362,6 +362,19 @@ describe("企業詳細", () => {
     expect(d.proposal?.hasDemo).toBe(true);
     expect(JSON.stringify(d.proposal)).not.toContain("/demo/");
     expect(d.terms.map((t) => t.ready)).toEqual([true]);
+    // 固定サンプル（mock）のデモは、まだ作成していない扱い
+    await db
+      .update(proposalVersions)
+      .set({ content: { callScript, generator: "mock" } })
+      .where(eq(proposalVersions.proposalId, proposal!.id));
+    const mock = await getCompanyDetail(db, me.actor, c.id);
+    if (!mock.ok) throw new Error(mock.error);
+    expect(mock.value.proposal?.isMock).toBe(true);
+    expect(mock.value.proposal?.hasDemo).toBe(false);
+    await db
+      .update(proposalVersions)
+      .set({ content: { callScript } })
+      .where(eq(proposalVersions.proposalId, proposal!.id));
     // DB に置き場所があっても、デモの実体が無ければ「準備中」として扱う
     await rm(demoDir, { recursive: true, force: true });
     const gone = await getCompanyDetail(db, me.actor, c.id);

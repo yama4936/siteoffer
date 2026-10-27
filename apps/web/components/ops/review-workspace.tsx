@@ -398,7 +398,7 @@ export function ReviewWorkspace({
             {content.fixedSample === true && (
               <div className="review-version-notice" role="note">
                 <strong>動作確認用の提案です</strong>
-                <p>表示サイトは固定サンプルで、実企業の情報やデザイン画像の再現品質を確認したものではありません。</p>
+                <p>改善案のサイトはまだ作成していないため、準備中と表示しています。</p>
               </div>
             )}
             {version && !version.isLatest && (

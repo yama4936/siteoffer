@@ -47,7 +47,7 @@ import {
   DEFAULT_ACTIVITY_HISTORY,
 } from "../activity-history-types";
 import { type CompanyListFilter, type DirectoryQuery, normalizeDirectoryFilter } from "./directory-query";
-import { hasStaticPreview } from "./improvement-files";
+import { hasProposalDemo } from "./improvement-files";
 
 export { COMPANY_SORTS, type CompanyListFilter, type CompanySort, parseCompanySort } from "./directory-query";
 
@@ -543,7 +543,7 @@ export async function getCompanyDetail(
       ? {
           versionId: pv.id,
           version: pv.version,
-          hasDemo: await hasStaticPreview(pv.demoArtifactDir),
+          hasDemo: await hasProposalDemo(pv),
           isMock: (pv.content as { generator?: string } | null)?.generator === "mock",
           hasDesignPdf: typeof (pv.content as { designVersionId?: unknown } | null)?.designVersionId === "string",
           proposalText: pickContent(pv.content, ["proposalText"], proposalTextSchema),
@@ -817,7 +817,7 @@ export async function getMyAssignmentDetail(
     terms,
     salesOfferId: bound?.offer.id ?? null,
     proposalVersionId: pv?.id ?? null,
-    proposalHasDemo: await hasStaticPreview(pv?.demoArtifactDir ?? null),
+    proposalHasDemo: pv ? await hasProposalDemo(pv) : false,
   });
 }
 

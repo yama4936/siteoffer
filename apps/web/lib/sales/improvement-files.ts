@@ -97,3 +97,9 @@ export async function hasStaticPreview(directory: string | null): Promise<boolea
   await file.handle.close();
   return true;
 }
+
+/** 改善案として見せられる提案デモか。固定サンプル（mock）はまだ作成していない扱いにする */
+export async function hasProposalDemo(version: { demoArtifactDir: string | null; content: unknown }): Promise<boolean> {
+  if ((version.content as { generator?: unknown } | null)?.generator === "mock") return false;
+  return hasStaticPreview(version.demoArtifactDir);
+}

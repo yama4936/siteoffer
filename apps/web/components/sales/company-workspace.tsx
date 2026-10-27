@@ -74,7 +74,7 @@ export function CompanyWorkspace({
         </header>
         {c.mock && (
           <p className="sales-fixture-notice">
-            架空データの動作検証です。表示サイトは固定サンプルで、デザイン画像の再現品質を確認したものではありません。
+            架空データの動作検証です。改善案のサイトはまだ作成していないため、準備中と表示しています。
           </p>
         )}
         <ol className="review-steps">
