@@ -79,6 +79,86 @@ export async function getImprovementSource(
   });
 }
 
+<<<<<<< Updated upstream
+=======
+// ---------- ファイルの安全な解決 ----------
+
+function isInside(root: string, target: string): boolean {
+  return target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+async function realpathOrNull(p: string): Promise<string | null> {
+  try {
+    return await realpath(p);
+  } catch {
+    return null;
+  }
+}
+
+/** root（実体のパス）の中の、名前 parts のディレクトリの実体のパス。外に出る・ディレクトリでなければ null */
+async function realDirInside(rootReal: string, ...parts: string[]): Promise<string | null> {
+  const real = await realpathOrNull(path.join(rootReal, ...parts));
+  if (!real || !isInside(rootReal, real)) return null;
+  try {
+    return (await stat(real)).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+type OpenResult = { kind: "file"; handle: FileHandle; size: number; filePath: string } | { kind: "missing" };
+
+/** 実体のパスが rootReal の中にあることを確かめてから O_NOFOLLOW で開き、通常のファイルなら返す */
+async function openRegularFileInside(rootReal: string, candidate: string): Promise<OpenResult> {
+  const real = await realpathOrNull(candidate);
+  if (!real || !isInside(rootReal, real)) return { kind: "missing" };
+  let handle: FileHandle;
+  try {
+    handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return { kind: "missing" };
+  }
+  const stats = await handle.stat();
+  if (!stats.isFile()) {
+    await handle.close();
+    return { kind: "missing" };
+  }
+  return { kind: "file", handle, size: stats.size, filePath: real };
+}
+
+/** 成果物ディレクトリの実体のパス。無い・ディレクトリでなければ null */
+async function artifactRoot(artifactDir: string): Promise<string | null> {
+  if (!path.isAbsolute(artifactDir)) return null;
+  const real = await realpathOrNull(artifactDir);
+  if (!real) return null;
+  try {
+    return (await stat(real)).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 改善後サイトのルート（<artifactDir>/site の実体）。site がリンクで外を指す場合も null */
+async function siteRoot(artifactDir: string): Promise<string | null> {
+  const root = await artifactRoot(artifactDir);
+  return root ? realDirInside(root, "site") : null;
+}
+
+/**
+ * 共有用に使える改善後サイトの実体ディレクトリを返す。
+ *
+ * DB の artifactDir だけを起点にし、site が成果物の外を指すリンクでないことと
+ * index.html が通常ファイルであることを確認する。共有側には評価資料を含む親ではなく、
+ * この戻り値（<artifactDir>/site）だけを渡す。
+ */
+export async function resolveImprovementSiteDir(artifactDir: string | null): Promise<string | null> {
+  if (!artifactDir) return null;
+  const site = await siteRoot(artifactDir);
+  if (!site) return null;
+  return (await existsAsFile(site, path.join(site, "index.html"))) ? site : null;
+}
+
+>>>>>>> Stashed changes
 // ---------- 改良資料 ----------
 
 /** <artifactDir>/proposal.md を読む。無い・大きすぎる・外を指すリンクなら null */
