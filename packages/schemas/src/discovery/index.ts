@@ -86,3 +86,48 @@ export const discoveryFailureSchema = z.object({
   reason: z.string(),
 });
 export type DiscoveryFailure = z.infer<typeof discoveryFailureSchema>;
+
+/**
+ * company-discovery スキル（エージェントのWeb調査）が書く候補ファイル（candidates.json）の1社分。
+ * 項目名はスキルの成果物に合わせてスネークケース。evidence はページ上に書かれていたものだけ（推測で埋めない）。
+ */
+export const agentWebCandidateSchema = z.object({
+  name: z.string().trim().min(1),
+  corporate_number: z
+    .string()
+    .regex(/^\d{13}$/)
+    .nullable()
+    .default(null),
+  prefecture: z.string().nullable().default(null),
+  city: z.string().nullable().default(null),
+  address: z.string().nullable().default(null),
+  address_source_url: z.string().url().nullable().default(null),
+  industry: z.string().nullable().default(null),
+  representative_phone: z.string().nullable().default(null),
+  /** 企業を見つけたページ（名簿・検索結果・公式サイト等） */
+  found_via: z.object({ url: z.string().url(), note: z.string().optional() }),
+  fetched_at: z.string().datetime({ offset: true }),
+  official_site: z
+    .object({
+      url: z.string().url(),
+      /** 社名・所在地を確認したページ（会社概要等） */
+      evidence_url: z.string().url(),
+      evidence: z.object({
+        company_name: z.string().nullable().default(null),
+        address: z.string().nullable().default(null),
+        corporate_number: z.string().nullable().default(null),
+      }),
+    })
+    .nullable(),
+  other_sites: z.array(z.object({ url: z.string().url(), third_party: z.boolean().default(true) })).default([]),
+  /** 除外条件（上場・大企業・FC・支店）の確認結果と出典 */
+  size_check: z.unknown().optional(),
+});
+export type AgentWebCandidate = z.output<typeof agentWebCandidateSchema>;
+
+export const agentWebFileSchema = z.object({
+  criteria: z.unknown(),
+  candidates: z.array(agentWebCandidateSchema).max(1000),
+  excluded: z.array(z.unknown()).default([]),
+});
+export type AgentWebFile = z.output<typeof agentWebFileSchema>;

@@ -154,6 +154,18 @@ python3 <skill>/scripts/check.py $OUT/site > $OUT/site-check.json; echo "exit=$?
 
 ### 8. 報告
 
+アプリのDBに同じ評価が取り込み済みなら、作成したサイトを既存の承認済み版へ上書きせず、会社別の新しい提案版として取り込む。
+
+```bash
+# 通常のローカルDB
+pnpm reports:import-proposals -- --audit-id <site_audits.id>
+
+# pnpm demo のDB
+pnpm demo:import-proposals -- --audit-id <site_audits.id>
+```
+
+この処理は、DBに保存された評価成果物ディレクトリと評価IDを照合し、安全確認した `$OUT/site/` だけを `in_review` の新しい提案版へ紐付ける。同じ成果物の再実行では版を増やさない。運営レビューで承認された後、その版を営業画面の共有リンクから発行する。既存の承認済み版や発行済みリンクは変更しない。DB未取込・対象外・検査未完了なら無理に紐付けず、未完了として報告する。
+
 ユーザーに次を短く伝える。
 
 - 対象判定（rebuild-scope.json の eligible と主な理由・除外した機能）
@@ -163,6 +175,7 @@ python3 <skill>/scripts/check.py $OUT/site > $OUT/site-check.json; echo "exit=$?
 - HTMLから分離した確認事項の件数と主なもの
 - check.py の結果、品質点、PC・スマホの表示確認をしたか
 - 保存場所（`$OUT/site/`）
+- アプリへ取り込んだ場合は提案版番号と状態（`in_review` / 承認済み）。取り込めなかった場合は理由
 
 「モックの成功」「ローカルで表示確認」「実公開」を区別して書く。このスキルでは公開・企業への送付はしない。
 

@@ -13,7 +13,7 @@
 - 会話記録はユーザー発言、注釈、公開回答を対象とする。システム・開発者指示、内部推論、APIキー、トークン、環境変数の秘密値は保存しない。
 - 担当重複、アクセス権、契約から報酬の重複発生、収集・生成ジョブの再実行など、重要な振る舞いを検証する。
 - モック、ローカル動作、実API実行、AWS公開、実契約をそれぞれ区別して報告する。
-- サイトの評価は .agents/skills/site-evaluation、改善提案書は .agents/skills/site-proposal の SKILL.md に従う。評価指標の配点・閾値は config/site-evaluation.json。閾値（null）は未決で、ユーザーが判断する。
+- 企業候補の探索は .agents/skills/company-discovery（エージェントの調査で、手動取り込み扱い）、サイトの評価は .agents/skills/site-evaluation、改善提案書は .agents/skills/site-proposal の SKILL.md に従う。評価指標の配点・閾値は config/site-evaluation.json。閾値（null）は未決で、ユーザーが判断する。
 - reports/ は実在企業の評価結果を含むためGitに入れない。
 - 外部公開、営業連絡、課金を伴う処理は、その時点でのユーザー指示と許可範囲を確認する。本要件書自体は企業への連絡を指示していない。
 - Git変更は対象ファイルだけをコミットする。共有履歴の強制書き換えを行わない。

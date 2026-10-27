@@ -13,7 +13,7 @@ import {
   siteAudits,
   websites,
 } from "@siteoffer/db";
-import { createDiscoveryJob } from "@siteoffer/discovery";
+import { createDiscoveryJob, FixtureProvider, MockSearchProvider, runDiscovery } from "@siteoffer/discovery";
 import { type Generator, MockGenerator } from "@siteoffer/generation";
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -169,6 +169,26 @@ describe("パイプラインを最後まで通す", () => {
       }
     }
     expect(audited.size).toBeGreaterThan(1);
+  });
+
+  it("ワーカーで有効でない取得元（スクリプトで取り込んだ agent-web 等）の成功済みジョブは、診断へ送らない", async () => {
+    env = await setupEnv({ threshold: 100 });
+    // 取り込みスクリプトと同じく、ワーカーの外で収集を終えたジョブ（取得元の名前だけ agent-web にする）
+    const agent = new FixtureProvider({ name: "agent-web" });
+    const job = await createDiscoveryJob(env.db, env.clock, { provider: agent.name, criteria: ONE_COMPANY_CRITERIA });
+    if (!job.ok) throw new Error(job.error);
+    const r = await runDiscovery(env.db, env.clock, job.value.jobId, {
+      companies: agent,
+      search: new MockSearchProvider(),
+    });
+    expect(r).toMatchObject({ ok: true, value: { status: "succeeded", created: 1 } });
+    expect((await company(env)).officialSiteStatus).toBe("confirmed");
+
+    const out = await executeStep(env.deps, discoveryStep, { discoveryJobId: job.value.jobId });
+    expect(out).toMatchObject({ status: "failed" });
+    expect(env.queue.size).toBe(0);
+    expect(await env.db.select().from(siteAudits)).toHaveLength(0);
+    expect((await company(env)).pipelineStatus).toBe("collected");
   });
 });
 

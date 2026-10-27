@@ -7,13 +7,23 @@
  * - 改善後サイトの配信は apps/preview の static.ts と同じ安全対策をとる
  *   （生のパスを1段ずつ確かめる・ドットで始まる名前を拒否・realpath で外に出ないことを確認・O_NOFOLLOW で開く）。
  */
-import { constants } from "node:fs";
-import { type FileHandle, open, realpath, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { type Actor, err, ok, type Result } from "@siteoffer/core";
 import { type DbOrTx, siteAudits } from "@siteoffer/db";
 import { and, desc, eq } from "drizzle-orm";
+import {
+  artifactRoot,
+  existsAsFile,
+  isInside,
+  openRegularFileInside,
+  realpathOrNull,
+  resolveImprovementSiteDir,
+  siteRoot,
+} from "./improvement-files.ts";
 import { findReadableCompany } from "./queries.ts";
+
+export { resolveImprovementSiteDir };
 
 /** proposal.md の読み込み上限。これを超える資料は表示しない */
 export const MAX_PROPOSAL_BYTES = 2 * 1024 * 1024;
@@ -69,69 +79,6 @@ export async function getImprovementSource(
   });
 }
 
-// ---------- ファイルの安全な解決 ----------
-
-function isInside(root: string, target: string): boolean {
-  return target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
-}
-
-async function realpathOrNull(p: string): Promise<string | null> {
-  try {
-    return await realpath(p);
-  } catch {
-    return null;
-  }
-}
-
-/** root（実体のパス）の中の、名前 parts のディレクトリの実体のパス。外に出る・ディレクトリでなければ null */
-async function realDirInside(rootReal: string, ...parts: string[]): Promise<string | null> {
-  const real = await realpathOrNull(path.join(rootReal, ...parts));
-  if (!real || !isInside(rootReal, real)) return null;
-  try {
-    return (await stat(/* turbopackIgnore: true */ real)).isDirectory() ? real : null;
-  } catch {
-    return null;
-  }
-}
-
-type OpenResult = { kind: "file"; handle: FileHandle; size: number; filePath: string } | { kind: "missing" };
-
-/** 実体のパスが rootReal の中にあることを確かめてから O_NOFOLLOW で開き、通常のファイルなら返す */
-async function openRegularFileInside(rootReal: string, candidate: string): Promise<OpenResult> {
-  const real = await realpathOrNull(candidate);
-  if (!real || !isInside(rootReal, real)) return { kind: "missing" };
-  let handle: FileHandle;
-  try {
-    handle = await open(/* turbopackIgnore: true */ real, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch {
-    return { kind: "missing" };
-  }
-  const stats = await handle.stat();
-  if (!stats.isFile()) {
-    await handle.close();
-    return { kind: "missing" };
-  }
-  return { kind: "file", handle, size: stats.size, filePath: real };
-}
-
-/** 成果物ディレクトリの実体のパス。無い・ディレクトリでなければ null */
-async function artifactRoot(artifactDir: string): Promise<string | null> {
-  if (!path.isAbsolute(artifactDir)) return null;
-  const real = await realpathOrNull(artifactDir);
-  if (!real) return null;
-  try {
-    return (await stat(/* turbopackIgnore: true */ real)).isDirectory() ? real : null;
-  } catch {
-    return null;
-  }
-}
-
-/** 改善後サイトのルート（<artifactDir>/site の実体）。site がリンクで外を指す場合も null */
-async function siteRoot(artifactDir: string): Promise<string | null> {
-  const root = await artifactRoot(artifactDir);
-  return root ? realDirInside(root, "site") : null;
-}
-
 // ---------- 改良資料 ----------
 
 /** <artifactDir>/proposal.md を読む。無い・大きすぎる・外を指すリンクなら null */
@@ -153,22 +100,15 @@ export interface ImprovementAvailability {
   hasSite: boolean;
 }
 
-async function existsAsFile(rootReal: string, candidate: string): Promise<boolean> {
-  const opened = await openRegularFileInside(rootReal, candidate);
-  if (opened.kind !== "file") return false;
-  await opened.handle.close();
-  return true;
-}
-
 /** 改良資料（proposal.md）と改善後サイト（site/index.html）があるか */
 export async function getImprovementAvailability(artifactDir: string | null): Promise<ImprovementAvailability> {
   if (!artifactDir) return { hasProposal: false, hasSite: false };
   const root = await artifactRoot(artifactDir);
   if (!root) return { hasProposal: false, hasSite: false };
-  const site = await realDirInside(root, "site");
+  const site = await resolveImprovementSiteDir(artifactDir);
   return {
     hasProposal: await existsAsFile(root, path.join(root, "proposal.md")),
-    hasSite: site ? await existsAsFile(site, path.join(site, "index.html")) : false,
+    hasSite: site !== null,
   };
 }
 

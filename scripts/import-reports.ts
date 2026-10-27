@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { moveCompanyStatus } from "../apps/worker/src/pipeline/status.ts";
 import {
   type CriticalFlag,
   categoryOf,
@@ -144,6 +145,16 @@ try {
       });
       let companyId = site?.companyId;
       let websiteId = site?.id;
+      if (companyId && status === "evaluated") {
+        // 収集ジョブ（company-discovery スキル等）で入った診断前の企業は、評価の取り込みで診断済みに進める
+        await moveCompanyStatus(tx, systemClock, {
+          companyId,
+          from: ["collected", "site_confirmed"],
+          to: "audited",
+          reason: "スキルの評価結果を取り込んだ",
+          meta: { source: rel },
+        });
+      }
       if (!companyId) {
         const [row] = await tx
           .insert(companies)

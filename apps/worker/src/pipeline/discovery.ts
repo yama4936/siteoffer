@@ -37,9 +37,10 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
 
     let counts = { found: job.foundCount, created: job.createdCount, updated: job.updatedCount };
     let status: DiscoveryStepResult["status"] = "already_succeeded";
-    if (job.status !== "succeeded") {
-      const provider = deps.discovery.providers[job.provider];
-      if (!provider) {
+    // 有効でない取得元のジョブは、成功済みでも診断へ送らない（スクリプトで取り込んだ agent-web 等。診断はスキル側で行う）
+    const provider = deps.discovery.providers[job.provider];
+    if (!provider) {
+      if (job.status !== "succeeded")
         await ctx.withOwnership((tx) =>
           stopDiscoveryJob(
             { db: tx, clock },
@@ -47,8 +48,9 @@ export const discoveryStep: StepDefinition<DiscoveryPayload, DiscoveryStepResult
             `取得元「${job.provider}」はこのワーカーで有効になっていません。設定後に再試行してください`,
           ),
         );
-        throw new PreconditionError(`取得元「${job.provider}」はこのワーカーで有効になっていない`);
-      }
+      throw new PreconditionError(`取得元「${job.provider}」はこのワーカーで有効になっていない`);
+    }
+    if (job.status !== "succeeded") {
       if (job.status === "running" && ctx.attempt > 1) {
         // このステップの前回の試行が途中で止まり、running のまま残っている
         await ctx.withOwnership((tx) =>
