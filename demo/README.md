@@ -127,6 +127,7 @@ DEMO_WEB_PROD=1 pnpm demo
 - `DEMO_PUBLIC_PREVIEW_URL`：営業の共有リンクと、webに埋め込むプレビューのURL。`WEB_BASE_URL`：顧客確認URL。
   `PREVIEW_FRAME_ANCESTORS`：プレビューを埋め込んでよいオリジン（スペース区切り）。
 - やめるときはトンネルを止める（デモは Ctrl+C）。Quick Tunnel のURLは張り直すたびに変わり、古い共有リンクも使えなくなる。
+- 固定のURLで常時公開し、`origin/main` の更新を自動で反映する場合は [deploy/cloudflare/README.md](../deploy/cloudflare/README.md)（名前付きトンネル・公開専用クローン）を使う。
 - 公開前に認証・接続元制限・公開期限と停止方法を確認する。デモ用パスワードは乱数だが、公開中はログを見て、不要になったらすぐ止める。
 
 ## 環境変数（`pnpm demo` が子プロセスに設定する値）

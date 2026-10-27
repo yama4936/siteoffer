@@ -232,12 +232,9 @@ importers:
       next:
         specifier: 16.4.2
         version: 16.4.2(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-<<<<<<< Updated upstream
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
-=======
->>>>>>> Stashed changes
       react:
         specifier: 19.3.0
         version: 19.3.0

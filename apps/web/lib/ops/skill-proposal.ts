@@ -5,11 +5,7 @@ import { type Actor, authorize, type Clock, err, ok, type Result, recordEvent } 
 import { type DbOrTx, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { proposalTextSchema } from "@siteoffer/schemas";
 import { and, desc, eq } from "drizzle-orm";
-<<<<<<< Updated upstream
 import { resolveImprovementSiteDir } from "../sales/improvement-files.ts";
-=======
-import { resolveImprovementSiteDir } from "../sales/improvement.ts";
->>>>>>> Stashed changes
 
 type Json = Record<string, unknown>;
 
