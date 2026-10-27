@@ -2,6 +2,7 @@
 import { ArrowRight, CheckCircle2, ExternalLink, Monitor, Smartphone } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { SitePreview } from "@/components/shell/site-preview";
+import { usePreviewDevice } from "@/components/shell/use-preview-device";
 
 type Props = {
   company: {
@@ -40,7 +41,7 @@ export function CompanyWorkspace({
   script,
 }: Props) {
   const [tab, setTab] = useState("compare");
-  const [device, setDevice] = useState("desktop");
+  const [device, setDevice] = usePreviewDevice();
   return (
     <div className="review-layout sales-case">
       <aside className="review-queue">{queue}</aside>

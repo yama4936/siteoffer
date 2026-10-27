@@ -3,6 +3,7 @@
 import { ExternalLink, Monitor, RefreshCw, Smartphone } from "lucide-react";
 import { startTransition, useEffect, useRef, useState } from "react";
 import { openDeliveryPreview } from "@/app/(ops)/ops/delivery/[deliveryId]/review/actions";
+import { usePreviewDevice } from "@/components/shell/use-preview-device";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,21 +17,7 @@ export function DeliveryPreviewPair({
   selected: { id: string; version: number; available: boolean };
   comparison?: { id: string; version: number; available: boolean };
 }) {
-  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
-  const chosen = useRef(false);
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 640px)");
-    const sync = () => {
-      if (!chosen.current) setDevice(media.matches ? "mobile" : "desktop");
-    };
-    sync();
-    media.addEventListener("change", sync);
-    return () => media.removeEventListener("change", sync);
-  }, []);
-  const chooseDevice = (next: "desktop" | "mobile") => {
-    chosen.current = true;
-    setDevice(next);
-  };
+  const [device, chooseDevice] = usePreviewDevice();
   return (
     <section aria-label="制作版のプレビュー" className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">

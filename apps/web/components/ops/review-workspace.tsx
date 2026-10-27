@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useId, useRef, useState, useTransition } from "react";
 import { commitReviewDraftAction, loadReviewDraftAction, saveReviewDraftAction } from "@/app/(ops)/ops/review/actions";
 import { SitePreview } from "@/components/shell/site-preview";
+import { usePreviewDevice } from "@/components/shell/use-preview-device";
 import { usePersonalDraft } from "@/components/use-personal-draft";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
 import { reviewCheckGuide } from "@/lib/ops/review-check-guide";
@@ -101,7 +102,7 @@ export function ReviewWorkspace({
   const [tab, setTab] = useState(
     c?.version?.comparison.status === "ready" && c.version.comparison.basis === "revision" ? "changes" : "compare",
   );
-  const [device, setDevice] = useState("desktop");
+  const [device, setDevice] = usePreviewDevice();
   const queueItemsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!c?.id || !items.some((item) => item.id === c.id)) return;
