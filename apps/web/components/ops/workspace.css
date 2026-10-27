@@ -99,6 +99,13 @@
   color: #a8b8d2;
   font-size: 10px;
 }
+.ops-account button {
+  color: #c7d4ea;
+}
+.ops-account button:hover {
+  background: #ffffff1a;
+  color: #fff;
+}
 .ops-avatar {
   border-radius: 50%;
   background: #dce8f6;
@@ -167,7 +174,8 @@
   white-space: nowrap;
 }
 .ops-top-logout {
-  display: none;
+  display: flex;
+  flex: 0 0 auto;
 }
 .ops-top-logout button {
   display: inline-flex;
@@ -1269,10 +1277,6 @@
   }
   .ops-account {
     display: none;
-  }
-  .ops-top-logout {
-    display: flex;
-    flex: 0 0 auto;
   }
   .ops-topbar {
     height: 56px;
