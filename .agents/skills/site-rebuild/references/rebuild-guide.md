@@ -36,6 +36,8 @@ collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの�
 
 HTMLの構成と文章は `content-plan.json` の `selected_content` から作る。取得できた情報を網羅するのではなく、対象企業の訪問者が判断するために必要で、出典と鮮度を確認できた内容だけを選ぶ。詳しい選定基準と形式は [content-selection.md](content-selection.md) に従う。
 
+文章は `source_profile` の固有語・語調・情報の優先順位を引き継ぐ。名称や見出ししか取得できていない項目は名称だけを使い、説明文を生成しない。主要内容の材料が不足する場合は `readiness.status: incomplete` としてサイトを完成扱いにしない。
+
 提案書の `copy_examples` は完成原稿ではない。例文に含まれる事実を `collected.json` または `evaluation.json` で裏付け、企業固有の完成文にできた場合だけ使う。裏付けられない例文、定番のサービス・流れ・FAQ、仮文言は掲載しない。
 
 ## 3. デザインの引き継ぎ

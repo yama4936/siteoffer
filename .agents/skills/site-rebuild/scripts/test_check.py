@@ -29,20 +29,31 @@ class ContentPlanCheckTest(unittest.TestCase):
             "status": "not_run", "scores": {}, "total": 0, "fatal_issues": [], "viewports": [],
         })
         self.write_json(root / "content-plan.json", {
-            "schema_version": "0.1",
+            "schema_version": "0.2",
             "company": {"name": "株式会社例", "source_ref": "evaluation.json company.name"},
+            "source_profile": {
+                "distinctive_terms": ["株式会社例"], "tone": "簡潔な敬体",
+                "content_priorities": ["会社情報"],
+                "source_refs": [{"artifact": "evaluation.json", "path": "company.name"}],
+            },
             "audience_questions": [{"question": "何の会社か", "answered_by": ["company-name"]}],
             "selected_content": [{
                 "id": "company-name", "kind": "identity", "purpose": "会社を識別する",
                 "copy": {"heading": "株式会社例の会社案内"},
                 "placement": [{"page": "index.html", "section": "h1"}],
                 "source_refs": [{"artifact": "evaluation.json", "path": "company.name"}],
-                "selection_reason": "確認済みの正式名称", "freshness": {"status": "timeless", "basis": "取得時点の会社名"},
+                "selection_reason": "確認済みの正式名称",
+                "source_fidelity": {"mode": "verbatim_fact", "preserved_terms": ["株式会社例"],
+                                    "meaning_preserved": True, "editorial_changes": "見出し用に会社案内を付加"},
+                "freshness": {"status": "timeless", "basis": "取得時点の会社名"},
                 "status": "ready",
             }],
             "excluded_content": [],
             "review": {"visible_claims_traced": True, "copy_ready": True,
-                       "cta_targets_verified": True, "reviewed_at": "2026-10-27T12:00:00+09:00"},
+                       "cta_targets_verified": True, "source_fidelity_reviewed": True,
+                       "presentation_ready": True, "reviewed_at": "2026-10-27T12:00:00+09:00"},
+            "readiness": {"status": "ready_for_customer_review", "blocking_gaps": [],
+                          "production_blockers": ["顧客確認"]},
         })
         self.write_json(root / "rebuild.json", {
             "pages": [{"file": "index.html"}], "actions_applied": [], "inherited": {},
@@ -102,6 +113,21 @@ class ContentPlanCheckTest(unittest.TestCase):
             self.assertEqual(1, code)
             checks = {item["check"] for item in result["errors"]}
             self.assertIn("irrelevant_meta_copy", checks)
+
+    def test_incomplete_or_untraced_source_copy_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            del plan["selected_content"][0]["source_fidelity"]
+            plan["readiness"] = {"status": "incomplete", "blocking_gaps": ["主要サービス本文"],
+                                 "production_blockers": []}
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            messages = [item["message"] for item in result["errors"]]
+            self.assertTrue(any("source_fidelity" in message for message in messages))
+            self.assertTrue(any("完成原稿になっていない" in message for message in messages))
 
 
 if __name__ == "__main__":

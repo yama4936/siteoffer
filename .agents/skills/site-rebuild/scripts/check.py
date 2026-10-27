@@ -378,6 +378,13 @@ class Checker:
         company = plan.get("company")
         if not isinstance(company, dict) or not company.get("name") or not company.get("source_ref"):
             self.err("content-plan.json", None, "content_plan", "company.name / company.source_ref が必要")
+        source_profile = plan.get("source_profile")
+        if not isinstance(source_profile, dict):
+            self.err("content-plan.json", None, "content_plan", "source_profile がない")
+        else:
+            for key in ("distinctive_terms", "tone", "content_priorities", "source_refs"):
+                if source_profile.get(key) in (None, "", []):
+                    self.err("content-plan.json", None, "content_plan", f"source_profile.{key} がない、または空")
 
         selected = plan.get("selected_content")
         if not isinstance(selected, list) or not selected:
@@ -429,6 +436,18 @@ class Checker:
                          f"{label}.freshness.status は current / timeless にする")
             if not isinstance(freshness, dict) or not isinstance(freshness.get("basis"), str) or not freshness["basis"].strip():
                 self.err("content-plan.json", None, "content_plan", f"{label}.freshness.basis がない")
+            fidelity = item.get("source_fidelity")
+            if not isinstance(fidelity, dict):
+                self.err("content-plan.json", None, "content_plan", f"{label}.source_fidelity がない")
+            else:
+                if fidelity.get("mode") not in ("verbatim_fact", "faithful_rewrite", "structural_label"):
+                    self.err("content-plan.json", None, "content_plan", f"{label}.source_fidelity.mode が不正")
+                if not isinstance(fidelity.get("preserved_terms"), list) or not fidelity["preserved_terms"]:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.source_fidelity.preserved_terms がない")
+                if fidelity.get("meaning_preserved") is not True:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.source_fidelity.meaning_preserved は照合後に true にする")
+                if not isinstance(fidelity.get("editorial_changes"), str) or not fidelity["editorial_changes"].strip():
+                    self.err("content-plan.json", None, "content_plan", f"{label}.source_fidelity.editorial_changes がない")
 
         excluded = plan.get("excluded_content")
         if not isinstance(excluded, list):
@@ -444,11 +463,28 @@ class Checker:
         if not isinstance(review, dict):
             self.err("content-plan.json", None, "content_plan", "review がない")
         else:
-            for key in ("visible_claims_traced", "copy_ready", "cta_targets_verified"):
+            for key in ("visible_claims_traced", "copy_ready", "cta_targets_verified",
+                        "source_fidelity_reviewed", "presentation_ready"):
                 if review.get(key) is not True:
                     self.err("content-plan.json", None, "content_plan", f"review.{key} は照合後に true にする")
             if not review.get("reviewed_at"):
                 self.err("content-plan.json", None, "content_plan", "review.reviewed_at がない")
+        readiness = plan.get("readiness")
+        if not isinstance(readiness, dict):
+            self.err("content-plan.json", None, "content_plan", "readiness がない")
+        else:
+            status = readiness.get("status")
+            if status not in ("ready_for_customer_review", "incomplete"):
+                self.err("content-plan.json", None, "content_plan", "readiness.status が不正")
+            blockers = readiness.get("blocking_gaps")
+            if not isinstance(blockers, list):
+                self.err("content-plan.json", None, "content_plan", "readiness.blocking_gaps は配列にする")
+            if status == "incomplete":
+                self.err("content-plan.json", None, "content_plan", "元サイトの材料不足により顧客提示可能な完成原稿になっていない")
+            if status == "ready_for_customer_review" and blockers:
+                self.err("content-plan.json", None, "content_plan", "ready_for_customer_review の blocking_gaps は空にする")
+            if not isinstance(readiness.get("production_blockers"), list):
+                self.err("content-plan.json", None, "content_plan", "readiness.production_blockers は配列にする")
         return plan
 
     def read_json(self, name, check="quality_artifact"):
