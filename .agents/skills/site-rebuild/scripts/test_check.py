@@ -87,6 +87,22 @@ class ContentPlanCheckTest(unittest.TestCase):
             self.assertIn("content_plan", checks)
             self.assertIn("internal_annotation", checks)
 
+    def test_site_improvement_meta_copy_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            html = (root / "index.html").read_text(encoding="utf-8").replace(
+                "</body>",
+                "<section><h2>知りたい情報へ、迷わず進める構成に。</h2>"
+                "<p>画像だけのメニューを、読み上げやスマホでも内容が伝わるテキストへ。"
+                "訪問者の目的に沿って整理しました。</p></section></body>",
+            )
+            (root / "index.html").write_text(html, encoding="utf-8")
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            checks = {item["check"] for item in result["errors"]}
+            self.assertIn("irrelevant_meta_copy", checks)
+
 
 if __name__ == "__main__":
     unittest.main()

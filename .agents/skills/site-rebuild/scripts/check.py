@@ -35,6 +35,16 @@ TBC_RE = re.compile(
     re.I,
 )
 DEMO_WORDS = ("非公式",)
+IRRELEVANT_META_COPY_RE = re.compile(
+    r"INFORMATION\s+ARCHITECTURE|情報設計|画像だけのメニュー|"
+    r"現在のサイト.{0,40}(?:整理|構成|見やす|読みやす)|"
+    r"訪問者の目的に沿って整理|"
+    r"(?:スマホ|読み上げ).{0,40}(?:見やす|読みやす|伝わる|伝わり|整理|対応)|"
+    r"(?:固定幅|フレーム|レスポンシブ|アクセシビリティ).{0,40}(?:構成|対応|改善|変更|使わ)|"
+    r"(?:余白|見出し).{0,30}(?:整え|読みやす|見やす)|"
+    r"(?:非事実の)?抽象表現です|このデモでは|改善施策を反映",
+    re.I,
+)
 TRACKING_RE = re.compile(
     r"googletagmanager|google-analytics|gtag\(|\bga\(|fbq\(|clarity\.ms|_satellite|hotjar|ptengine", re.I)
 CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^'\")]+)\1\s*\)", re.I)
@@ -310,6 +320,12 @@ class Checker:
         body_text = " ".join(p.text)
         if not any(w in body_text for w in DEMO_WORDS):
             self.err(f, None, "demo_notice", "「非公式の改善案（デモ）」である旨の表示がない")
+        meta_copy = IRRELEVANT_META_COPY_RE.search(body_text)
+        if meta_copy:
+            self.err(
+                f, None, "irrelevant_meta_copy",
+                f"企業の業務ではなくサイト制作・改善を説明する本文がある：{meta_copy.group(0)[:120]}"
+            )
 
     def check_css(self, path):
         f = self.rel(path)
