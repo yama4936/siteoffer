@@ -11,6 +11,7 @@ import { readReviewDesign } from "@/lib/ops/review-design";
 import { EMPTY_REVIEW_DRAFT } from "@/lib/ops/review-draft-types";
 import { loadReviewDraft } from "@/lib/ops/review-drafts";
 import { getReviewInbox } from "@/lib/ops/review-inbox";
+import { hasStaticPreview } from "@/lib/sales/improvement-files";
 import { getCurrentActor } from "@/lib/session";
 
 export default async function ReviewPage({
@@ -42,6 +43,7 @@ export default async function ReviewPage({
   const version = selectedVersion ? d?.proposalVersions.find((v) => v.id === selectedVersion) : d?.proposalVersions[0];
   const initialDraft = version ? await loadReviewDraft(db, actor, version.id) : EMPTY_REVIEW_DRAFT;
   const design = version ? await readReviewDesign(db, actor, version.id) : null;
+  const hasDemo = await hasStaticPreview(version?.demoArtifactDir ?? null);
   const context = new URLSearchParams({ reviewView: inbox.value.view, reviewPage: String(inbox.value.page) });
   if (inbox.value.query) context.set("reviewQuery", inbox.value.query);
   function listHref(view: string, page: number) {
@@ -105,7 +107,7 @@ export default async function ReviewPage({
                       version: version.version,
                       status: version.status,
                       content: reviewContentSummary(version.content),
-                      hasDemo: !!version.demoArtifactDir,
+                      hasDemo,
                       note: version.reviewNote,
                       design,
                       comparison: buildReviewComparison(version, d.proposalVersions),

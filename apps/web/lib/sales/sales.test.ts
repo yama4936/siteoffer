@@ -1,5 +1,9 @@
 // 営業画面の読み取りクエリとサーバー処理の結合テスト（PGlite）。
 // 金額・報酬条件はテスト内だけの値で、仕様の値ではない。
+
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   type Actor,
   adjustReward,
@@ -328,9 +332,11 @@ describe("企業詳細", () => {
       closing: "ありがとうございました",
       doNotSay: ["必ず売上が上がる"],
     };
+    const demoDir = await mkdtemp(path.join(tmpdir(), "siteoffer-demo-"));
+    await writeFile(path.join(demoDir, "index.html"), "<h1>demo</h1>");
     await db
       .update(proposalVersions)
-      .set({ content: { callScript }, demoArtifactDir: "/tmp/x" })
+      .set({ content: { callScript }, demoArtifactDir: demoDir })
       .where(eq(proposalVersions.proposalId, proposal!.id));
     await db
       .insert(proposalVersions)
@@ -356,6 +362,11 @@ describe("企業詳細", () => {
     expect(d.proposal?.hasDemo).toBe(true);
     expect(JSON.stringify(d.proposal)).not.toContain("/demo/");
     expect(d.terms.map((t) => t.ready)).toEqual([true]);
+    // DB に置き場所があっても、デモの実体が無ければ「準備中」として扱う
+    await rm(demoDir, { recursive: true, force: true });
+    const gone = await getCompanyDetail(db, me.actor, c.id);
+    if (!gone.ok) throw new Error(gone.error);
+    expect(gone.value.proposal?.hasDemo).toBe(false);
   });
 
   it("他人の担当企業は担当中とだけ表示し、確保ボタンを出さない", async () => {

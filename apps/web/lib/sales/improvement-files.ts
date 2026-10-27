@@ -5,6 +5,7 @@
 import { constants } from "node:fs";
 import { type FileHandle, open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { resolveArtifactFile } from "../../../preview/src/static";
 
 export function isInside(root: string, target: string): boolean {
   return target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
@@ -85,5 +86,14 @@ export async function existsAsFile(rootReal: string, candidate: string): Promise
   const opened = await openRegularFileInside(rootReal, candidate);
   if (opened.kind !== "file") return false;
   await opened.handle.close();
+  return true;
+}
+
+/** DB は提案デモの置き場所を記録するだけ。index.html を実際に配信できるときだけ「デモあり」とする */
+export async function hasStaticPreview(directory: string | null): Promise<boolean> {
+  if (!directory || !path.isAbsolute(directory)) return false;
+  const file = await resolveArtifactFile(directory, "/index.html");
+  if (file.kind !== "file") return false;
+  await file.handle.close();
   return true;
 }
