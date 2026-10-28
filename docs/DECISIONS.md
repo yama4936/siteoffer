@@ -251,6 +251,7 @@ SiteOffer（Webサイトの改善提案を営業パートナーが売るサー�
 | 10/28 | Claude Code | 「ログアウトは一つにして欲しい」 | 運営・営業画面のサイドバーのログアウトを外し、上部バー右上の1つに統一 | 作業GH |
 | 10/28 | Codex | 「skills実行して」 | 正式閾値70未満で未提案の次の5社に site-proposal を実行。静的化できる4社は site-rebuild とPC・スマホ確認まで行い、デモDBへ v2（in_review）として取り込み。EC中心の1社は対象外判定 | 作業GI |
 | 2026-10-28 | Codex | devssh-k-yamadaからpushできないので修復してほしい → SiteOffer専用鍵の登録を承認 | リポジトリ限定の書き込み用Deploy keyを登録し、サーバーのpushだけSSHへ切替。既存CSS変更2件を保持してGitHub実接続を確認 | 作業GL |
+| 2026-10-28 | Claude Code | 「push出来るようになったのでそのまま進めていいよ」→ 残っていたサイドバーCSS変更のコミット・pushを選択 | 運営・営業サイドバーのCSS調整（作業者不明の未コミット変更）をそのまま反映 | 作業GM |
 
 ## 3. Claude Codeでの開発
 
@@ -3045,6 +3046,14 @@ SDK名とモデル名は別。生成にはCodex SDKを使うとユーザーが�
 - 判断・変更：判断225。SSHログインは正常で、HTTPSのGitHub認証が未設定だった。サーバー内にSiteOffer専用Ed25519鍵を作成し、GitHubの同リポジトリへ書き込み可能なDeploy keyとして公開鍵だけを登録。サーバーの当該リポジトリでpush URLをSSHへ変更し、core.sshCommandで専用鍵・IdentitiesOnly・BatchMode・既存ホスト鍵の厳密な照合を指定した。fetchは従来のHTTPSを維持し、鍵・認証設定はGitへ含めない。
 - 検証：GitHub画面で同じ公開鍵の指紋とRead/writeを確認。独立したSSH接続から、対話認証を無効にしたpushのdry-runと実pushが終了0（既存HEADはEverything up-to-date）。修復記録だけをコミット・pushする。既存の未コミットCSS2件は対象外とし、変更前後の内容ハッシュを照合する。製品機能・AWS公開・実契約の検証とは区別する。
 - 未完了：認証修復の残件なし。秘密鍵を失った場合やサーバーを廃止する場合は、GitHubのDeploy keysからこの鍵を取り消し、必要に応じて再登録する。
+
+### 作業GM：未コミットだったサイドバーCSS調整の反映
+
+- 日時・モデル：2026-10-28（Claude Code）／ claude-opus-5-5。アプリのCodex SDK・OpenAI APIは呼び出していない
+- 依頼：「このアカウントからだとなんでpush出来ないんだっけ」→ 認証未設定（作業GLで修復済み）を説明。続けて「push出来るようになったのでそのまま進めていいよ」。未pushのコミットはなかったため、作業GL時点から残る未コミットCSS2件の扱いを確認し、ユーザーが「コミットしてpush（推奨）」を選択
+- 判断・変更：apps/web/components/ops/workspace.css で、メニューだけをスクロール（スクロールバー非表示）させ、ロゴとアカウント欄を縮めず常に表示する。apps/web/components/sales/workspace.css で注記欄を縮めない。内容は変更せずそのまま反映した（作成した作業は記録から特定できず）
+- 検証：scripts/git-check.sh。画面表示はローカル・実ブラウザとも未確認
+- 未完了：小さい画面・メニュー項目が多い場合の表示確認
 
 <!-- 新しい作業記録はこの行の直前に追加する -->
 

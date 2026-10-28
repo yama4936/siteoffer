@@ -6,6 +6,7 @@
 }
 .sales-sidebar-note {
   display: flex;
+  flex-shrink: 0;
   gap: 10px;
   padding: 20px 16px;
   color: #c6d3e7;

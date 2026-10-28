@@ -22,6 +22,7 @@
 .ops-brand {
   padding: 23px 20px 20px;
   border-bottom: 1px solid #ffffff18;
+  flex-shrink: 0;
 }
 .ops-brand > span:first-child {
   font-size: 23px;
@@ -49,6 +50,13 @@
   flex-direction: column;
   gap: 5px;
   flex: 1;
+  /* メニューだけをスクロールし、ロゴと下のアカウント欄は常に見せる。スクロールバーは出さない */
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.ops-nav::-webkit-scrollbar {
+  display: none;
 }
 .ops-nav-link {
   display: flex;
@@ -83,6 +91,8 @@
   gap: 10px;
   padding: 18px 12px;
   border-top: 1px solid #ffffff18;
+  background: #0f1a2b80;
+  flex-shrink: 0;
 }
 .ops-account > div {
   min-width: 0;
