@@ -360,6 +360,15 @@ def pick_pages(top_page, max_pages):
     return picked[: max_pages - 1]
 
 
+def keep_links(page, limit=80):
+    """ページの内部リンクを、制作で辿れるようリンク先と文字だけ残す（事例詳細・下層ページの特定用）。"""
+    links = {}
+    for u, l in candidate_links(page):
+        links.setdefault(u, (l["text"] or "")[:80])
+    page.pop("internal_links", None)
+    page["page_links"] = [{"href": u, "text": t} for u, t in list(links.items())[:limit]]
+
+
 def pick_children(pages, seen, limit):
     """取得済みページの配下（パスが続く）の内部リンクを選ぶ。実績の区分・事例詳細など。"""
     out = []
@@ -513,7 +522,7 @@ def main():
         pg, _ = analyze_page(u, s, b, m, excerpt)
         pg["role"] = kind
         fetched.append((pg, list(candidate_links(pg))))
-        pg.pop("internal_links", None)
+        keep_links(pg)
         result["pages"].append(pg)
 
     for kind, u in picked:
@@ -602,7 +611,7 @@ def add_pages(a, fetcher, excerpt):
             added.append({"url": u, "skipped": f"unsafe_target: {e}"})
             continue
         pg, _ = analyze_page(u, s, b, m, excerpt)
-        pg.pop("internal_links", None)
+        keep_links(pg)
         pg.update({"role": "additional", "added_at": dt.datetime.now(JST).isoformat(timespec="seconds"),
                    "added_reason": a.reason})
         result["pages"].append(pg)

@@ -69,7 +69,8 @@ class FakeFetcher:
 
     def raw(self, url, method="GET", max_bytes=5_000_000):
         self.calls.append(url)
-        body = "<html><head><title>流れ</title></head><body><h1>ご利用の流れ</h1><p>" + "あ" * 50 + "</p></body></html>"
+        body = ("<html><head><title>流れ</title></head><body><h1>ご利用の流れ</h1><p>" + "あ" * 50 +
+                '</p><a href="/works/1.html">事例1</a><a href="/catalog.pdf">PDF</a></body></html>')
         return 200, body.encode("utf-8"), {"final_url": url, "headers": {"content-type": "text/html; charset=utf-8"}}
 
 
@@ -94,6 +95,8 @@ class AddPagesTest(unittest.TestCase):
             self.assertEqual(added["added_reason"], "B3の根拠")
             self.assertEqual(len(added["text_excerpt"]), 10)
             self.assertTrue(added["text_truncated"])
+            self.assertEqual(added["page_links"], [{"href": "https://example.co.jp/works/1.html", "text": "事例1"}])
+            self.assertNotIn("internal_links", added)
             results = data["additional_collections"][0]["results"]
             self.assertEqual([r.get("skipped") for r in results], [None, "already_collected", "other_host"])
 
