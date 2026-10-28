@@ -74,6 +74,22 @@ class FakeFetcher:
         return 200, body.encode("utf-8"), {"final_url": url, "headers": {"content-type": "text/html; charset=utf-8"}}
 
 
+class FormFieldsTest(unittest.TestCase):
+    def test_counts_questions_without_reset_or_submission_controls(self):
+        parser = collect.PageParser()
+        parser.feed('''<form><input name="name" required><input name="email">
+          <input type="radio" name="purpose" value="new"><input type="radio" name="purpose" value="other">
+          <select name="region"><option>地域</option></select><textarea name="message"></textarea>
+          <input name="phone"><input name="captcha">
+          <input type="hidden" name="token"><input type="submit" name="send">
+          <input type="button" name="button"><input type="RESET" name="clear">
+          <input type="image" name="send_image"></form>''')
+        form = parser.forms[0]
+        self.assertEqual(form["field_count"], 7)
+        self.assertEqual(form["required_count"], 1)
+        self.assertEqual(form["field_names"], ["name", "email", "purpose", "region", "message", "phone", "captcha"])
+
+
 class AddPagesTest(unittest.TestCase):
     def test_appends_body_without_refetching(self):
         with tempfile.TemporaryDirectory() as tmp:

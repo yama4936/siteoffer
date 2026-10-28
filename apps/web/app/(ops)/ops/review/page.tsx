@@ -11,6 +11,7 @@ import { readReviewDesign } from "@/lib/ops/review-design";
 import { EMPTY_REVIEW_DRAFT } from "@/lib/ops/review-draft-types";
 import { loadReviewDraft } from "@/lib/ops/review-drafts";
 import { getReviewInbox } from "@/lib/ops/review-inbox";
+import { readReviewPrecheck } from "@/lib/ops/review-precheck";
 import { hasProposalDemo } from "@/lib/sales/improvement-files";
 import { getCurrentActor } from "@/lib/session";
 
@@ -110,6 +111,7 @@ export default async function ReviewPage({
                       hasDemo,
                       note: version.reviewNote,
                       design,
+                      precheck: readReviewPrecheck(version.content),
                       comparison: buildReviewComparison(version, d.proposalVersions),
                     }
                   : null,

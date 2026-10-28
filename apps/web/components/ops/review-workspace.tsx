@@ -3,26 +3,24 @@
 import { ArrowRight, ChevronRight, ExternalLink, FileText, Monitor, Search, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useId, useRef, useState, useTransition } from "react";
+import { type ReactNode, useEffect, useRef, useState, useTransition } from "react";
 import { commitReviewDraftAction, loadReviewDraftAction, saveReviewDraftAction } from "@/app/(ops)/ops/review/actions";
 import { SitePreview } from "@/components/shell/site-preview";
 import { usePreviewDevice } from "@/components/shell/use-preview-device";
 import { usePersonalDraft } from "@/components/use-personal-draft";
 import { PIPELINE_LABEL, PROPOSAL_STATUS_LABEL } from "@/lib/ops/format";
-import { reviewCheckGuide } from "@/lib/ops/review-check-guide";
 import type { ReviewComparison } from "@/lib/ops/review-comparison";
 import type { ReviewDesign } from "@/lib/ops/review-design";
 import {
   EMPTY_REVIEW,
-  REVIEW_CHECKS,
-  type ReviewCheckKey,
   type ReviewCommitInput,
   type ReviewDraftSnapshot,
   type ReviewValues,
 } from "@/lib/ops/review-draft-types";
+import type { ProposalPrecheck } from "@/lib/ops/review-precheck";
 import { ReviewChanges } from "./review-changes";
-import { ReviewCheckGuidance, ReviewChecklist } from "./review-checklist";
 import { ReviewDesignPreview } from "./review-design-preview";
+import { ReviewPrecheck } from "./review-precheck";
 
 type Item = {
   id: string;
@@ -34,6 +32,7 @@ type Item = {
   versionId: string | null;
   version: number | null;
   versionStatus: string | null;
+  aiCheck: "passed" | "failed" | null;
   suppression: string;
 };
 type ReviewQueue = {
@@ -70,6 +69,7 @@ type Selected = {
     hasDemo: boolean;
     note: string | null;
     design: ReviewDesign | null;
+    precheck: ProposalPrecheck | null;
     comparison: ReviewComparison;
   } | null;
 };
@@ -127,23 +127,12 @@ export function ReviewWorkspace({
     observer.observe(selected);
     return () => observer.disconnect();
   }, [c?.id, items]);
-  const checkId = useId();
-  const [checkGuide, setCheckGuide] = useState<{ key: ReviewCheckKey } | null>(null);
-  const guideRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (checkGuide) guideRef.current?.focus();
-  }, [checkGuide]);
   function openTab(next: string) {
-    setCheckGuide(null);
     setTab(next);
   }
   const router = useRouter();
   const version = c?.version;
-  const confirmed = version?.note?.startsWith("確認済み：") ? version.note.split("\n")[0] : "";
-  const defaults = {
-    ...EMPTY_REVIEW,
-    ...Object.fromEntries(REVIEW_CHECKS.map(([key, title]) => [key, !!confirmed?.includes(title)])),
-  } as ReviewValues;
+  const defaults = EMPTY_REVIEW;
   const draft = usePersonalDraft(initialDraft, defaults, (revision, values) =>
     saveReviewDraftAction(version!.id, revision, values),
   );
@@ -192,6 +181,8 @@ export function ReviewWorkspace({
   const preview = version?.hasDemo ? `/ops/review/preview/${version.id}/index.html` : null;
   const visible = items;
   const canReview = version?.status === "in_review" && version.isLatest && !completed;
+  // 承認できるのは、AIの事前チェックに合格した版だけ。差し戻しはチェック結果によらずできる
+  const canApprove = canReview && version?.precheck?.status === "passed";
   const locked = !canReview || pending || !draft.ready || draftLoading || !!draftLoadError || resultUnknown;
   function change(patch: Partial<ReviewValues>) {
     draft.change({ ...draft.latest.current, ...patch });
@@ -214,8 +205,8 @@ export function ReviewWorkspace({
       setError("修正してほしい内容を確認メモに入力してください。");
       return;
     }
-    if (!retry && decision === "approved" && REVIEW_CHECKS.some(([key]) => !draft.values[key])) {
-      setError("5つの確認項目を確認してください。");
+    if (!retry && decision === "approved" && !canApprove) {
+      setError("AIの事前チェックに合格していないため承認できません。差し戻してください。");
       return;
     }
     sending.current = true;
@@ -239,7 +230,7 @@ export function ReviewWorkspace({
           setCompleted(true);
           setMessage(
             input.decision === "approved"
-              ? "提案版を承認しました。販売条件を選ぶと営業可能にできます。"
+              ? (result.message ?? "提案版を承認しました。営業可能化の結果は、画面の状態で確認してください。")
               : "提案版を差し戻し、修正メモを保存しました。同じ承認画像から再制作できます。",
           );
           router.refresh();
@@ -258,7 +249,7 @@ export function ReviewWorkspace({
     <div className="review-layout">
       <aside className="review-queue" aria-label="レビュー案件一覧">
         <div className="queue-heading">
-          <h1>提案レビュー</h1>
+          <h1>最終確認</h1>
           <span>{queue.counts.pending}</span>
         </div>
         <form className="queue-search" action="/ops/review" method="get" key={queue.query}>
@@ -309,10 +300,14 @@ export function ReviewWorkspace({
                 {i.suppression !== "none"
                   ? "営業抑止中"
                   : i.pending
-                    ? "提案確認待ち"
-                    : i.versionStatus
-                      ? (PROPOSAL_STATUS_LABEL[i.versionStatus] ?? i.versionStatus)
-                      : (PIPELINE_LABEL[i.status] ?? i.status)}
+                    ? "最終確認待ち"
+                    : i.versionStatus === "in_review" && i.aiCheck !== "passed"
+                      ? i.aiCheck === "failed"
+                        ? "AIチェック不合格"
+                        : "AIチェック未実施"
+                      : i.versionStatus
+                        ? (PROPOSAL_STATUS_LABEL[i.versionStatus] ?? i.versionStatus)
+                        : (PIPELINE_LABEL[i.status] ?? i.status)}
               </span>
               {i.version && <small>提案 第{i.version}版</small>}
             </Link>
@@ -469,16 +464,6 @@ export function ReviewWorkspace({
               )}
             </div>
             <div className="review-panel">
-              {checkGuide && (
-                <section ref={guideRef} tabIndex={-1} className="review-check-guide" aria-label="確認項目の案内">
-                  <ReviewCheckGuidance
-                    check={checkGuide.key}
-                    hasDesign={!!version?.design}
-                    hasDemo={!!version?.hasDemo}
-                    returnTargetId={`${checkId}-${checkGuide.key}-row`}
-                  />
-                </section>
-              )}
               {tab === "changes" && version && (
                 <ReviewChanges
                   comparison={version.comparison}
@@ -561,16 +546,15 @@ export function ReviewWorkspace({
                       )}
                     </dd>
                   </dl>
-                  <h3>画像素材・利用許諾</h3>
+                  <h3>画像素材</h3>
                   {c.assets.length ? (
                     c.assets.map((a) => (
                       <div className="asset-row" key={a.id}>
                         <strong>{a.name}</strong>
-                        <span>{a.confirmed && a.allowed ? "営業デモで使用可" : "利用許諾の確認が必要"}</span>
                       </div>
                     ))
                   ) : (
-                    <p>画像素材は未登録です。使用画像の出所と利用範囲を確認してください。</p>
+                    <p>画像素材は未登録です。</p>
                   )}
                   <Link
                     className="review-outline"
@@ -603,20 +587,9 @@ export function ReviewWorkspace({
             </div>
           </section>
           <aside className="review-inspector">
-            <h2>営業前の確認</h2>
-            <p>内容を確認して営業へ引き継ぎます</p>
-            <ReviewChecklist
-              values={draft.values}
-              locked={locked}
-              canOpen={!!version}
-              readOnly={!canReview}
-              idPrefix={checkId}
-              onChange={(key, value) => change({ [key]: value })}
-              onOpen={(key) => {
-                setTab(reviewCheckGuide(key, !!version?.design).tab);
-                setCheckGuide({ key });
-              }}
-            />
+            <h2>最終確認</h2>
+            <p>現在のサイトと作成したサイトを見比べ、承認か差し戻しを選びます。承認すると営業可能になります</p>
+            {version && <ReviewPrecheck precheck={version.precheck} />}
             <div className="review-note">
               <label htmlFor="review-note">確認メモ</label>
               <textarea
@@ -668,12 +641,6 @@ export function ReviewWorkspace({
                     <details>
                       <summary>保存済みの内容を見る</summary>
                       <p>{draft.conflict.values?.note || "（確認メモなし）"}</p>
-                      <p>
-                        確認済み：
-                        {REVIEW_CHECKS.filter(([key]) => draft.conflict?.values?.[key])
-                          .map(([, title]) => title)
-                          .join("、") || "なし"}
-                      </p>
                       {!draft.conflict.values && <p>下書きは破棄済み、またはレビュー確定済みです。</p>}
                     </details>
                     <button
@@ -730,11 +697,13 @@ export function ReviewWorkspace({
               <h3>このあと</h3>
               <p>
                 {canReview
-                  ? "承認後、販売条件を確認して営業へ引き継げます。"
+                  ? canApprove
+                    ? "承認すると、最新の販売条件で営業可能になります。直す点があれば確認メモに書いて差し戻してください。"
+                    : "AIの事前チェックに合格していないため承認できません。差し戻すと再制作に回ります。"
                   : c.pipelineStatus === "sellable"
                     ? "営業可能な案件です。担当・引き継ぎから営業の進行状況を確認できます。"
                     : version?.status === "approved"
-                      ? "承認済みです。「販売条件を確認して営業へ」から次へ進めます。"
+                      ? "承認済みですが、営業可能にできませんでした。「販売条件を確認して営業へ」から進めてください。"
                       : version?.status === "rejected"
                         ? "修正メモを保存しました。同じ承認画像と元の構成を使って、新しい提案版を制作できます。"
                         : "企業情報と素材を整え、提案を準備してください。"}
@@ -773,7 +742,7 @@ export function ReviewWorkspace({
                 <button
                   type="button"
                   className="review-primary"
-                  disabled={locked || !!draft.conflict || REVIEW_CHECKS.some(([key]) => !draft.values[key])}
+                  disabled={locked || !!draft.conflict || !canApprove}
                   onClick={() => submit("approved")}
                 >
                   {pending ? "保存中…" : "提案を承認"}

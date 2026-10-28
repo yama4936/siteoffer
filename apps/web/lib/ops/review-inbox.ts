@@ -2,7 +2,11 @@ import { type Actor, err, hasSalesContract, ok } from "@siteoffer/core";
 import { type DbOrTx, users } from "@siteoffer/db";
 import { and, eq, sql } from "drizzle-orm";
 import { isUuid } from "./form";
-/** 全案件の最新版を検索する。提案本文・画像・内部の生成情報は一覧へ渡さない。 */
+/**
+ * 全案件の最新版を検索する。「最終確認待ち」（pending）は、最新版が in_review かつ
+ * AIの事前チェック（content.aiCheck.status）が passed のもの。
+ * 提案本文・画像・内部の生成情報は一覧へ渡さない。
+ */
 export async function getReviewInbox(
   db: DbOrTx,
   actor: Actor | null,
@@ -27,11 +31,11 @@ export async function getReviewInbox(
     return err("invalid_input");
   const query = input.query?.trim() ?? "";
   const base = sql`select c.id,c.name,c.prefecture,c.city,c.industry,c.pipeline_status as status,c.suppression,c.updated_at as "updatedAt",o.id as "salesOfferId",
-   v.id as "versionId",v.version,v.status as "versionStatus",coalesce(v.created_at,c.created_at) as since,
-   coalesce(v.status='in_review' and c.suppression='none',false) as pending,
+   v.id as "versionId",v.version,v.status as "versionStatus",v.ai_check as "aiCheck",coalesce(v.created_at,c.created_at) as since,
+   coalesce(v.status='in_review' and v.ai_check='passed' and c.suppression='none',false) as pending,
    coalesce(v.status='approved' and c.suppression='none' and not ${hasSalesContract(sql`c.id`)} and (c.pipeline_status<>'sellable' or o.id is null),false) as ready
    from companies c left join proposals p on p.company_id=c.id
-   left join lateral(select id,version,status,created_at from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
+   left join lateral(select id,version,status,created_at,case when jsonb_typeof(content->'aiCheck')='object' then content->'aiCheck'->>'status' end as ai_check from proposal_versions where proposal_id=p.id order by version desc limit 1) v on true
    left join lateral(select id from sales_offers where company_id=c.id and is_public=true order by version desc limit 1) o on true
    where true ${input.companyId ? sql`and c.id=${input.companyId}` : sql``} ${query ? sql`and position(lower(${query}) in lower(c.name||' '||coalesce(c.prefecture,'')||' '||coalesce(c.city,'')||' '||coalesce(c.industry,'')))>0` : sql``}`;
   const count = await db.execute(
@@ -57,6 +61,7 @@ export async function getReviewInbox(
         versionId: string | null;
         version: number | null;
         versionStatus: string | null;
+        aiCheck: string | null;
         pending: boolean;
         since: Date | string;
         updatedAt: Date | string;
@@ -82,6 +87,8 @@ export async function getReviewInbox(
       versionId: r.versionId,
       version: r.version,
       versionStatus: r.versionStatus,
+      /** AIの事前チェックの結果。passed / failed、未実施なら null（承認不可） */
+      aiCheck: r.aiCheck === "passed" || r.aiCheck === "failed" ? (r.aiCheck as "passed" | "failed") : null,
       since: new Date(r.since).toISOString(),
       updatedAt: new Date(r.updatedAt).toISOString(),
       salesOfferId: r.salesOfferId,

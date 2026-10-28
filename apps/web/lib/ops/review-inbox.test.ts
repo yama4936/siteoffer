@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { reviewProposalVersion } from "./commands";
 import { listReviewQueue } from "./queries";
 import { getReviewInbox } from "./review-inbox";
-import { seedUser } from "./test-seed";
+import { seedUser, testPrecheck } from "./test-seed";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -61,6 +61,7 @@ it("205社を全件から検索・20社単位で表示し、200社の外の案�
       proposalId: p.id,
       version: 1,
       status: "in_review" as const,
+      content: { aiCheck: testPrecheck() },
       createdAt: new Date(2026, 0, 1 + i),
     })),
   );
@@ -79,6 +80,28 @@ it("205社を全件から検索・20社単位で表示し、200社の外の案�
   });
   expect(await getReviewInbox(db, actor, { query: "名古屋市" })).toMatchObject({ ok: true, value: { total: 205 } });
   expect(await getReviewInbox(db, actor, { query: "工務店" })).toMatchObject({ ok: true, value: { total: 205 } });
+});
+it("AIチェックに合格した確認待ちの版だけを最終確認待ちにし、未実施・不合格はすべてに状態付きで出す", async () => {
+  const none = await seed();
+  const failed = await seed();
+  const passed = await seed();
+  await db
+    .update(proposalVersions)
+    .set({ content: { aiCheck: testPrecheck("failed") } })
+    .where(eq(proposalVersions.id, failed.v.id));
+  await db
+    .update(proposalVersions)
+    .set({ content: { aiCheck: testPrecheck() } })
+    .where(eq(proposalVersions.id, passed.v.id));
+  const pending = await getReviewInbox(db, actor);
+  expect(pending).toMatchObject({ ok: true, value: { total: 1, counts: { all: 3, pending: 1 } } });
+  expect(pending.ok && pending.value.items.map((i) => i.id)).toEqual([passed.c.id]);
+  const all = await getReviewInbox(db, actor, { view: "all" });
+  const byId = new Map((all.ok ? all.value.items : []).map((i) => [i.id, i]));
+  expect(byId.get(none.c.id)).toMatchObject({ pending: false, aiCheck: null, versionStatus: "in_review" });
+  expect(byId.get(failed.c.id)).toMatchObject({ pending: false, aiCheck: "failed" });
+  expect(byId.get(passed.c.id)).toMatchObject({ pending: true, aiCheck: "passed" });
+  expect(JSON.stringify(all)).not.toContain("summary");
 });
 it.each(["approved", "generating", "failed", "rejected"] as const)(
   "新しい%s版があれば古い確認待ちを一覧へ出さない",

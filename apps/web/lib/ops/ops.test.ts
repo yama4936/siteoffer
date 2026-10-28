@@ -53,7 +53,7 @@ import {
   listUsersForOps,
 } from "./queries";
 import { sellableIssues } from "./sellable";
-import { seedCandidate, seedTerms, seedUser } from "./test-seed";
+import { seedCandidate, seedTerms, seedUser, testPrecheck } from "./test-seed";
 
 // テスト内だけの値（仕様の値ではない）
 const TEST_RULE = { type: "fixed", amount: 10_000 };
@@ -232,6 +232,14 @@ describe("営業可能化（AC-09・14章）", () => {
       await reviewProposalVersion(deps, ops, { proposalVersionId: pending.version!.id, decision: "rejected" }),
     ).toMatchObject({ ok: false, error: "invalid_input" });
 
+    // AIの事前チェックが無い版は承認できない
+    expect(
+      await reviewProposalVersion(deps, ops, { proposalVersionId: pending.version!.id, decision: "approved" }),
+    ).toMatchObject({ ok: false, error: "ai_check_not_passed" });
+    await db
+      .update(proposalVersions)
+      .set({ content: { aiCheck: testPrecheck() } })
+      .where(eq(proposalVersions.id, pending.version!.id));
     const approved = await reviewProposalVersion(deps, ops, {
       proposalVersionId: pending.version!.id,
       decision: "approved",

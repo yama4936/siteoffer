@@ -27,16 +27,13 @@ export async function activeContentOperator(db: DbOrTx, actor: Actor | null, loc
   if (!user) throw new ContentError("有効な運営権限が必要です");
   return actor;
 }
-async function authorizeContent(
-  db: DbOrTx,
-  actor: Actor | null,
-  companyId: string,
-  lock: boolean,
-): Promise<ContentEditorActor> {
-  if (actor?.kind !== "ops" && actor?.kind !== "customer_user")
-    throw new ContentError("運営権限または顧客の記事更新権限が必要です");
+/**
+ * 顧客アカウントの、その企業での有効な利用権限（完了契約つき）と役割（admin / editor）。なければ ContentError。
+ * lock は書き込み前（lockContentCompany の中）で true。管理者だけの操作は access.role を呼び出し側で確かめる。
+ */
+export async function customerContentAccess(db: DbOrTx, actor: Actor | null, companyId: string, lock: boolean) {
+  if (actor?.kind !== "customer_user") throw new ContentError("顧客アカウントでログインしてください");
   await contentCompany(db, companyId, lock);
-  if (actor.kind === "ops") return activeContentOperator(db, actor, lock);
   const userQuery = db
     .select({ id: users.id })
     .from(users)
@@ -44,7 +41,7 @@ async function authorizeContent(
   const [user] = await (lock ? userQuery.for("share") : userQuery);
   if (!user) throw new ContentError("有効な顧客アカウントが必要です");
   const accessQuery = db
-    .select({ id: contentAccess.id, contractId: contentAccess.contractId })
+    .select({ id: contentAccess.id, contractId: contentAccess.contractId, role: contentAccess.role })
     .from(contentAccess)
     .where(
       and(
@@ -63,7 +60,21 @@ async function authorizeContent(
     );
   const [contract] = await (lock ? contractQuery.for("share") : contractQuery);
   if (!contract) throw new ContentError("記事更新の利用契約を運営にご確認ください");
-  return actor;
+  return { actor, access };
+}
+async function authorizeContent(
+  db: DbOrTx,
+  actor: Actor | null,
+  companyId: string,
+  lock: boolean,
+): Promise<ContentEditorActor> {
+  if (actor?.kind !== "ops" && actor?.kind !== "customer_user")
+    throw new ContentError("運営権限または顧客の記事更新権限が必要です");
+  if (actor.kind === "ops") {
+    await contentCompany(db, companyId, lock);
+    return activeContentOperator(db, actor, lock);
+  }
+  return (await customerContentAccess(db, actor, companyId, lock)).actor;
 }
 /** Call inside a transaction. Revocation and all editor writes share the company lock. */
 export async function authorizeContentEditor(db: DbOrTx, actor: Actor | null, companyId: string) {

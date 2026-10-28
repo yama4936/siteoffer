@@ -13,6 +13,7 @@ import type { Db, DbOrTx } from "@siteoffer/db";
 import {
   AGENT_WEB_PROVIDER,
   type AgentWebCandidate,
+  type AgentWebOptions,
   agentWebExternalId,
   agentWebFileSchema,
   createAgentWebProviders,
@@ -86,13 +87,15 @@ export async function importCandidates(
   clock: Clock,
   raw: unknown,
   actor: Actor,
+  /** 実在確認（公式サイトの取得・国税庁API）の差し替え。省略時は実際に取得する */
+  verify: AgentWebOptions = {},
 ): Promise<Result<CandidateImport, string>> {
   const parsed = parseCandidatesFile(raw);
   if (!parsed.ok) return parsed;
   const { list, criteria } = parsed.value;
   const job = await createDiscoveryJob(db, clock, { provider: AGENT_WEB_PROVIDER, criteria, actor });
   if (!job.ok) return err(job.error, `収集ジョブを作れない：${job.message ?? job.error}`);
-  const r = await runDiscovery(db, clock, job.value.jobId, createAgentWebProviders(list));
+  const r = await runDiscovery(db, clock, job.value.jobId, createAgentWebProviders(list, verify));
   if (!r.ok) return err(r.error, r.message ?? r.error);
   const s = r.value;
   const companies: CandidateImport["companies"] = [];

@@ -52,6 +52,12 @@ export interface ResourceMap {
    * 顧客の承認・修正依頼は共有リンクの検証（share-link）で判定し、ここでは扱わない。
    */
   delivery: Record<never, never>;
+  /**
+   * 顧客の編集アカウント（content_access、T23）。salesUserIds は対象企業の有効な担当の営業ユーザーと、
+   * その企業の完了契約の担当営業（contracts.sales_user_id）。契約完了で担当は completed になるため両方を渡す。
+   * 顧客の管理者による自社の編集者の招待・解除は content-access 側で判定し、ここでは扱わない。
+   */
+  contentAccess: { companyId: string; salesUserIds: string[] };
 }
 
 export interface ActionMap {
@@ -75,6 +81,8 @@ export interface ActionMap {
   shareLink: "read" | "create" | "revoke";
   /** manage：納品の作成・版の追加・状態の変更 */
   delivery: "read" | "manage";
+  /** read：アカウントと役割の表示。manage：招待・解除・役割の変更 */
+  contentAccess: "read" | "manage";
 }
 
 export type ResourceType = keyof ResourceMap;
@@ -136,6 +144,8 @@ const salesPolicies: { [K in ResourceType]: SalesPolicy<K> } = {
   },
   // 制作・納品は運営の担当（5.2）。営業は閲覧・操作できない（AC-18）
   delivery: () => false,
+  // 営業は担当企業（有効な担当か完了契約の担当営業）の顧客アカウントを見るだけ。変更はできない（T23）
+  contentAccess: (actor, action, r) => action === "read" && r.salesUserIds.includes(actor.userId),
 };
 
 /** 運営にも許さない操作。利用停止の対象は営業・顧客ユーザー（運営アカウントは seed・管理手順で扱う） */

@@ -2,9 +2,13 @@
 
 import json
 import pathlib
+import struct
 import subprocess
 import tempfile
 import unittest
+import zlib
+
+from check_mobile_quality import site_digest
 
 
 SCRIPT = pathlib.Path(__file__).with_name("check_mobile_quality.py")
@@ -18,8 +22,9 @@ class MobileQualityCheckTest(unittest.TestCase):
         review_dir.mkdir()
         (site / "index.html").write_text("<!doctype html><title>例</title>", encoding="utf-8")
         for name in ("index-mobile-viewport.png", "index-mobile-full.png"):
-            (review_dir / name).write_bytes(b"png")
+            self.write_png(review_dir / name, 390, 844)
         review = {
+            "site_digest": site_digest(str(site)),
             "status": "pass",
             "fatal_issues": [],
             "scores": {"mobile": 12},
@@ -49,6 +54,17 @@ class MobileQualityCheckTest(unittest.TestCase):
         }
         self.write_review(site, review)
         return site, review
+
+    @staticmethod
+    def write_png(path, width, height, *, image_data=None, color_type=2, split=False):
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+        if image_data is None:
+            channels = 4 if color_type == 6 else 3
+            image_data = zlib.compress((b"\0" + b"\xff" * width * channels) * height)
+        chunks = [image_data[:len(image_data) // 2], image_data[len(image_data) // 2:]] if split else [image_data]
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0))
+                         + b"".join(chunk(b"IDAT", data) for data in chunks) + chunk(b"IEND", b""))
 
     @staticmethod
     def write_review(site, review):
@@ -100,6 +116,57 @@ class MobileQualityCheckTest(unittest.TestCase):
             code, result = self.run_check(site)
             self.assertEqual(1, code)
             self.assertTrue(any("fixed_ui_obscures" in message for message in result["errors"]))
+
+    def test_disguised_or_wrong_size_screenshot_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site, _review = self.make_site(pathlib.Path(directory))
+            screenshot = site.parent / "review/index-mobile-viewport.png"
+            screenshot.write_bytes(b"not a screenshot")
+            code, result = self.run_check(site)
+            self.assertEqual(1, code)
+            self.assertIn("PNG", " ".join(result["errors"]))
+            self.write_png(screenshot, 1440, 1000)
+            code, result = self.run_check(site)
+            self.assertEqual(1, code)
+            self.assertIn("390×844", " ".join(result["errors"]))
+
+    def test_invalid_pixel_stream_cannot_be_screenshot_evidence(self):
+        for invalid in (b"not zlib image data", zlib.compress(b"\0"),
+                        zlib.compress((b"\5" + b"\xff" * 390 * 3) * 844),
+                        zlib.compress((b"\0" + b"\xff" * 390 * 3) * 845)):
+            with self.subTest(invalid_length=len(invalid)), tempfile.TemporaryDirectory() as directory:
+                site, _review = self.make_site(pathlib.Path(directory))
+                screenshot = site.parent / "review/index-mobile-viewport.png"
+                self.write_png(screenshot, 390, 844, image_data=invalid)
+                code, result = self.run_check(site)
+                self.assertEqual(1, code, result)
+                self.assertIn("PNG", " ".join(result["errors"]))
+
+    def test_rgba_and_split_pixel_stream_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site, _review = self.make_site(pathlib.Path(directory))
+            self.write_png(site.parent / "review/index-mobile-viewport.png", 390, 844,
+                           color_type=6, split=True)
+            code, result = self.run_check(site)
+            self.assertEqual(0, code, result)
+
+    def test_changed_render_input_invalidates_old_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site, _review = self.make_site(pathlib.Path(directory))
+            (site / "style.css").write_text("body { font-size: 8px; }", encoding="utf-8")
+            code, result = self.run_check(site)
+            self.assertEqual(1, code)
+            self.assertIn("site_digest", " ".join(result["errors"]))
+
+    def test_one_image_cannot_prove_two_states(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site, review = self.make_site(pathlib.Path(directory))
+            evidence = review["page_reviews"][0]["mobile"]["evidence"]
+            evidence[1]["screenshot"] = evidence[0]["screenshot"]
+            self.write_review(site, review)
+            code, result = self.run_check(site)
+            self.assertEqual(1, code)
+            self.assertIn("状態ごとに別", " ".join(result["errors"]))
 
 
 if __name__ == "__main__":

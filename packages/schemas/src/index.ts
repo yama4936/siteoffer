@@ -5,4 +5,5 @@ export * from "./delivery-preparation.ts";
 export * from "./diagnostic-text.ts";
 export * from "./discovery/index.ts";
 export * from "./generation/index.ts";
+export * from "./proposal-precheck.ts";
 export * from "./sales-offer-change.ts";

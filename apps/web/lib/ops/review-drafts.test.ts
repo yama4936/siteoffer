@@ -4,6 +4,7 @@ import {
   auditEvents,
   companies,
   type Db,
+  productTerms,
   proposalReviewDrafts,
   proposalReviewSubmissions,
   proposals,
@@ -15,26 +16,20 @@ import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { EMPTY_REVIEW } from "./review-draft-types";
 import { commitReviewDraft, loadReviewDraft, ReviewDraftConflict, saveReviewDraft } from "./review-drafts";
-import { seedUser } from "./test-seed";
+import { seedTerms, seedUser, testPrecheck } from "./test-seed";
 
 let db: Db;
 let close: () => Promise<void>;
 const clock = fixedClock("2026-10-17T00:00:00Z");
-const complete = {
-  note: "  引き継ぎ事項\n続き  ",
-  company: true,
-  rights: true,
-  devices: true,
-  links: true,
-  continuity: true,
-};
+const complete = { note: "  引き継ぎ事項\n続き  " };
+const TEST_RULE = { type: "fixed", amount: 10_000 };
 beforeEach(async () => {
   ({ db, close } = await createTestDb());
 });
 afterEach(async () => {
   await close();
 });
-async function setup() {
+async function setup(aiCheck: unknown = testPrecheck()) {
   const { actor, user } = await seedUser(db, "ops");
   const [c] = await db
     .insert(companies)
@@ -43,13 +38,13 @@ async function setup() {
   const [p] = await db.insert(proposals).values({ companyId: c!.id }).returning();
   const [v] = await db
     .insert(proposalVersions)
-    .values({ proposalId: p!.id, version: 1, status: "in_review" })
+    .values({ proposalId: p!.id, version: 1, status: "in_review", content: aiCheck === null ? {} : { aiCheck } })
     .returning();
   return { actor, user, c: c!, p: p!, v: v! };
 }
-it("途中のメモとチェックをそのまま復元し、担当者・企業・版を分離する", async () => {
+it("途中のメモをそのまま復元し、担当者・企業・版を分離する", async () => {
   const s = await setup();
-  const values = { ...EMPTY_REVIEW, company: true, note: "  入力途中\n続き  " };
+  const values = { ...EMPTY_REVIEW, note: "  入力途中\n続き  " };
   expect(await saveReviewDraft(db, clock, s.actor, s.v.id, 0, values)).toMatchObject({ revision: 1, values });
   expect(await loadReviewDraft(db, s.actor, s.v.id)).toMatchObject({ revision: 1, values });
   const other = await seedUser(db, "ops");
@@ -85,15 +80,23 @@ it.each(["approved", "rejected"] as const)(
     await saveReviewDraft(db, clock, s.actor, s.v.id, 0, complete);
     const input = { revision: 1, decision, requestKey: randomUUID() };
     const first = await commitReviewDraft(db, clock, s.actor, s.v.id, input);
-    expect(first).toMatchObject({ revision: 2, values: null });
-    expect(await commitReviewDraft(db, clock, s.actor, s.v.id, input)).toEqual(first);
+    expect(first.snapshot).toMatchObject({ revision: 2, values: null });
+    expect((await commitReviewDraft(db, clock, s.actor, s.v.id, input)).snapshot).toEqual(first.snapshot);
     expect(
-      await commitReviewDraft(db, clock, s.actor, s.v.id, { ...input, requestKey: input.requestKey.toUpperCase() }),
-    ).toEqual(first);
+      (await commitReviewDraft(db, clock, s.actor, s.v.id, { ...input, requestKey: input.requestKey.toUpperCase() }))
+        .snapshot,
+    ).toEqual(first.snapshot);
     expect(await db.select().from(proposalReviewSubmissions)).toHaveLength(1);
     const events = await db.select().from(auditEvents);
     expect(events).toHaveLength(1);
     expect(events[0]!.action).toBe(decision === "approved" ? "proposal_version.approve" : "proposal_version.reject");
+    if (decision === "approved")
+      expect(events[0]!.after).toMatchObject({
+        aiCheck: { status: "passed", checkPy: "c".repeat(64), items: [{ key: "company", ok: true }, {}, {}, {}] },
+      });
+    expect(first.sellable).toEqual(
+      decision === "approved" ? { ok: false, reason: expect.stringContaining("販売条件") } : undefined,
+    );
     expect(JSON.stringify(events)).not.toContain("別担当の非公開メモ");
     expect((await loadReviewDraft(db, other.actor, s.v.id)).values?.note).toBe("別担当の非公開メモ");
     expect((await db.select().from(proposalVersions).where(eq(proposalVersions.id, s.v.id)))[0]!.status).toBe(decision);
@@ -110,20 +113,22 @@ it("確定済み版への保存・別操作での再承認を拒否する", asyn
   ).rejects.toThrow();
   expect(await db.select().from(auditEvents)).toHaveLength(1);
 });
-it("チェック不足・差し戻し理由なし・古い下書き版の確定を拒否する", async () => {
+it("差し戻しには確認メモが必要。古い下書き版の確定を拒否する", async () => {
   const s = await setup();
-  await saveReviewDraft(db, clock, s.actor, s.v.id, 0, EMPTY_REVIEW);
-  for (const decision of ["approved", "rejected"] as const)
-    await expect(
-      commitReviewDraft(db, clock, s.actor, s.v.id, { revision: 1, decision, requestKey: randomUUID() }),
-    ).rejects.toThrow();
+  await expect(
+    commitReviewDraft(db, clock, s.actor, s.v.id, { revision: 0, decision: "rejected", requestKey: randomUUID() }),
+  ).rejects.toThrow("確認メモ");
+  await saveReviewDraft(db, clock, s.actor, s.v.id, 0, { note: "   " });
+  await expect(
+    commitReviewDraft(db, clock, s.actor, s.v.id, { revision: 1, decision: "rejected", requestKey: randomUUID() }),
+  ).rejects.toThrow("確認メモ");
   await saveReviewDraft(db, clock, s.actor, s.v.id, 1, complete);
   await expect(
     commitReviewDraft(db, clock, s.actor, s.v.id, { revision: 1, decision: "approved", requestKey: randomUUID() }),
   ).rejects.toBeInstanceOf(ReviewDraftConflict);
   expect(await db.select().from(auditEvents)).toHaveLength(0);
 });
-it("新版ができても旧版の入力を保存できるが、確定・新版へのチェック持ち越しはしない", async () => {
+it("新版ができても旧版の入力を保存できるが、確定・新版へのメモ持ち越しはしない", async () => {
   const s = await setup();
   const [newer] = await db
     .insert(proposalVersions)
@@ -207,6 +212,105 @@ it("同じ版の同時保存は一方だけを採用し、同じレビュー再�
     commitReviewDraft(db, clock, s.actor, s.v.id, input),
     commitReviewDraft(db, clock, s.actor, s.v.id, input),
   ]);
-  expect(results[0]).toEqual(results[1]);
+  expect(results[0]!.snapshot).toEqual(results[1]!.snapshot);
   expect(await db.select().from(auditEvents)).toHaveLength(1);
+});
+it.each([
+  ["未実施", null],
+  ["不合格", testPrecheck("failed")],
+  ["不正な形", { status: "passed" }],
+])("AIの事前チェックが%sなら承認できず、差し戻しはできる", async (_, aiCheck) => {
+  const s = await setup(aiCheck);
+  await seedTerms(db, { version: "t-1", price: 300_000, rewardRule: TEST_RULE });
+  await expect(
+    commitReviewDraft(db, clock, s.actor, s.v.id, { revision: 0, decision: "approved", requestKey: randomUUID() }),
+  ).rejects.toThrow("AIの事前チェック");
+  expect((await db.select().from(proposalVersions).where(eq(proposalVersions.id, s.v.id)))[0]!.status).toBe(
+    "in_review",
+  );
+  expect((await db.select().from(companies).where(eq(companies.id, s.c.id)))[0]!.pipelineStatus).toBe("in_review");
+  expect(await db.select().from(auditEvents)).toHaveLength(0);
+  await saveReviewDraft(db, clock, s.actor, s.v.id, 0, { note: "リンク切れを直してください" });
+  const r = await commitReviewDraft(db, clock, s.actor, s.v.id, {
+    revision: 1,
+    decision: "rejected",
+    requestKey: randomUUID(),
+  });
+  expect(r.sellable).toBeUndefined();
+  expect((await db.select().from(proposalVersions).where(eq(proposalVersions.id, s.v.id)))[0]!.status).toBe("rejected");
+});
+it("承認すると、有効で設定済みの最新の販売条件を自動で選んで営業可能にする", async () => {
+  const s = await setup();
+  const old = await seedTerms(db, { version: "t-old", price: 200_000, rewardRule: TEST_RULE });
+  const latest = await seedTerms(db, { version: "t-latest", price: 300_000, rewardRule: TEST_RULE });
+  // 新しくても、無効・未設定の版は選ばない
+  await seedTerms(db, { version: "t-inactive", price: 1, rewardRule: TEST_RULE, active: false });
+  await seedTerms(db, { version: "t-noprice", price: null, rewardRule: TEST_RULE });
+  const order = ["t-old", "t-latest", "t-inactive", "t-noprice"];
+  for (const [i, version] of order.entries())
+    await db
+      .update(productTerms)
+      .set({ createdAt: new Date(Date.UTC(2026, 9, 1 + i)) })
+      .where(eq(productTerms.version, version));
+  const r = await commitReviewDraft(db, clock, s.actor, s.v.id, {
+    revision: 0,
+    decision: "approved",
+    requestKey: randomUUID(),
+  });
+  expect(r.sellable).toEqual({ ok: true, productTermsVersion: "t-latest" });
+  expect((await db.select().from(companies).where(eq(companies.id, s.c.id)))[0]!.pipelineStatus).toBe("sellable");
+  expect((await db.select().from(proposalVersions).where(eq(proposalVersions.id, s.v.id)))[0]!.status).toBe("approved");
+  const [made] = await db.select().from(auditEvents).where(eq(auditEvents.action, "company.make_sellable"));
+  expect(made!.after).toMatchObject({
+    productTermsId: latest.id,
+    proposalVersionId: s.v.id,
+    via: "final_review",
+    termsSelection: "latest_ready",
+  });
+  expect(made!.after).not.toMatchObject({ productTermsId: old.id });
+});
+it("販売条件が無ければ承認だけを確定し、営業可能にできない理由を返す", async () => {
+  const s = await setup();
+  await seedTerms(db, { version: "t-inactive", price: 300_000, rewardRule: TEST_RULE, active: false });
+  const r = await commitReviewDraft(db, clock, s.actor, s.v.id, {
+    revision: 0,
+    decision: "approved",
+    requestKey: randomUUID(),
+  });
+  expect(r.sellable).toMatchObject({ ok: false, reason: expect.stringContaining("販売条件") });
+  expect((await db.select().from(proposalVersions).where(eq(proposalVersions.id, s.v.id)))[0]!.status).toBe("approved");
+  expect((await db.select().from(companies).where(eq(companies.id, s.c.id)))[0]!.pipelineStatus).toBe("in_review");
+  expect((await db.select().from(auditEvents)).map((e) => e.action)).toEqual(["proposal_version.approve"]);
+  expect(await db.select().from(proposalReviewSubmissions)).toHaveLength(1);
+});
+it("営業可能化が途中で失敗しても、承認・受付は確定し、営業可能化の書き込みだけを戻す", async () => {
+  const s = await setup();
+  await seedTerms(db, { version: "t-1", price: 300_000, rewardRule: TEST_RULE });
+  await db.execute(
+    sql`create function fail_sales_offer() returns trigger language plpgsql as $$ begin raise exception 'fixture failure'; end; $$`,
+  );
+  await db.execute(
+    sql`create trigger fail_sales_offer before insert on sales_offers for each row execute function fail_sales_offer()`,
+  );
+  const r = await commitReviewDraft(db, clock, s.actor, s.v.id, {
+    revision: 0,
+    decision: "approved",
+    requestKey: randomUUID(),
+  });
+  expect(r.sellable).toMatchObject({ ok: false });
+  expect((await db.select().from(proposalVersions).where(eq(proposalVersions.id, s.v.id)))[0]!.status).toBe("approved");
+  expect((await db.select().from(companies).where(eq(companies.id, s.c.id)))[0]!.pipelineStatus).toBe("in_review");
+  expect((await db.select().from(auditEvents)).map((e) => e.action)).toEqual(["proposal_version.approve"]);
+  expect(await db.select().from(proposalReviewSubmissions)).toHaveLength(1);
+});
+it("以前の形式（確認チェック付き）の下書きはメモだけを読み出す", async () => {
+  const s = await setup();
+  await db.insert(proposalReviewDrafts).values({
+    userId: s.user.id,
+    proposalVersionId: s.v.id,
+    revision: 1,
+    values: { note: "旧メモ", company: true, rights: true, devices: false, links: false, continuity: false },
+    updatedAt: clock.now(),
+  });
+  expect((await loadReviewDraft(db, s.actor, s.v.id)).values).toEqual({ note: "旧メモ" });
 });

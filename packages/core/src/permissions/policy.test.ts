@@ -27,6 +27,10 @@ function linkDelivery(assignedUserId: string | null, createdBy: string | null) {
   return { type: "shareLink", purpose: "delivery", companyId: "c1", assignedUserId, createdBy } as const;
 }
 
+function contentAccessOf(salesUserIds: string[]) {
+  return { type: "contentAccess", companyId: "c1", salesUserIds } as const;
+}
+
 /** AC-17：営業ユーザー（A）から見た許可・拒否の表。運営は営業の利用停止の例外を除き許可 */
 const table: Row[] = [
   // 企業共通の状態（担当中か・営業拒否）は誰の担当でも読める
@@ -102,6 +106,12 @@ const table: Row[] = [
   // 納品（15・18章・AC-18）。運営だけが扱う
   ["納品の状態を読む", "read", { type: "delivery" }, { sales: N, ops: Y }],
   ["納品の作成・版の追加・状態の変更", "manage", { type: "delivery" }, { sales: N, ops: Y }],
+  // 顧客の編集アカウント（T23）。営業は担当企業のものを見るだけ
+  ["担当企業の顧客アカウントを見る", "read", contentAccessOf([SALES_A]), { sales: Y, ops: Y }],
+  ["完了契約の担当営業として顧客アカウントを見る", "read", contentAccessOf([SALES_B, SALES_A]), { sales: Y, ops: Y }],
+  ["担当外の企業の顧客アカウントを見る", "read", contentAccessOf([SALES_B]), { sales: N, ops: Y }],
+  ["担当者のいない企業の顧客アカウントを見る", "read", contentAccessOf([]), { sales: N, ops: Y }],
+  ["担当企業の顧客アカウントを招待・解除・役割変更する", "manage", contentAccessOf([SALES_A]), { sales: N, ops: Y }],
 ];
 
 // biome-ignore lint/suspicious/noExplicitAny: 表の行は action と resource の組を動的に持つ

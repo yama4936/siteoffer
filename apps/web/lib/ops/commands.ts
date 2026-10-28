@@ -18,6 +18,7 @@ import {
   err,
   extendAssignment,
   findSalesContract,
+  isTermsReadyForSales,
   liftSuppression,
   markRewardPaid,
   nextSalesOfferVersion,
@@ -59,6 +60,7 @@ import {
   discoveryCriteriaSchema,
   NtaCorporateNumberProvider,
 } from "@siteoffer/discovery";
+import { parseProposalPrecheck } from "@siteoffer/schemas";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { isUuid } from "./form.ts";
 import { type OpsActor, requireOps } from "./guard.ts";
@@ -502,8 +504,10 @@ export async function updateImageAssetPolicy(
 // ───────────── 2. 診断・生成・レビュー・営業可能化 ─────────────
 
 /**
- * 提案版のレビュー（運営確認）。in_review の版だけを承認・差し戻しできる。
- * 承認しただけでは営業可能にしない（販売条件・報酬条件の確認が別に要る、makeSellable）。
+ * 提案版のレビュー（運営の最終確認）。in_review の版だけを承認・差し戻しできる。
+ * 承認には AI の事前チェック（content.aiCheck）が passed であることが必要。
+ * この関数自体は営業可能にしない。最終確認画面（review-drafts.ts）が承認後に
+ * makeFinalReviewSellable を呼んで営業可能まで進める。
  */
 export async function reviewProposalVersion(
   { db, clock }: OpsDeps,
@@ -555,12 +559,29 @@ export async function reviewProposalVersion(
       return fail("superseded_version", "新しい提案版があります。最新版を開いて確認してください");
 
     if (before.status !== "in_review") return fail("invalid_state", "運営確認待ちの版だけをレビューできます");
+    let aiCheckSummary: Record<string, unknown> | null = null;
     if (input.decision === "approved") {
       const content = before.content as {
         designVersionId?: string;
         designSha256?: string;
         demoCheck?: { ok?: boolean };
+        aiCheck?: unknown;
       } | null;
+      // スキルで作った版には designVersionId が無く、下のデザイン経路の条件を通らない。
+      // AI の事前チェック（passed）を全経路で必須にして、検査なしの承認を防ぐ。
+      const aiCheck = parseProposalPrecheck(content?.aiCheck);
+      if (aiCheck?.status !== "passed")
+        return fail(
+          "ai_check_not_passed",
+          aiCheck ? "AIの事前チェックに不合格です。差し戻して再制作してください" : "AIの事前チェックが未実施です",
+        );
+      aiCheckSummary = {
+        status: aiCheck.status,
+        checkedAt: aiCheck.checkedAt,
+        checkPy: aiCheck.checker.checkPy,
+        siteDigest: aiCheck.siteDigest,
+        items: aiCheck.items.map((item) => ({ key: item.key, ok: item.ok })),
+      };
       if (content?.designVersionId) {
         const [design] = await tx.select().from(designVersions).where(eq(designVersions.id, content.designVersionId));
         if (
@@ -572,15 +593,6 @@ export async function reviewProposalVersion(
           return fail("design_not_approved", "この提案版のデザイン承認を確認できません");
         if (!content.demoCheck?.ok || !before.demoArtifactDir)
           return fail("quality_check_failed", "サイトのビルド・検査を完了してください");
-        const required = [
-          "会社情報の確認",
-          "画像の利用許諾",
-          "PC・スマホの表示",
-          "リンク・問い合わせ導線",
-          "既存機能の引き継ぎ",
-        ];
-        if (!note?.startsWith("確認済み：") || required.some((check) => !note.split("\n")[0]?.includes(check)))
-          return fail("review_incomplete", "公開前の5項目を確認してください");
       }
     }
     const now = clock.now();
@@ -606,7 +618,12 @@ export async function reviewProposalVersion(
       targetType: "proposal_version",
       targetId: before.id,
       before: { status: before.status },
-      after: { status: after!.status, note, companyId: row.companyId },
+      after: {
+        status: after!.status,
+        note,
+        companyId: row.companyId,
+        ...(aiCheckSummary ? { aiCheck: aiCheckSummary } : {}),
+      },
     });
     return after!;
   });
@@ -642,6 +659,52 @@ export function sellableIssueText(issue: SellableIssue): string {
 }
 
 /**
+ * 営業可能化に使う販売条件を自動で選ぶ（最終確認の承認時）。
+ * 有効で isTermsReadyForSales を満たす版のうち、最も新しく作られたもの。無ければ null。
+ */
+export async function latestReadyProductTerms(db: DbOrTx) {
+  return (
+    (await db.select().from(productTerms).where(eq(productTerms.active, true)).orderBy(desc(productTerms.createdAt)))
+      .filter(isTermsReadyForSales)
+      .at(0) ?? null
+  );
+}
+
+/**
+ * 最終確認で承認した版を、そのまま営業可能にする。販売条件は latestReadyProductTerms で自動選択する。
+ * 呼び出し側のトランザクション内でセーブポイントとして実行し、失敗しても承認は取り消さない。
+ * 失敗の理由は返り値で返す（代わりの手段は /ops/review/ready）。
+ */
+export async function makeFinalReviewSellable(
+  { db, clock }: OpsDeps,
+  actor: Actor | null,
+  input: { companyId: string; proposalVersionId: string },
+): Promise<{ ok: true; productTermsVersion: string } | { ok: false; reason: string }> {
+  class Failed extends Error {}
+  try {
+    return await db.transaction(async (sp) => {
+      const terms = await latestReadyProductTerms(sp);
+      if (!terms) throw new Failed("営業に使える販売条件・報酬条件（有効で価格・報酬が設定済み）がありません");
+      const result = await makeSellable({ db: sp, clock }, actor, {
+        companyId: input.companyId,
+        productTermsId: terms.id,
+        expectedProposalVersionId: input.proposalVersionId,
+        via: "final_review",
+      });
+      if (!result.ok) throw new Failed(result.message ?? sellableFailureText(result.error));
+      return { ok: true as const, productTermsVersion: terms.version };
+    });
+  } catch (e) {
+    if (e instanceof Failed) return { ok: false, reason: e.message };
+    return { ok: false, reason: "営業可能化の処理でエラーが発生しました" };
+  }
+}
+
+function sellableFailureText(code: string) {
+  return code in SELLABLE_ISSUE_TEXT ? SELLABLE_ISSUE_TEXT[code as SellableIssue] : "営業可能にできませんでした";
+}
+
+/**
  * 営業可能にする（AC-09・14章）。サーバー側で次をすべて確かめる：
  * 運営だけ／最新の提案版が承認済み／販売条件・報酬条件が設定済み（isTermsReadyForSales）／営業抑止がない。
  * 使った提案版と条件の版をsales_offersに固定し、操作履歴と一括で保存する。
@@ -655,6 +718,8 @@ export async function makeSellable(
     expectedProposalVersionId?: string;
     expectedCompanyUpdatedAt?: string;
     allowExisting?: boolean;
+    /** 最終確認の承認から自動で呼ぶとき。販売条件は自動選択（latest_ready）として記録する */
+    via?: "final_review";
   },
 ): Promise<Result<Company, string>> {
   const ops = authorizeCompanyManage(actor, input.companyId);
@@ -744,6 +809,7 @@ export async function makeSellable(
         productTermsId: terms!.id,
         productTermsVersion: terms!.version,
         salesOfferId: offer!.id,
+        ...(input.via === "final_review" ? { via: "final_review", termsSelection: "latest_ready" } : {}),
       },
     });
     return after!;

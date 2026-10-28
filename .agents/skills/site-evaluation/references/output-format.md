@@ -9,11 +9,13 @@
 | evaluation.json | エージェント＋scripts/score.py | 採点結果。アプリに取り込める形 |
 | evaluation.md | エージェント | 人が読む評価書 |
 
-再診断では日付の新しいディレクトリを作る。過去の結果は上書きしない（REQUIREMENTS.md §9 の再診断・更新日時）。
+再診断では新しい実行ディレクトリを作る。同日なら日時・実行名の接尾辞を付ける。過去の結果は上書きしない（REQUIREMENTS.md §9 の再診断・更新日時）。
 
 ## evaluation.json
 
-`summary` は score.py が書き込む。エージェントは書かない。
+`summary` は score.py が書き込む。エージェントは書かない。`input_digest` を含めて手編集せず、観測・日時・項目の変更後はscore.pyを再実行する。site-proposalは現在の評価・配点と再計算結果を照合し、不一致なら判定保留にする。
+
+再評価では `collected_at` を使用した収集版に合わせ、`evaluated_at` は本文・描画を再確認した時刻にする。収集版・実際に読んだページ・描画の取得日時を `conditions` に記録する。過去評価の点数を再計算しただけなら元の観測日時を保持し、評価書に再計算と明記する。
 
 ```json
 {
@@ -56,7 +58,7 @@
     {"id": "CF-NOT-MOBILE", "item": "D1", "fact": "viewport メタタグなし"}
   ],
   "sales_notes": {
-    "product_fit": "1ページサイトで改善可能。予約機能なし",
+    "product_fit": "確認済みの情報量に合う静的サイトで改善可能。予約機能なし",
     "proposal_ease": "サービス写真・施工事例が公開されており、デモ素材の参考にできる（利用権は未確認）",
     "web_dependency_guess": "高（推測：地域の個人客はWeb検索で業者を探す傾向）",
     "existing_vendor": "フッターに「制作：○○デザイン」",

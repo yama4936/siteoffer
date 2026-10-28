@@ -29,6 +29,8 @@ export type SkillExecution =
   | {
       ok: false;
       message: string;
+      /** 失敗の種類（実行場所の分類）。自動の再試行の判断に使う。不明なら実行器の異常として扱う */
+      reason?: "timeout" | "aborted" | "sandbox_error" | "sandbox_stop_unconfirmed";
       threadId: string | null;
       usage: Record<string, number> | null;
       stopped: boolean;
@@ -82,7 +84,14 @@ export class CodexSkillExecutor implements SkillExecutor {
     const usage = outcome.result?.usage ?? null;
     if (!outcome.ok) {
       const detail = outcome.result?.error ? `：${outcome.result.error.slice(0, 500)}` : "";
-      return { ok: false, message: `${outcome.message}${detail}`, threadId, usage, stopped: outcome.stopped };
+      return {
+        ok: false,
+        message: `${outcome.message}${detail}`,
+        reason: outcome.error,
+        threadId,
+        usage,
+        stopped: outcome.stopped,
+      };
     }
     return { ok: true, finalResponse: outcome.result.finalResponse, threadId, usage, stopped: true };
   }

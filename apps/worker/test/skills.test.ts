@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { err, ok } from "@siteoffer/core";
 import {
   auditEvents,
   companies,
@@ -18,7 +19,7 @@ import {
   users,
   websites,
 } from "@siteoffer/db";
-import { createDiscoveryJob } from "@siteoffer/discovery";
+import { createDiscoveryJob, type PageFetcher } from "@siteoffer/discovery";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createIntakeState, intakeDiscoveryJobs, intakeSkillRuns } from "../src/intake.ts";
@@ -29,13 +30,33 @@ import {
   cancelSkillRunByOps,
   requestSkillRunByOps,
   retrySkillRunByOps,
+  retrySkillRunBySystem,
   saveSkillScheduleByOps,
+  type WorkerSkillRunResult,
 } from "../src/skills/runs.ts";
 import { dispatchSkillSchedules } from "../src/skills/schedule.ts";
 import { REPO_ROOT, setupEnv, type TestEnv } from "./helpers.ts";
+import { makePrecheckSite } from "./precheck-fixture.ts";
 
 const EVALUATION_FIXTURE = path.join(REPO_ROOT, "fixtures/audit/evaluations/kakuu-koumuten.evaluation.json");
 const COLLECTED_FIXTURE = path.join(REPO_ROOT, "fixtures/audit/collected/kakuu-koumuten.collected.json");
+
+const PROPOSAL = {
+  summary: { headline: "見出し", direction: "方針" },
+  actions: [
+    {
+      id: "P-01",
+      title: "スマホ表示",
+      issue_ids: ["D1"],
+      priority: "high",
+      target: { url: "https://kakuu-koumuten.example/", location: "全体" },
+      current: "固定幅",
+      problem: "読みづらい",
+      change: { description: "レスポンシブにする" },
+      scope: "in_scope",
+    },
+  ],
+};
 
 type Behavior = (spec: SkillExecutionSpec, outDir: string) => Promise<{ status: string; summary: string } | "fail">;
 
@@ -55,7 +76,13 @@ class FakeExecutor implements SkillExecutor {
     const outDir = path.join(spec.workDir, outRel);
     const r = await this.behavior(spec, outDir);
     if (r === "fail")
-      return { ok: false as const, message: "隔離生成の実行に失敗しました", threadId: "t-1", usage: null, stopped: true };
+      return {
+        ok: false as const,
+        message: "隔離生成の実行に失敗しました",
+        threadId: "t-1",
+        usage: null,
+        stopped: true,
+      };
     return {
       ok: true as const,
       finalResponse: JSON.stringify({ ...r, output_dir: outRel }),
@@ -133,11 +160,29 @@ async function runOf(id: string) {
   return r!;
 }
 
+/** 偽の公式サイト：テストの探索結果に出てくる企業のページだけ、社名と所在地の入った本文を返す */
+const fakeOfficialSite: PageFetcher = async (url) =>
+  url.startsWith("https://midori-kenchiku.example.jp/")
+    ? ok({
+        finalUrl: url,
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        body: "<html><body><h1>株式会社みどり建築</h1><p>愛知県名古屋市緑区架空町1-2-3</p></body></html>",
+      })
+    : err("network_error", "テストでは取得しない");
+
 beforeEach(async () => {
   e = await setupEnv({ threshold: 100 });
   executor = new FakeExecutor();
   reportsRoot = path.join(e.dir, "reports");
-  e.deps.skills = { executor, workRoot: path.join(e.dir, "skill-work"), reportsRoot, repoRoot: REPO_ROOT };
+  e.deps.skills = {
+    executor,
+    workRoot: path.join(e.dir, "skill-work"),
+    reportsRoot,
+    repoRoot: REPO_ROOT,
+    // 探索の実在確認は外部へ取得しない。公式サイトの本文は偽の取得で返す
+    discovery: { fetchPage: fakeOfficialSite, nta: null },
+  };
   ops = await seedOps();
   companyId = await seedCompany();
 });
@@ -151,17 +196,25 @@ describe("登録と運営の操作", () => {
       .insert(users)
       .values({ email: "s@example.test", displayName: "営業", passwordHash: "x", role: "sales" })
       .returning();
-    const denied = await requestSkillRunByOps(e.deps, { kind: "sales", userId: sales[0]!.id }, {
-      skill: "site-evaluation",
-      params: {},
-      companyId,
-    });
+    const denied = await requestSkillRunByOps(
+      e.deps,
+      { kind: "sales", userId: sales[0]!.id },
+      {
+        skill: "site-evaluation",
+        params: {},
+        companyId,
+      },
+    );
     expect(denied).toMatchObject({ ok: false, error: "forbidden" });
-    const forged = await requestSkillRunByOps(e.deps, { kind: "ops", userId: sales[0]!.id }, {
-      skill: "site-evaluation",
-      params: {},
-      companyId,
-    });
+    const forged = await requestSkillRunByOps(
+      e.deps,
+      { kind: "ops", userId: sales[0]!.id },
+      {
+        skill: "site-evaluation",
+        params: {},
+        companyId,
+      },
+    );
     expect(forged).toMatchObject({ ok: false, error: "forbidden" });
 
     const first = await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
@@ -244,36 +297,21 @@ describe("実行", () => {
     executor.behavior = async (spec, outDir) => {
       expect(existsSync(path.join(outDir, "evaluation.json"))).toBe(true);
       if (spec.prompt.includes("site-proposal")) {
-        await writeFile(
-          path.join(outDir, "proposal.json"),
-          JSON.stringify({
-            summary: { headline: "見出し", direction: "方針" },
-            actions: [
-              {
-                id: "P-01",
-                title: "スマホ表示",
-                issue_ids: ["D1"],
-                priority: "high",
-                target: { url: "https://kakuu-koumuten.example/", location: "全体" },
-                current: "固定幅",
-                problem: "読みづらい",
-                change: { description: "レスポンシブにする" },
-                scope: "in_scope",
-              },
-            ],
-          }),
-        );
+        await writeFile(path.join(outDir, "proposal.json"), JSON.stringify(PROPOSAL));
         return { status: "completed", summary: "提案書を作成" };
       }
-      await mkdir(path.join(outDir, "site"), { recursive: true });
-      await writeFile(path.join(outDir, "site/index.html"), "<!doctype html><title>改善デモ</title>");
+      // 実際の check.py・check_mobile_quality.py を通る最小サイト（事前チェックに合格する）
+      makePrecheckSite(path.join(outDir, "site"));
       // コンテナ内で作られたリンクは写さない
       await symlink("/etc/passwd", path.join(outDir, "site/leak.txt"));
       return { status: "completed", summary: "7ページを作成" };
     };
     // 連鎖で登録された提案書を実行すると、続けてサイト作成が登録され、同じ drain で実行される
     const [proposalRun] = await e.db.select().from(skillRuns).where(eq(skillRuns.skill, "site-proposal"));
-    await e.db.update(skillRuns).set({ params: { chain: true } }).where(eq(skillRuns.id, proposalRun!.id));
+    await e.db
+      .update(skillRuns)
+      .set({ params: { chain: true } })
+      .where(eq(skillRuns.id, proposalRun!.id));
     await drain();
     await drain();
 
@@ -290,8 +328,15 @@ describe("実行", () => {
     expect(existsSync(path.join(audit!.artifactDir!, "site/leak.txt"))).toBe(false);
     const [version] = await e.db.select().from(proposalVersions);
     expect(version).toMatchObject({ status: "in_review", auditId: audit!.id });
+    expect((version!.content as { aiCheck: { status: string } }).aiCheck.status).toBe("passed");
+    const [company] = await e.db.select().from(companies).where(eq(companies.id, companyId));
+    expect(company!.pipelineStatus).toBe("in_review");
     const rebuild = runs.find((r) => r.skill === "site-rebuild")!;
-    expect(rebuild.result?.imported).toMatchObject({ proposalVersionId: version!.id, created: true });
+    expect(rebuild.result?.imported).toMatchObject({
+      proposalVersionId: version!.id,
+      created: true,
+      aiCheck: { status: "passed", failedItems: [] },
+    });
     expect(rebuild.result?.skippedFiles).toContain("site/leak.txt");
 
     // 改善後サイトのある評価には、もう作らない
@@ -303,7 +348,9 @@ describe("実行", () => {
   it("探索：候補を agent-web の収集ジョブとして取り込み、公式サイトのある企業の評価をつなぐ", async () => {
     executor.behavior = async (spec, outDir) => {
       const known = JSON.parse(await readFile(path.join(spec.workDir, "input/known-companies.json"), "utf8"));
-      expect(known).toMatchObject([{ name: "株式会社架空工務店", domains: ["kakuu-koumuten.example"], audited: false }]);
+      expect(known).toMatchObject([
+        { name: "株式会社架空工務店", domains: ["kakuu-koumuten.example"], audited: false },
+      ]);
       await mkdir(outDir, { recursive: true });
       const at = "2026-10-14T10:00:00+09:00";
       await writeFile(
@@ -364,24 +411,134 @@ describe("実行", () => {
     expect(chained).toMatchObject([{ skill: "site-evaluation", companyId: midori!.id, params: { chain: true } }]);
   });
 
-  it("実行器の失敗・不正な最終応答・成果物なしは失敗として記録する（自動で再試行しない）", async () => {
+  it("実行器の失敗は一時的な失敗として1回だけ自動で再試行し、2回目の失敗では再試行しない", async () => {
     executor.behavior = async () => "fail";
     const a = await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
     if (!a.ok) throw new Error(a.error);
     await drain();
-    expect(await runOf(a.value.runId)).toMatchObject({ status: "failed", attempts: 1 });
-    expect((await runOf(a.value.runId)).error).toContain("隔離生成の実行に失敗しました");
+    const first = await runOf(a.value.runId);
+    expect(first).toMatchObject({ status: "failed", attempts: 1 });
+    expect(first.error).toContain("隔離生成の実行に失敗しました");
+    expect(first.result).toMatchObject({ failureKind: "executor_error" });
     expect(executor.calls).toHaveLength(1);
+    const [retry] = await e.db.select().from(skillRuns).where(eq(skillRuns.retryOfRunId, a.value.runId));
+    expect(retry).toMatchObject({ status: "queued", skill: "site-evaluation", companyId, trigger: "manual" });
+    expect(first.result).toMatchObject({ autoRetryRunId: retry!.id });
+    const autoEvents = await e.db.select().from(auditEvents).where(eq(auditEvents.action, "skill_run.auto_retry"));
+    expect(autoEvents).toMatchObject([
+      { targetId: a.value.runId, after: { retryRunId: retry!.id, failureKind: "executor_error" } },
+    ]);
 
-    executor.behavior = async () => ({ status: "completed", summary: "書いたつもり" });
-    const b = await retrySkillRunByOps(e.deps, ops, a.value.runId);
+    // 再試行も失敗した。上限（1回）に達しているので、もう登録しない
+    await drain();
+    expect(executor.calls).toHaveLength(2);
+    expect(await runOf(retry!.id)).toMatchObject({ status: "failed", result: { failureKind: "executor_error" } });
+    expect(await e.db.select().from(skillRuns)).toHaveLength(2);
+    expect(await retrySkillRunBySystem(e.deps, retry!.id)).toMatchObject({ ok: false, error: "retry_limit" });
+    // 運営の再実行は、自動の再試行と同じ実行を返す（二重に登録しない）
+    expect(await retrySkillRunByOps(e.deps, ops, a.value.runId)).toMatchObject({
+      ok: true,
+      value: { runId: retry!.id, created: false },
+    });
+  });
+
+  it("制限時間切れ・最終応答の形式違反は再試行し、成果物なし・前提条件の不成立は再試行しない", async () => {
+    // 元の実行を先、再試行を後に並べる
+    const statusOf = async () =>
+      (await e.db.select().from(skillRuns))
+        .sort((x, y) => Number(!!x.retryOfRunId) - Number(!!y.retryOfRunId))
+        .map((r) => [r.status, (r.result as WorkerSkillRunResult | null)?.failureKind ?? null, !!r.retryOfRunId]);
+
+    // 最終応答の形式違反 → 再試行（成功）
+    let calls = 0;
+    executor.behavior = async (_spec, outDir) => {
+      calls++;
+      if (calls === 1) return { status: "unknown", summary: "形式違反" };
+      return evaluate(_spec, outDir);
+    };
+    const a = await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
+    if (!a.ok) throw new Error(a.error);
+    await drain();
+    await drain();
+    expect(await statusOf()).toEqual([
+      ["failed", "invalid_final_response", false],
+      ["succeeded", null, true],
+    ]);
+    await e.db.delete(skillRuns);
+
+    // 制限時間切れ（実行器の分類が timeout）→ 再試行の対象
+    const timedOut: SkillExecutor = {
+      kind: "fake",
+      requestedModel: null,
+      execute: async () => ({
+        ok: false,
+        message: "制限時間",
+        reason: "timeout",
+        threadId: null,
+        usage: null,
+        stopped: true,
+      }),
+    };
+    e.deps.skills!.executor = timedOut;
+    const b = await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
     if (!b.ok) throw new Error(b.error);
     await drain();
-    expect((await runOf(b.value.runId)).error).toBe("指定した出力先に成果物がありません");
-    expect(await e.db.select().from(siteAudits)).toHaveLength(0);
+    expect(await statusOf()).toEqual([
+      ["failed", "timeout", false],
+      ["queued", null, true],
+    ]);
+    await e.db.delete(skillRuns);
+    e.deps.skills!.executor = executor;
+
+    // 成果物なし → 再試行しない
+    executor.behavior = async () => ({ status: "completed", summary: "書いたつもり" });
+    const c = await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
+    if (!c.ok) throw new Error(c.error);
+    await drain();
+    expect((await runOf(c.value.runId)).error).toBe("指定した出力先に成果物がありません");
+    expect(await statusOf()).toEqual([["failed", "artifact_missing", false]]);
+    expect(await retrySkillRunBySystem(e.deps, c.value.runId)).toMatchObject({ ok: false, error: "not_transient" });
+    await e.db.delete(skillRuns);
+
+    // 実行直前に営業抑止が付いた（前提条件の不成立）→ 再試行しない
+    const d = await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
+    if (!d.ok) throw new Error(d.error);
+    await e.db.update(companies).set({ suppression: "do_not_contact" }).where(eq(companies.id, companyId));
+    await drain();
+    expect(await statusOf()).toEqual([["failed", "precondition", false]]);
 
     const events = await e.db.select().from(auditEvents).where(eq(auditEvents.targetType, "skill_run"));
     expect(events.map((x) => x.action)).toContain("skill_run.failed");
+    expect(events.filter((x) => x.action === "skill_run.auto_retry")).toHaveLength(2);
+  });
+
+  it("サイト作成のAIの事前チェックに不合格なら、版を failed で残し、実行も失敗にする（再試行しない）", async () => {
+    executor.behavior = evaluate;
+    await requestSkillRunByOps(e.deps, ops, { skill: "site-evaluation", params: {}, companyId });
+    await drain();
+    const [audit] = await e.db.select().from(siteAudits);
+    await writeFile(path.join(audit!.artifactDir!, "proposal.json"), JSON.stringify(PROPOSAL));
+    executor.behavior = async (_spec, outDir) => {
+      makePrecheckSite(path.join(outDir, "site"));
+      // 外部リソースを読み込むサイト（check.py の external_resource）
+      const index = path.join(outDir, "site/index.html");
+      const html = await readFile(index, "utf8");
+      await writeFile(index, html.replace("</head>", '<script src="https://cdn.example.test/x.js"></script></head>'));
+      return { status: "completed", summary: "作成" };
+    };
+    const r = await requestSkillRunByOps(e.deps, ops, { skill: "site-rebuild", params: {}, auditId: audit!.id });
+    if (!r.ok) throw new Error(r.error);
+    await drain();
+    const run = await runOf(r.value.runId);
+    expect(run).toMatchObject({ status: "failed", result: { failureKind: "precheck_failed" } });
+    expect(run.error).toContain("AIの事前チェックに不合格");
+    expect(run.result?.imported).toMatchObject({ status: "failed", aiCheck: { status: "failed" } });
+    const [version] = await e.db.select().from(proposalVersions);
+    expect(version!.status).toBe("failed");
+    expect((version!.content as { failure: string }).failure).toContain("リンク・フォーム・外部読み込み");
+    const [company] = await e.db.select().from(companies).where(eq(companies.id, companyId));
+    expect(company!.pipelineStatus).toBe("audited");
+    expect(await e.db.select().from(skillRuns).where(eq(skillRuns.retryOfRunId, r.value.runId))).toHaveLength(0);
   });
 
   it("スキル実行を設定していないワーカーは拾わず、受付待ちのまま残す", async () => {
@@ -402,7 +559,17 @@ describe("実行", () => {
     expect(await recoverStaleSkillRuns(e.deps)).toEqual([]);
     e.clock.advance(2 * 60 * 60 * 1000);
     expect(await recoverStaleSkillRuns(e.deps)).toEqual([r.value.runId]);
-    expect((await runOf(r.value.runId)).status).toBe("failed");
+    expect(await runOf(r.value.runId)).toMatchObject({ status: "failed", result: { failureKind: "interrupted" } });
+    // 中断は一時的な失敗として1回だけ再試行を登録する
+    const [retry] = await e.db.select().from(skillRuns).where(eq(skillRuns.retryOfRunId, r.value.runId));
+    expect(retry).toMatchObject({ status: "queued", skill: "site-evaluation" });
+    await e.db
+      .update(skillRuns)
+      .set({ status: "running", startedAt: e.clock.now() })
+      .where(eq(skillRuns.id, retry!.id));
+    e.clock.advance(2 * 60 * 60 * 1000);
+    expect(await recoverStaleSkillRuns(e.deps)).toEqual([retry!.id]);
+    expect(await e.db.select().from(skillRuns)).toHaveLength(2);
   });
 });
 
@@ -447,7 +614,10 @@ describe("定期実行", () => {
     });
     e.clock.advance(24 * 60 * 60 * 1000);
     expect(await dispatchSkillSchedules(e.deps)).toEqual([]);
-    const [row] = await e.db.select().from(skillSchedules).where(and(eq(skillSchedules.skill, "site-evaluation")));
+    const [row] = await e.db
+      .select()
+      .from(skillSchedules)
+      .where(and(eq(skillSchedules.skill, "site-evaluation")));
     expect(row).toMatchObject({ enabled: false, nextRunAt: null });
   });
 });

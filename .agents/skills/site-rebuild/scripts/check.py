@@ -30,6 +30,8 @@ import unicodedata
 import urllib.parse
 from html.parser import HTMLParser
 
+from check_mobile_quality import check_site as check_mobile_site
+
 TBC_RE = re.compile(
     r"【要確認[：:][^】]*】|【要確認】|要確認[：:]|\b(?:TBD|TODO)\b|"
     r"(?:サンプル|ダミー|仮)(?:テキスト|文言|文章|コピー|画像)|"
@@ -1067,6 +1069,21 @@ class Checker:
             self.err("admin-schema.json", None, "admin_schema",
                      f"画像のHTML bindingと定義が一致しない：HTML={sorted(actual_images)} schema={sorted(declared_images)}")
 
+        # 全サイトのID集合だけでなく、宣言ページと実際の表示先を双方向で照合する。
+        for key, attribute in (("editable_fields", "field_bindings"), ("editable_images", "image_bindings")):
+            for item in schema.get(key, []) if isinstance(schema.get(key), list) else []:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                    continue
+                item_id = item["id"]
+                bindings = item.get("bindings")
+                declared_pages = {binding["page"] for binding in bindings
+                                  if isinstance(binding, dict) and isinstance(binding.get("page"), str)} if isinstance(bindings, list) else set()
+                actual_pages = {name for name, page in self.pages.items()
+                                if item_id in getattr(page, attribute)}
+                if declared_pages != actual_pages:
+                    self.err("admin-schema.json", None, "admin_schema",
+                             f"{item_id} の表示ページがbindingsと不一致：HTML={sorted(actual_pages)} schema={sorted(declared_pages)}")
+
         articles = schema.get("articles")
         if not isinstance(articles, dict) or not isinstance(articles.get("enabled"), bool):
             self.err("admin-schema.json", None, "admin_schema", "articles.enabled が必要")
@@ -1143,6 +1160,9 @@ class Checker:
             return
         if status == "needs_revision":
             self.err("quality-review.json", None, "quality_review", "品質レビューに未解決の修正事項がある")
+        if status == "pass":
+            for message in check_mobile_site(self.root):
+                self.err("quality-review.json", None, "mobile_quality", message)
         scores = review.get("scores")
         expected = {
             "brand_specificity": 20, "visual_hierarchy": 20, "information_design": 20,

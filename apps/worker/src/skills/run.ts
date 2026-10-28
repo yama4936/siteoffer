@@ -2,24 +2,27 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Actor } from "@siteoffer/core";
-import { companies, type SkillName, type SkillRunResult, siteAudits, skillRuns, websites } from "@siteoffer/db";
+import { companies, type SkillName, siteAudits, skillRuns, websites } from "@siteoffer/db";
+import type { AgentWebOptions } from "@siteoffer/discovery";
 import { desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { WorkerDeps } from "../deps.ts";
-import {
-  parseSkillParams,
-  SKILL_DIRS,
-  SKILL_TIMEOUT_MS,
-  SKILL_WEB_SEARCH,
-  type SkillParams,
-} from "./definitions.ts";
+import { parseSkillParams, SKILL_DIRS, SKILL_TIMEOUT_MS, SKILL_WEB_SEARCH, type SkillParams } from "./definitions.ts";
 import { importCandidates } from "./discovery-import.ts";
 import { importEvaluationDir } from "./evaluation-import.ts";
 import type { SkillExecutor } from "./executor.ts";
-import { importSkillProposalVersion } from "./proposal-import.ts";
+import { summarizeAiCheck } from "./precheck.ts";
 import { buildSkillPrompt, SKILL_OUTPUT_SCHEMA, type SkillPromptInput, WORKSPACE_AGENTS_MD } from "./prompt.ts";
-import { claimSkillRun, createSkillRun, finishSkillRun } from "./runs.ts";
-import { type AuditTarget, checkSkillTarget, type CompanyTarget } from "./targets.ts";
+import { importSkillProposalVersion } from "./proposal-import.ts";
+import {
+  claimSkillRun,
+  createSkillRun,
+  finishSkillRun,
+  retrySkillRunBySystem,
+  type SkillFailureKind,
+  type WorkerSkillRunResult,
+} from "./runs.ts";
+import { type AuditTarget, type CompanyTarget, checkSkillTarget } from "./targets.ts";
 import { copyTree, dirExists, isPlainDir, OutputLimitError, readPlainJson } from "./workspace.ts";
 
 /** スキル実行の部品（ワーカーの設定 SITEOFFER_SKILL_RUNNER=codex のときだけ組み立てる） */
@@ -32,6 +35,8 @@ export interface SkillDeps {
   /** スキル・要件書の写し元（リポジトリのルート） */
   repoRoot: string;
   keepWorkDir?: boolean;
+  /** 探索結果の実在確認（公式サイトの取得・国税庁API）の差し替え。テスト用。省略時は実際に取得する */
+  discovery?: AgentWebOptions;
 }
 
 export const SKILL_ACTOR: Actor = { kind: "system", job: "skill-run" };
@@ -45,7 +50,21 @@ const finalSchema = z.object({
 type Run = typeof skillRuns.$inferSelect;
 /** 次に登録するスキル。提案書とサイト作成は同じ対象キーを使うため、この実行を終えてから登録する */
 type Chain = { skill: SkillName; targets: { companyId?: string; auditId?: string }[]; params: Record<string, unknown> };
+type SkillRunResult = WorkerSkillRunResult;
 type Outcome = { status: "succeeded" | "failed"; result: SkillRunResult; error?: string; chain?: Chain };
+
+/** 失敗の結果。失敗の種類を result.failureKind に入れる（自動の再試行の判断に使う） */
+function failed(kind: SkillFailureKind, error: string, result: SkillRunResult = {}): Outcome {
+  return { status: "failed", result: { ...result, failureKind: kind }, error };
+}
+
+const EXECUTION_FAILURE: Record<string, SkillFailureKind> = {
+  timeout: "timeout",
+  aborted: "interrupted",
+  sandbox_error: "executor_error",
+  // 停止を確認できないコンテナが動き続けている可能性がある間は、二重に起動しない
+  sandbox_stop_unconfirmed: "executor_stop_unconfirmed",
+};
 
 /** Asia/Tokyo の日付（YYYY-MM-DD）。スキルの出力先の日付ディレクトリに使う */
 export function tokyoDate(now: Date) {
@@ -54,7 +73,8 @@ export function tokyoDate(now: Date) {
 
 /**
  * 1件の実行を行う。受付待ち→実行中にできたときだけ動き、成果物の取り込みと連鎖まで終えて記録する。
- * 実行中の失敗は再試行しない（実Codexの費用がかかるため。運営が画面から再実行する）。
+ * 一時的な失敗（制限時間切れ・中断・実行器の異常・最終応答の形式違反）は1回だけ自動で再試行を登録する。
+ * それ以外の失敗は自動では繰り返さない（実Codexの費用がかかるため。運営が画面から再実行する）。
  */
 export async function executeSkillRun(deps: WorkerDeps, runId: string, signal?: AbortSignal) {
   const run = await claimSkillRun(deps.db, deps.clock, runId);
@@ -64,14 +84,13 @@ export async function executeSkillRun(deps: WorkerDeps, runId: string, signal?: 
     outcome = await runClaimed(deps, run, signal);
   } catch (e) {
     deps.logger.error("スキルの実行に失敗した", { runId, message: (e as Error).message });
-    outcome = {
-      status: "failed",
-      result: {},
-      error:
-        e instanceof OutputLimitError ? e.message : "スキルの実行中に予期しないエラーが発生しました。ワーカーのログを確認してください",
-    };
+    outcome =
+      e instanceof OutputLimitError
+        ? failed("output_limit", e.message)
+        : failed("internal_error", "スキルの実行中に予期しないエラーが発生しました。ワーカーのログを確認してください");
   }
   const finished = await finishSkillRun(deps.db, deps.clock, runId, outcome);
+  if (finished && outcome.status === "failed") await autoRetry(deps, runId);
   if (finished && outcome.status === "succeeded" && outcome.chain) {
     try {
       const chainedRunIds = await chainRuns(deps, run, outcome.chain);
@@ -90,15 +109,14 @@ export async function executeSkillRun(deps: WorkerDeps, runId: string, signal?: 
 async function runClaimed(deps: WorkerDeps, run: Run, signal?: AbortSignal): Promise<Outcome> {
   const skills = deps.skills;
   if (!skills)
-    return {
-      status: "failed",
-      result: {},
-      error: "このワーカーではスキル実行が設定されていません（SITEOFFER_SKILL_RUNNER=codex と実行用イメージの設定が必要です）",
-    };
+    return failed(
+      "not_configured",
+      "このワーカーではスキル実行が設定されていません（SITEOFFER_SKILL_RUNNER=codex と実行用イメージの設定が必要です）",
+    );
   const target = await checkSkillTarget(deps.db, run.skill, { companyId: run.companyId, auditId: run.auditId });
-  if (!target.ok) return { status: "failed", result: {}, error: target.reason };
+  if (!target.ok) return failed("precondition", target.reason);
   const params = parseSkillParams(run.skill, run.params);
-  if (!params.success) return { status: "failed", result: {}, error: "起動条件が不正です" };
+  if (!params.success) return failed("precondition", "起動条件が不正です");
 
   await mkdir(skills.workRoot, { recursive: true });
   const workDir = await mkdtemp(path.join(skills.workRoot, `skill-${run.id}-`));
@@ -121,12 +139,13 @@ async function runClaimed(deps: WorkerDeps, run: Run, signal?: AbortSignal): Pro
       usage: execution.usage,
       requestedModel: skills.executor.requestedModel,
     };
-    if (!execution.ok) return { status: "failed", result: base, error: execution.message };
+    if (!execution.ok)
+      return failed(EXECUTION_FAILURE[execution.reason ?? ""] ?? "executor_error", execution.message, base);
     let final: z.infer<typeof finalSchema>;
     try {
       final = finalSchema.parse(JSON.parse(execution.finalResponse ?? ""));
     } catch {
-      return { status: "failed", result: base, error: "スキルの最終応答が指定の形式ではありません" };
+      return failed("invalid_final_response", "スキルの最終応答が指定の形式ではありません", base);
     }
     const result = { ...base, summary: final.summary, outcome: final.status };
     return await collect(deps, skills, run, workDir, prepared.outRel, target.value, params.data, final.status, result);
@@ -161,7 +180,10 @@ async function prepareWorkspace(
     case "company-discovery": {
       const outRel = `reports/discovery/${date}-skill-${run.id.slice(0, 8)}`;
       await mkdir(path.join(workDir, outRel), { recursive: true });
-      await writeFile(path.join(workDir, "input/known-companies.json"), JSON.stringify(await knownCompanies(deps), null, 1));
+      await writeFile(
+        path.join(workDir, "input/known-companies.json"),
+        JSON.stringify(await knownCompanies(deps), null, 1),
+      );
       return {
         outRel,
         prompt: { skill: run.skill, params: params as SkillParams<"company-discovery">, outDir: outRel, date },
@@ -193,7 +215,9 @@ async function knownCompanies(deps: WorkerDeps) {
       corporate_number: companies.corporateNumber,
       pipeline_status: companies.pipelineStatus,
       suppression: companies.suppression,
-      domains: sql<string[]>`coalesce(array_agg(distinct ${websites.domain}) filter (where ${websites.domain} is not null), '{}')`,
+      domains: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${websites.domain}) filter (where ${websites.domain} is not null), '{}')`,
       audited: sql<boolean>`exists (select 1 from ${siteAudits} where ${siteAudits.companyId} = ${companies.id})`,
     })
     .from(companies)
@@ -217,7 +241,7 @@ async function collect(
 ): Promise<Outcome> {
   if (!(await isPlainDir(workDir, outRel)))
     return status === "completed"
-      ? { status: "failed", result, error: "指定した出力先に成果物がありません" }
+      ? failed("artifact_missing", "指定した出力先に成果物がありません", result)
       : { status: "succeeded", result };
   const src = path.join(workDir, outRel);
 
@@ -228,9 +252,9 @@ async function collect(
       result.outputDir = path.relative(skills.reportsRoot, dest);
       if (status !== "completed") return { status: "succeeded", result };
       const raw = await readPlainJson(src, "candidates.json");
-      if (raw === null) return { status: "failed", result, error: "candidates.json がないか、JSONとして読めません" };
-      const imported = await importCandidates(deps.db, deps.clock, raw, SKILL_ACTOR);
-      if (!imported.ok) return { status: "failed", result, error: imported.message ?? imported.error };
+      if (raw === null) return failed("artifact_missing", "candidates.json がないか、JSONとして読めません", result);
+      const imported = await importCandidates(deps.db, deps.clock, raw, SKILL_ACTOR, skills.discovery);
+      if (!imported.ok) return failed("import_failed", imported.message ?? imported.error, result);
       const s = imported.value;
       result.imported = {
         discoveryJobId: s.jobId,
@@ -247,20 +271,27 @@ async function collect(
           return {
             status: "succeeded",
             result,
-            chain: { skill: "site-evaluation", targets: ids.map((companyId) => ({ companyId })), params: { chain: true } },
+            chain: {
+              skill: "site-evaluation",
+              targets: ids.map((companyId) => ({ companyId })),
+              params: { chain: true },
+            },
           };
       }
       return s.status === "failed"
-        ? { status: "failed", result, error: "収集ジョブの取り込みに失敗しました" }
+        ? failed("import_failed", "収集ジョブの取り込みに失敗しました", result)
         : { status: "succeeded", result };
     }
     case "site-evaluation": {
       const { company, website } = target as CompanyTarget;
       if (!existsSync(path.join(src, "evaluation.json")))
         return status === "completed"
-          ? { status: "failed", result, error: "evaluation.json がありません" }
+          ? failed("artifact_missing", "evaluation.json がありません", result)
           : { status: "succeeded", result };
-      const dest = await freshDir(path.dirname(path.join(skills.reportsRoot, path.relative("reports", outRel))), path.basename(outRel));
+      const dest = await freshDir(
+        path.dirname(path.join(skills.reportsRoot, path.relative("reports", outRel))),
+        path.basename(outRel),
+      );
       await copyTree(src, dest, { overwrite: false });
       result.outputDir = path.relative(skills.reportsRoot, dest);
       const imported = await importEvaluationDir(
@@ -268,7 +299,8 @@ async function collect(
         dest,
         { actor: SKILL_ACTOR, source: `skill_run:${run.id}`, target: { companyId: company.id, websiteId: website.id } },
       );
-      if (imported.status === "failed") return { status: "failed", result, error: `評価の取り込みに失敗しました：${imported.reason}` };
+      if (imported.status === "failed")
+        return failed("import_failed", `評価の取り込みに失敗しました：${imported.reason}`, result);
       result.imported = imported;
       if (
         (params as SkillParams<"site-evaluation">).chain &&
@@ -296,7 +328,7 @@ async function collect(
         const hasProposal = (await readPlainJson(audit.artifactDir!, "proposal.json")) !== null;
         result.imported = { proposal: hasProposal };
         if (status === "completed" && !hasProposal)
-          return { status: "failed", result, error: "proposal.json がないか、JSONとして読めません" };
+          return failed("artifact_missing", "proposal.json がないか、JSONとして読めません", result);
         if (hasProposal && status === "completed" && (params as SkillParams<"site-proposal">).chain)
           return {
             status: "succeeded",
@@ -307,16 +339,28 @@ async function collect(
       }
       if (!(await dirExists(path.join(audit.artifactDir!, "site"))))
         return status === "completed"
-          ? { status: "failed", result, error: "改善後サイト（site/）がありません" }
+          ? failed("artifact_missing", "改善後サイト（site/）がありません", result)
           : { status: "succeeded", result };
-      const imported = await importSkillProposalVersion(deps.db, deps.clock, SKILL_ACTOR, audit.id);
-      if (!imported.ok) return { status: "failed", result, error: `提案版の取り込みに失敗しました（${imported.error}）` };
+      // 取り込みの前に、ワーカー自身がリポジトリの検査スクリプトで事前チェックする（作業ディレクトリの写しは使わない）
+      const imported = await importSkillProposalVersion(deps.db, deps.clock, SKILL_ACTOR, audit.id, {
+        repoRoot: skills.repoRoot,
+      });
+      if (!imported.ok)
+        return imported.error === "precheck_unavailable"
+          ? failed("precheck_unavailable", `AIの事前チェックを実行できません：${imported.message ?? ""}`, result)
+          : failed("import_failed", `提案版の取り込みに失敗しました（${imported.error}）`, result);
+      const version = imported.value.version;
       result.imported = {
-        proposalVersionId: imported.value.version.id,
-        version: imported.value.version.version,
-        status: imported.value.version.status,
+        proposalVersionId: version.id,
+        version: version.version,
+        status: version.status,
         created: imported.value.created,
+        ...(imported.value.aiCheck ? { aiCheck: summarizeAiCheck(imported.value.aiCheck) } : {}),
       };
+      if (version.status === "failed") {
+        const failure = (version.content as { failure?: unknown } | null)?.failure;
+        return failed("precheck_failed", typeof failure === "string" ? failure : "AIの事前チェックに不合格", result);
+      }
       return { status: "succeeded", result };
     }
   }
@@ -362,9 +406,23 @@ export async function recoverStaleSkillRuns(deps: Pick<WorkerDeps, "db" | "clock
     if (r.startedAt && now - r.startedAt.getTime() < SKILL_TIMEOUT_MS[r.skill] + graceMs) continue;
     const done = await finishSkillRun(deps.db, deps.clock, r.id, {
       status: "failed",
+      result: { failureKind: "interrupted" } satisfies SkillRunResult,
       error: "実行中のまま制限時間を過ぎたため失敗に戻しました（ワーカーの停止などで中断されたとみなす）",
     });
-    if (done) recovered.push(r.id);
+    if (!done) continue;
+    recovered.push(r.id);
+    await autoRetry(deps, r.id);
   }
   return recovered;
+}
+
+/** 一時的な失敗なら1回だけ再試行を登録する。登録できなくても実行の記録は変えない */
+async function autoRetry(deps: Pick<WorkerDeps, "db" | "clock"> & { logger?: WorkerDeps["logger"] }, runId: string) {
+  try {
+    const r = await retrySkillRunBySystem(deps, runId);
+    if (r.ok && r.value.created)
+      deps.logger?.info("一時的な失敗のため再試行を登録した", { runId, retryRunId: r.value.runId });
+  } catch (e) {
+    deps.logger?.error("再試行の登録に失敗した", { runId, message: (e as Error).message });
+  }
 }

@@ -3,9 +3,18 @@ import { constants } from "node:fs";
 import { open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { type Actor, authorize, type Clock, err, ok, type Result, recordEvent } from "@siteoffer/core";
-import { type DbOrTx, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
+import { companies, type DbOrTx, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { proposalTextSchema } from "@siteoffer/schemas";
 import { and, desc, eq } from "drizzle-orm";
+import { moveCompanyStatus } from "../pipeline/status.ts";
+import {
+  PrecheckUnavailableError,
+  type ProposalAiCheck,
+  type PythonRunner,
+  precheckFailureMessage,
+  runProposalPrecheck,
+  summarizeAiCheck,
+} from "./precheck.ts";
 
 type Json = Record<string, unknown>;
 
@@ -41,11 +50,21 @@ export type ImportSkillProposalError =
   | "audit_not_found"
   | "audit_not_evaluated"
   | "artifact_missing"
-  | "proposal_invalid";
+  | "proposal_invalid"
+  | "precheck_unavailable";
 
 export interface ImportedSkillProposal {
   version: typeof proposalVersions.$inferSelect;
   created: boolean;
+  /** この取り込みで行った（既存の版なら保存済みの）AIの事前チェック */
+  aiCheck: ProposalAiCheck | null;
+}
+
+export interface ImportSkillProposalOptions {
+  /** 検査スクリプト（.agents/skills/site-rebuild/scripts）を読むリポジトリのルート */
+  repoRoot: string;
+  /** テスト用：検査スクリプトの実行を差し替える */
+  python?: PythonRunner;
 }
 
 function text(value: unknown): string | null {
@@ -101,13 +120,15 @@ function proposalTextFromSkill(raw: Json) {
 
 /**
  * 評価IDを明示して取り込む。既存の承認済み版は変更せず、同じ成果物の再実行は増やさない。
- * 新しい版は必ず in_review とし、通常の運営レビューを通してから共有する。
+ * 取り込む前にAIの事前チェック（precheck.ts）を行う。合格した版は in_review（運営の最終確認待ち）にして企業を
+ * audited→in_review へ進め、不合格の版は failed として理由（content.failure）とチェック結果（content.aiCheck）を残す。
  */
 export async function importSkillProposalVersion(
   db: DbOrTx,
   clock: Clock,
   actor: Actor | null,
   auditId: string,
+  options: ImportSkillProposalOptions,
 ): Promise<Result<ImportedSkillProposal, ImportSkillProposalError>> {
   const [audit] = await db.select().from(siteAudits).where(eq(siteAudits.id, auditId)).limit(1);
   if (!audit) return err("audit_not_found");
@@ -132,24 +153,39 @@ export async function importSkillProposalVersion(
   const parsed = proposalTextFromSkill(raw);
   if (!parsed.success) return err("proposal_invalid");
 
+  // 取り込み済みの成果物は検査し直さない（同じ版を返す）
+  const found = await findImported(db, audit.companyId, audit.id, siteDir);
+  if (found) return ok({ version: found, created: false, aiCheck: aiCheckOf(found) });
+
+  const [company] = await db
+    .select({ officialSiteStatus: companies.officialSiteStatus, suppression: companies.suppression })
+    .from(companies)
+    .where(eq(companies.id, audit.companyId))
+    .limit(1);
+  if (!company) return err("audit_not_found");
+  let aiCheck: ProposalAiCheck;
+  try {
+    aiCheck = await runProposalPrecheck({
+      repoRoot: options.repoRoot,
+      siteDir,
+      company,
+      now: clock.now(),
+      ...(options.python ? { python: options.python } : {}),
+    });
+  } catch (e) {
+    if (e instanceof PrecheckUnavailableError) return err("precheck_unavailable", e.message);
+    throw e;
+  }
+  const passed = aiCheck.status === "passed";
+  const failure = passed ? null : precheckFailureMessage(aiCheck);
+
   return db.transaction(async (tx) => {
     let [proposal] = await tx.select().from(proposals).where(eq(proposals.companyId, audit.companyId)).limit(1);
     if (!proposal) {
       [proposal] = await tx.insert(proposals).values({ companyId: audit.companyId }).returning();
     }
-    const [existing] = await tx
-      .select()
-      .from(proposalVersions)
-      .where(
-        and(
-          eq(proposalVersions.proposalId, proposal!.id),
-          eq(proposalVersions.auditId, audit.id),
-          eq(proposalVersions.demoArtifactDir, siteDir),
-        ),
-      )
-      .orderBy(desc(proposalVersions.version))
-      .limit(1);
-    if (existing) return ok({ version: existing, created: false });
+    const existing = await findImported(tx, audit.companyId, audit.id, siteDir);
+    if (existing) return ok({ version: existing, created: false, aiCheck: aiCheckOf(existing) });
 
     const [latest] = await tx
       .select({ version: proposalVersions.version })
@@ -164,7 +200,7 @@ export async function importSkillProposalVersion(
       .values({
         proposalId: proposal!.id,
         version: (latest?.version ?? 0) + 1,
-        status: "in_review",
+        status: passed ? "in_review" : "failed",
         auditId: audit.id,
         content: {
           schemaVersion: 1,
@@ -178,12 +214,14 @@ export async function importSkillProposalVersion(
           demoCheck: null,
           generationJobIds: {},
           generator: "site-proposal+site-rebuild",
-          failure: null,
+          failure,
+          aiCheck,
         },
         demoArtifactDir: siteDir,
         createdAt: now,
       })
       .returning();
+    const summary = summarizeAiCheck(aiCheck);
     await recordEvent(tx, clock, {
       actor,
       action: "proposal_version.import_skill_artifact",
@@ -195,8 +233,49 @@ export async function importSkillProposalVersion(
         version: version!.version,
         status: version!.status,
         source: "site-proposal+site-rebuild",
+        aiCheck: summary,
       },
     });
-    return ok({ version: version!, created: true });
+    if (passed) {
+      // 最終確認待ちの版ができたので、企業を運営確認待ちへ進める（評価済みの企業だけ。他の状態は変えない）
+      await moveCompanyStatus(tx, clock, {
+        companyId: audit.companyId,
+        from: ["audited"],
+        to: "in_review",
+        reason: "ai_precheck_passed",
+        meta: { proposalVersionId: version!.id },
+      });
+    } else {
+      await recordEvent(tx, clock, {
+        actor,
+        action: "proposal_version.ai_precheck_failed",
+        targetType: "proposal_version",
+        targetId: version!.id,
+        after: { companyId: audit.companyId, auditId: audit.id, failure, aiCheck: summary },
+      });
+    }
+    return ok({ version: version!, created: true, aiCheck });
   });
+}
+
+function aiCheckOf(version: typeof proposalVersions.$inferSelect): ProposalAiCheck | null {
+  const content = version.content as Json | null;
+  return (content?.aiCheck as ProposalAiCheck | undefined) ?? null;
+}
+
+async function findImported(db: DbOrTx, companyId: string, auditId: string, siteDir: string) {
+  const [row] = await db
+    .select({ version: proposalVersions })
+    .from(proposalVersions)
+    .innerJoin(proposals, eq(proposals.id, proposalVersions.proposalId))
+    .where(
+      and(
+        eq(proposals.companyId, companyId),
+        eq(proposalVersions.auditId, auditId),
+        eq(proposalVersions.demoArtifactDir, siteDir),
+      ),
+    )
+    .orderBy(desc(proposalVersions.version))
+    .limit(1);
+  return row?.version ?? null;
 }

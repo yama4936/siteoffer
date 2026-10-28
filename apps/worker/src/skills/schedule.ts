@@ -15,7 +15,9 @@ export async function dispatchSkillSchedules(deps: Pick<WorkerDeps, "db" | "cloc
   const due = await deps.db
     .select()
     .from(skillSchedules)
-    .where(and(eq(skillSchedules.enabled, true), isNotNull(skillSchedules.nextRunAt), lte(skillSchedules.nextRunAt, now)));
+    .where(
+      and(eq(skillSchedules.enabled, true), isNotNull(skillSchedules.nextRunAt), lte(skillSchedules.nextRunAt, now)),
+    );
   const created: { skill: SkillName; runIds: string[] }[] = [];
   for (const schedule of due) {
     // 予定時刻が変わっていなければ次回へ進める（他のワーカーが先に進めたら何もしない）
@@ -48,15 +50,21 @@ export async function dispatchSkillSchedules(deps: Pick<WorkerDeps, "db" | "cloc
         await add({}, p);
         break;
       case "site-evaluation":
-        for (const c of (await listEvaluationCandidates(deps.db, (p.limit ?? 3) * 3)).filter((c) => !c.busy).slice(0, p.limit))
+        for (const c of (await listEvaluationCandidates(deps.db, (p.limit ?? 3) * 3))
+          .filter((c) => !c.busy)
+          .slice(0, p.limit))
           await add({ companyId: c.companyId }, { chain: p.chain ?? false });
         break;
       case "site-proposal":
-        for (const a of (await listProposalCandidates(deps.db, (p.limit ?? 3) * 3)).filter((a) => !a.busy).slice(0, p.limit))
+        for (const a of (await listProposalCandidates(deps.db, (p.limit ?? 3) * 3))
+          .filter((a) => !a.busy)
+          .slice(0, p.limit))
           await add({ auditId: a.auditId }, { chain: p.chain ?? false });
         break;
       case "site-rebuild":
-        for (const a of (await listRebuildCandidates(deps.db, (p.limit ?? 1) * 3)).filter((a) => !a.busy).slice(0, p.limit))
+        for (const a of (await listRebuildCandidates(deps.db, (p.limit ?? 1) * 3))
+          .filter((a) => !a.busy)
+          .slice(0, p.limit))
           await add({ auditId: a.auditId }, {});
         break;
     }

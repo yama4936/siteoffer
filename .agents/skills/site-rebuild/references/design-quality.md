@@ -76,10 +76,19 @@ HTMLを書く前に `$OUT/site/design-brief.json` を作る。
 3. 折りたたみメニューがあれば開いた状態
 4. 表、長文、大量一覧、固定CTAがあれば、その問題が起きやすい途中位置
 
+PNGは deviceScaleFactor: 1 で撮影し、先頭画面の実ピクセル寸法を390×844、全長を幅390・高さ844以上にする。画像を別状態の証拠として使い回さず、成果物ディレクトリ内の `review/`（`site/` の隣）へ保存する。画像の存在だけでなくPNGの形式・寸法も検査する。
+
+HTML/CSS/JS/画像等を修正したら、点数や画像を流用せず変更後を再確認・撮影する。次のコマンドで現行の表示入力の指紋を取得し、`quality-review.json.site_digest` に保存する。これは撮影自体の証明ではないため、取得した値だけを更新して古い証跡を使わない。
+
+```bash
+python3 <skill>/scripts/check_mobile_quality.py --digest $OUT/site
+```
+
 `quality-review.json.page_reviews` に各HTMLの証拠とチェック結果を記録する。トップだけ、またはページ種別の代表1件だけでは合格にしない。
 
 ```json
 {
+  "site_digest": "sha256:上記コマンドが返す値",
   "page_reviews": [
     {
       "file": "index.html",
@@ -114,7 +123,7 @@ HTMLを書く前に `$OUT/site/design-brief.json` を作る。
 python3 <skill>/scripts/check_mobile_quality.py $OUT/site
 ```
 
-この検査は、スマホ単独点、390×844の数値、全HTMLのページ別レビュー、先頭画面と全長画像、証拠ファイルの存在、重なり・可読性等の必須判定を確認する。終了コード1なら `pass` にしない。
+通常の `check.py` は `status: pass` のときこの検査を内部で実行する。単体実行もでき、スマホ単独点、390×844の数値、全HTMLのページ別レビュー、先頭画面と全長PNGの実寸、表示入力の指紋、重なり・可読性等の必須判定を確認する。画像だけから実際の重なりや読みやすさを自動判定するものではなく、各チェックは実画面で確認する。終了コード1なら `pass` にしない。
 
 ## 5. 100点の品質レビュー
 

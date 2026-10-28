@@ -23,11 +23,16 @@ SiteOfferの営業候補となる企業サイトを、外から観測できる�
 
 以下のパスはリポジトリのルートから実行する前提。`<skill>` はこのスキルのディレクトリ（`.agents/skills/site-evaluation`）。
 
-### 1. 収集
+### 1. 実行範囲を決めて収集
+
+- 再診断は新しい実行ディレクトリを作る。同日の成果物があれば日時・実行名の接尾辞を付け、既存の評価・提案・契約で選ばれた版を上書きしない。
+- **再評価**は、新しい収集版の本文・描画を読み直し、22項目の観測・理由・日時を更新する作業。**再計算**は既存の観測を変えずに score.py を実行する作業。過去の evaluation.json をコピーして点数を再計算しただけなら「再評価済み」と報告しない。
+- 保存済み材料だけで試す依頼なら、元の取得日時・収集版・不足を明記して使う。ライブ確認が必要な情報は収集工程で確認する。現在日時を付けるだけで古い根拠を新しく見せない。
 
 ```bash
 DOMAIN=<正規化ドメイン。www. を除く>; DATE=$(TZ=Asia/Tokyo date +%F)
-OUT=reports/sites/$DOMAIN/$DATE
+OUT=reports/sites/$DOMAIN/${DATE}-$(TZ=Asia/Tokyo date +%H%M%S)
+# OUTが既存なら、別の実行名を付けてから収集する
 python3 <skill>/scripts/collect.py <URL> --out $OUT --screenshot --psi
 ```
 
@@ -35,7 +40,7 @@ python3 <skill>/scripts/collect.py <URL> --out $OUT --screenshot --psi
 - 改善後サイトの制作（site-rebuild）は collected.json の本文だけを材料にする。主メニューのページが上限で取れなかった場合は、手順2の追記で補う。
 - `fatal` が出たら、`status: "unevaluable"` の evaluation.json を作り、理由を書いて終える（robots.txt の拒否、非公開アドレス、取得失敗など）。
 - `--psi` は外部API（PageSpeed Insights）を使う。APIキーなしでは HTTP 429 で失敗しやすいため、環境変数 `PSI_API_KEY` を設定しておく。失敗しても続行し、E1 は代替の根拠（参考評価）か評価不能にする。
-- スクリーンショットが撮れたら Read で画像を見て、D2・G3・A1（ファーストビューの見え方）の根拠に使う。
+- スクリーンショットが撮れたら画像表示ツールで画像を見て、D2・G3・A1（ファーストビューの見え方）の根拠に使う。
 
 ### 2. 読み込み
 
@@ -45,9 +50,11 @@ python3 <skill>/scripts/collect.py <URL> --out $OUT --screenshot --psi
 python3 <skill>/scripts/collect.py <URL> --out $OUT --add-url <ページURL> [--add-url ...] --reason "<評価項目・理由>"
 ```
 
-- 評価の根拠にしたページは、必ず collected.json に入っている状態にする。WebFetch で読んだだけのページは本文が残らず、site-rebuild で使えない。
-- JavaScript で描画されるなど collect.py で本文が取れないときだけ WebFetch で確認し、observations に「本文は collected.json に未保存」と書く。
+- 評価の根拠にしたページは、必ず collected.json に入っている状態にする。ブラウザで読んだだけのページは本文が残らず、site-rebuild で使えない。
+- フレームやJavaScriptで本文が取れない場合はChrome Useで画面・リンク先を確認し、本文ページを追記収集する。ブラウザでしか取れない本文は、URL・確認日時・取得方法とともに観測データへ保存する。保存できなければ「本文は collected.json に未保存」と記録し、制作に渡せる材料とは扱わない。
 - 追加確認したURLは observations に残す。
+- フレーム・Flashの検出値は技術の存在を示すだけ。`flash_or_frames: true` だけでE2=0やCF-BROKENにしない。主要な本文・操作が実際に利用不能か、対象画面・URL・症状を確認する。判別できなければ評価不能。
+- 不足ページの取得後は「ない」「見つからない」とした観測を全項目で再確認する。トップの外枠本文が空でも、本文ページまで空と推定しない。
 
 ### 3. 目的の推定
 
@@ -71,6 +78,8 @@ python3 <skill>/scripts/score.py $OUT/evaluation.json
 ```
 
 総合点・カテゴリ点・カバー率・致命項目が `summary` に書き込まれ、Markdown の点数表が出力される。検証エラーが出たら evaluation.json を直して再実行する。点数を手計算しない。
+
+score.py は重複ID、真偽値・小数のレベル、空の根拠、不正な配点を拒否し、失敗時は過去のsummaryと致命項目を消す。致命項目は現在のレベル0の項目から再構築する。`summary.input_digest` は評価内容・採点設定との対応を記録するための値で、現実の真偽を保証するものではない。採点・根拠・日時を編集したら再計算する。
 
 ### 6. 評価書
 

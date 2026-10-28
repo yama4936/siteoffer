@@ -32,14 +32,14 @@ import type { JobQueue, Logger, WorkerDeps } from "./deps.ts";
 import { defaultGenerationInputBuilder, fixtureGenerationInputBuilder } from "./input.ts";
 import { DEFAULT_POLICIES, DEFAULT_SCHEDULES, type StepKind, type StepPolicy } from "./queues.ts";
 import { createAstroSiteBuilder } from "./site-builder.ts";
-import { CodexSkillExecutor } from "./skills/executor.ts";
-import type { SkillDeps } from "./skills/run.ts";
 import {
   createDockerSiteBuilder,
   DEFAULT_SITE_BUILD_IMAGE,
   DEFAULT_SITE_BUILD_TIMEOUT_MS,
   siteBuildUserValid,
 } from "./site-builder-docker.ts";
+import { CodexSkillExecutor } from "./skills/executor.ts";
+import type { SkillDeps } from "./skills/run.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -318,7 +318,10 @@ export function createGenerator(config: GeneratorConfig, env: NodeJS.ProcessEnv 
 }
 
 /** スキル実行の部品。スキルはChromiumでの表示確認を含むため、生成より資源の上限を広げる（推奨案） */
-export function createSkillDeps(config: SkillRunnerConfig, env: NodeJS.ProcessEnv = process.env): SkillDeps | undefined {
+export function createSkillDeps(
+  config: SkillRunnerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): SkillDeps | undefined {
   if (config.kind === "none") return undefined;
   const runner = new DockerSandboxRunner(
     {

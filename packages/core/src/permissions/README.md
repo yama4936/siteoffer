@@ -38,6 +38,7 @@ if (can(actor, "read_shared", { type: "company", companyId, sellable, assignedUs
 | user | 自分の `read` だけ |
 | shareLink | `create` は自分が担当中の企業の提案（purpose: proposal）だけ。`revoke` は自分が発行したものだけ。`read` は提案リンクで、自分の担当企業か自分の発行のもの。納品（delivery）のリンクは不可 |
 | delivery | 不可（`read`・`manage` とも）。納品は運営が扱い、顧客の承認・修正依頼は共有リンクの検証で判定する（AC-18） |
+| contentAccess | `read` だけ。対象企業の有効な担当か、その企業の完了契約の担当営業（salesUserIds に自分が含まれる）のとき。`manage`（招待・解除・役割の変更）は不可（T23） |
 
 業務上の条件（同時担当数の上限・営業拒否中の確保禁止・状態遷移・営業が記録できる抑止の種類・担当確保や成約報告の主体が営業であることなど）はここでは判定しない。各業務関数で判定する。
 

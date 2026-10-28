@@ -110,3 +110,19 @@ export async function seedTerms(
     .returning();
   return t!;
 }
+
+/** AIの事前チェック（proposal_versions.content.aiCheck）のテスト用の値 */
+export function testPrecheck(status: "passed" | "failed" = "passed") {
+  return {
+    status,
+    checkedAt: "2026-10-16T00:00:00.000Z",
+    checker: { checkPy: "c".repeat(64) },
+    siteDigest: `sha256:${"d".repeat(64)}`,
+    items: (["company", "devices", "links", "continuity"] as const).map((key) => ({
+      key,
+      ok: status === "passed" || key !== "links",
+      summary: `${key}の確認`,
+      details: status === "failed" && key === "links" ? ["/contact へのリンクが切れています"] : [],
+    })),
+  };
+}

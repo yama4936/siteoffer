@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+import test_check_mobile_quality as mobile_fixtures
+
 
 SCRIPT = pathlib.Path(__file__).with_name("check.py")
 
@@ -466,6 +468,59 @@ class ContentPlanCheckTest(unittest.TestCase):
             self.assertIn("feature_summary", messages)
 
 
+    def test_integrated_quality_gate_rejects_false_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            self.write_json(root / "quality-review.json", {
+                "status": "pass", "fatal_issues": [], "total": 85,
+                "scores": {"brand_specificity": 20, "visual_hierarchy": 20,
+                           "information_design": 20, "content_trust": 15,
+                           "mobile": 0, "polish": 10},
+                "viewports": [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}],
+            })
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            self.assertIn("mobile_quality", {item["check"] for item in result["errors"]})
+            self.assertIn("page_reviews", " ".join(item["message"] for item in result["errors"]))
+
+    def test_integrated_quality_gate_accepts_current_real_png_review(self) -> None:
+        from check_mobile_quality import site_digest
+        with tempfile.TemporaryDirectory() as directory:
+            parent = pathlib.Path(directory)
+            helper = mobile_fixtures.MobileQualityCheckTest()
+            site, review = helper.make_site(parent)
+            self.make_site(site)
+            review.update(site_digest=site_digest(str(site)), total=87,
+                          scores={"brand_specificity": 17, "visual_hierarchy": 17,
+                                  "information_design": 18, "content_trust": 14,
+                                  "mobile": 13, "polish": 8})
+            helper.write_review(site, review)
+            code, result = self.run_check(site)
+            self.assertEqual(0, code, result)
+
+    def test_binding_cannot_point_at_different_real_page(self) -> None:
+        # Test the binding contract independently of unrelated page-architecture rules.
+        import importlib.util
+        from types import SimpleNamespace
+        spec = importlib.util.spec_from_file_location("site_checker", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            checker = module.Checker(str(root))
+            checker.pages = {
+                "index.html": SimpleNamespace(field_bindings={"company.name"}, image_bindings=set()),
+                "about.html": SimpleNamespace(field_bindings=set(), image_bindings=set()),
+            }
+            schema = json.loads((root / "admin-schema.json").read_text())
+            schema["editable_fields"][0]["bindings"] = [{"page": "about.html", "section": "h1"}]
+            self.write_json(root / "admin-schema.json", schema)
+            checker.check_admin_schema({"selected_content": [{"id": "company-name"}]})
+            self.assertTrue(any("表示ページがbindingsと不一致" in item["message"] for item in checker.errors))
+
+
 class BlockedRecordCheckTest(unittest.TestCase):
     RECORD = {
         "schema_version": "0.1", "status": "blocked", "stage": "source_coverage",
@@ -503,6 +558,7 @@ class BlockedRecordCheckTest(unittest.TestCase):
     def test_missing_sources_required(self):
         code, _ = self.run_blocked(dict(self.RECORD, missing_sources=[]))
         self.assertEqual(code, 1)
+
 
 
 if __name__ == "__main__":

@@ -201,7 +201,7 @@ class PageParser(HTMLParser):
         elif tag == "form":
             self._cur_form = {"action": a.get("action", ""), "inputs": [], "labels": 0}
         elif tag in ("input", "select", "textarea") and self._cur_form is not None:
-            if a.get("type", "").lower() not in ("hidden", "submit", "button"):
+            if a.get("type", "").lower() not in ("hidden", "submit", "button", "reset", "image"):
                 self._cur_form["inputs"].append({"tag": tag, "type": a.get("type", ""),
                                                  "name": a.get("name", ""),
                                                  "required": "required" in a or a.get("aria-required") == "true",

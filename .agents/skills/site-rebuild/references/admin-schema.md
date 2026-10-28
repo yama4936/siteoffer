@@ -1,6 +1,6 @@
 # 顧客管理画面の定義
 
-site-rebuild は、静的サイトと同時に `$OUT/site/admin-schema.json` を作る。SiteOfferの顧客管理画面が、企業ごとに編集できる項目・画像・記事・受付フォームを判別するための契約であり、営業デモ内に管理画面そのものを実装するものではない。
+site-rebuild は、静的サイトと同時に `$OUT/site/admin-schema.json` を作る。SiteOfferの顧客管理画面が、企業ごとに編集できる項目・画像・記事・受付フォームを判別するための契約であり、営業デモ内に管理画面そのものを実装するものではない。管理画面のUI・画面構成・操作体系は全顧客で共通とし、企業別の管理UIを生成しない。
 
 ## 原則
 
@@ -74,7 +74,7 @@ site-rebuild は、静的サイトと同時に `$OUT/site/admin-schema.json` を
 - `integration_status` は `planned | connected_verified`。このスキルで定義だけ作った場合は `planned`
 - `editable_fields[].id` と `editable_images[].id` は種類をまたいでも重複不可
 - 固定項目の `type` は `short_text | long_text | rich_text | phone | email | url | hours | money | list | table`
-- 各固定項目は、元になった `selected_content[].id`、表示ページ、入力制約を持つ
+- 各固定項目は、元になった `selected_content[].id`、表示ページ、入力制約を持つ。`bindings[].page` は実際にそのIDを表示する全ページと一致させる。別ページの同一IDで不足を補わず、繰り返し表示するヘッダー・フッターも列挙する
 - 画像は表示ページ、alt必須か、用途、縦横比を持つ。`production` を自動許可する意味ではなく、登録時にその用途の許諾を必要とする指定
 - 記事を使う場合は、種別と一覧の表示先を持つ
 - 受付フォームは、氏名等の入力欄だけでなく、保存、顧客受信一覧、メール通知、対応状況管理をするか、プライバシー表示、スパム対策を明記する

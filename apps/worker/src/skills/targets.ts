@@ -39,7 +39,11 @@ async function checkAuditBase(db: DbOrTx, auditId: string): Promise<TargetCheck<
   const [audit] = await db.select().from(siteAudits).where(eq(siteAudits.id, auditId)).limit(1);
   if (!audit) return fail("評価が見つかりません");
   if (audit.status !== "evaluated") return fail("評価が完了していません（評価不能・未完了）");
-  if (!audit.artifactDir || !path.isAbsolute(audit.artifactDir) || !existsSync(path.join(audit.artifactDir, "evaluation.json")))
+  if (
+    !audit.artifactDir ||
+    !path.isAbsolute(audit.artifactDir) ||
+    !existsSync(path.join(audit.artifactDir, "evaluation.json"))
+  )
     return fail("評価の成果物（evaluation.json）が見つかりません");
   const [company] = await db.select().from(companies).where(eq(companies.id, audit.companyId)).limit(1);
   const [website] = await db.select().from(websites).where(eq(websites.id, audit.websiteId)).limit(1);
@@ -56,9 +60,11 @@ export async function checkRebuildTarget(db: DbOrTx, auditId: string): Promise<T
   const base = await checkAuditBase(db, auditId);
   if (!base.ok) return base;
   const dir = base.value.audit.artifactDir!;
-  if (!existsSync(path.join(dir, "proposal.json"))) return fail("改善提案書（proposal.json）がありません。先に提案書を作成してください");
+  if (!existsSync(path.join(dir, "proposal.json")))
+    return fail("改善提案書（proposal.json）がありません。先に提案書を作成してください");
   // 既存の改善後サイトは上書きしない（SKILL.md：上書き前に確認する。契約で選ばれた版のデモを壊さない）
-  if (existsSync(path.join(dir, "site"))) return fail("この評価には改善後サイトが既にあります。作り直すには再評価してください");
+  if (existsSync(path.join(dir, "site")))
+    return fail("この評価には改善後サイトが既にあります。作り直すには再評価してください");
   return { ok: true, value: base.value };
 }
 
@@ -133,7 +139,9 @@ async function latestEvaluatedAudits(db: DbOrTx): Promise<AuditRow[]> {
     })
     .from(siteAudits)
     .innerJoin(companies, eq(companies.id, siteAudits.companyId))
-    .where(and(eq(siteAudits.status, "evaluated"), isNotNull(siteAudits.artifactDir), eq(companies.suppression, "none")))
+    .where(
+      and(eq(siteAudits.status, "evaluated"), isNotNull(siteAudits.artifactDir), eq(companies.suppression, "none")),
+    )
     .orderBy(siteAudits.companyId, desc(siteAudits.createdAt));
   return rows.sort((a, b) => Number(a.totalScore ?? 101) - Number(b.totalScore ?? 101));
 }
