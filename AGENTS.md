@@ -85,7 +85,9 @@
 
 ### Claude Codeの権限設定
 
-Claude Codeでは、`.claude/settings.json`で`git push origin main`を許可している。これ以外のpush（他ブランチ、force、タグ）は許可していない。
+Claude Codeでは、`.claude/settings.json`で`git push origin main`と、上の手順で使うgitコマンド（status・diff・log・add・commit・fetch・`pull --rebase origin main`等）と`scripts/git-check.sh`を許可している。これ以外のpush（他ブランチ、force、タグ）は許可していない。`git add -A`・`git add .`・force push・`reset --hard`は拒否設定にしている。
+
+同じファイルでフックも設定している。`scripts/claude-hooks/track-edit.sh`がセッションごとに編集したファイルを`.git/claude-edits/`へ記録し、終了時に`scripts/claude-hooks/stop-git.sh`が、そのセッションが編集したファイルに未コミットの変更が残っているか、未pushのコミットがあるかを確認する。どちらかがあれば終了を1回止め、上の手順でcommit・pushするよう促す。他のセッションの変更は判定に含めない。
 他のツールで作業する場合は、そのツールの権限設定に従う。
 
 ### Gitに入れないもの
