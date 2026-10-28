@@ -100,12 +100,7 @@ export type ContentAccessInput = {
 };
 const isRole = (role: unknown): role is ContentAccessRole =>
   typeof role === "string" && (CONTENT_ACCESS_ROLES as readonly string[]).includes(role);
-function validInvitation(input: {
-  email: unknown;
-  expectedRevision: unknown;
-  requestId: unknown;
-  confirmed: unknown;
-}) {
+function validInvitation(input: { email: unknown; expectedRevision: unknown; requestId: unknown; confirmed: unknown }) {
   return (
     typeof input.requestId === "string" &&
     uuid.test(input.requestId) &&
@@ -399,10 +394,9 @@ export async function customerContentRole(
   actor: Actor | null,
   companyId: string,
 ): Promise<ContentAccessRole> {
-  return db.transaction(
-    async (tx) => (await customerContentAccess(tx, actor, companyId, false)).access.role,
-    { isolationLevel: "repeatable read" },
-  );
+  return db.transaction(async (tx) => (await customerContentAccess(tx, actor, companyId, false)).access.role, {
+    isolationLevel: "repeatable read",
+  });
 }
 /** 顧客の管理者用：自社のアカウントと役割の一覧。契約・トークンは返さない */
 export async function loadCompanyContentAccess(db: DbOrTx, actor: Actor | null, companyId: string) {
@@ -454,9 +448,7 @@ export async function loadSalesContentAccess(db: DbOrTx, actor: Actor | null, co
       const assigned = await tx
         .select({ userId: assignments.userId })
         .from(assignments)
-        .where(
-          and(eq(assignments.companyId, companyId), inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES])),
-        );
+        .where(and(eq(assignments.companyId, companyId), inArray(assignments.status, [...ACTIVE_ASSIGNMENT_STATUSES])));
       const contracted = await tx
         .select({ userId: contracts.salesUserId })
         .from(contracts)

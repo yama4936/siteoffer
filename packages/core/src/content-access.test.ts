@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { auditEvents, contentAccess, contracts, type Db, users } from "@siteoffer/db";
+import { readFileSync } from "node:fs";
+import { assignments, auditEvents, contentAccess, contracts, type Db, users } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -10,11 +11,17 @@ import { fixedClock } from "./common/clock.ts";
 import { publishArticle, publishedArticles, saveArticle } from "./content.ts";
 import {
   acceptContentInvitation,
+  changeContentAccessRole,
+  customerContentRole,
   inspectContentInvitation,
+  inviteCompanyEditor,
   inviteContentEditor,
   listCustomerContentCompanies,
+  loadCompanyContentAccess,
   loadContentAccess,
   loadCustomerArticles,
+  loadSalesContentAccess,
+  revokeCompanyEditor,
   revokeContentEditor,
 } from "./content-access.ts";
 import { loadArticleWorkspace, saveArticleWorkingCopy, submitArticleOperation } from "./content-workspace.ts";
@@ -307,4 +314,222 @@ it("顧客招待を別経路として使っても、通常ログインと同じ�
     replayed: true,
   });
   expect((await createLocalAuthProvider({ db, clock: later }).login({ email: s.input.email, password })).ok).toBe(true);
+});
+
+// T23：顧客アカウントの管理者・編集者
+async function acceptAs(token: string) {
+  const account = await acceptContentInvitation(db, clock, {
+    token,
+    displayName: "架空担当",
+    password,
+    confirmed: true,
+  });
+  return { kind: "customer_user" as const, userId: account.userId };
+}
+async function inviteEditorBy(
+  admin: { kind: "customer_user"; userId: string },
+  companyId: string,
+  email = `${randomUUID()}@example.test`,
+) {
+  return inviteCompanyEditor(db, clock, admin, {
+    companyId,
+    email,
+    expectedRevision: 0,
+    requestId: randomUUID(),
+    confirmed: true,
+  });
+}
+it("運営の招待は既定で管理者、管理者は自社の編集者を招待・解除でき、編集者は記事を編集できる", async () => {
+  const s = await setup(),
+    a = await activate(s);
+  expect(a.access.role).toBe("admin");
+  expect(await customerContentRole(db, a.actor, s.company.id)).toBe("admin");
+  const invited = await inviteEditorBy(a.actor, s.company.id);
+  expect(invited.access).toMatchObject({ role: "editor", status: "invited", contractId: s.contract.id });
+  const editor = await acceptAs(invited.token!);
+  expect(await customerContentRole(db, editor, s.company.id)).toBe("editor");
+  expect(await loadCustomerArticles(db, editor, s.company.id)).toEqual([]);
+  const list = await loadCompanyContentAccess(db, a.actor, s.company.id);
+  expect(list.selfAccessId).toBe(a.access.id);
+  expect(list.access.map((x) => x.role).sort()).toEqual(["admin", "editor"]);
+  expect(JSON.stringify(list)).not.toContain("tokenHash");
+  expect(JSON.stringify(list)).not.toContain(s.contract.id);
+  const revoked = await revokeCompanyEditor(db, clock, a.actor, {
+    companyId: s.company.id,
+    accessId: invited.access.id,
+    revision: 2,
+  });
+  expect(revoked.status).toBe("revoked");
+  await expect(loadCustomerArticles(db, editor, s.company.id)).rejects.toThrow("利用できません");
+  const events = (await db.select().from(auditEvents)).filter((e) => e.targetId === invited.access.id);
+  expect(events.map((e) => e.action)).toEqual(
+    expect.arrayContaining(["content_access.invite", "content_access.accept", "content_access.revoke"]),
+  );
+  expect(events.find((e) => e.action === "content_access.invite")?.actorKind).toBe("customer_user");
+});
+it("編集者は招待・解除・一覧ができず、管理者は他社に招待できない", async () => {
+  const s = await setup(),
+    a = await activate(s),
+    other = await setup(),
+    otherAdmin = await activate(other);
+  const editor = await acceptAs((await inviteEditorBy(a.actor, s.company.id)).token!);
+  await expect(inviteEditorBy(editor, s.company.id)).rejects.toThrow("管理者だけ");
+  await expect(
+    revokeCompanyEditor(db, clock, editor, { companyId: s.company.id, accessId: a.access.id, revision: 2 }),
+  ).rejects.toThrow("管理者だけ");
+  await expect(loadCompanyContentAccess(db, editor, s.company.id)).rejects.toThrow("管理者だけ");
+  await expect(inviteEditorBy(a.actor, other.company.id)).rejects.toThrow("利用できません");
+  await expect(
+    revokeCompanyEditor(db, clock, a.actor, {
+      companyId: other.company.id,
+      accessId: otherAdmin.access.id,
+      revision: 2,
+    }),
+  ).rejects.toThrow("利用できません");
+  // 他社の利用権限を自社の企業IDで指定しても見つからない
+  await expect(
+    revokeCompanyEditor(db, clock, a.actor, { companyId: s.company.id, accessId: otherAdmin.access.id, revision: 2 }),
+  ).rejects.toThrow("利用権限がありません");
+  await expect(inviteContentEditor(db, clock, a.actor, s.input)).rejects.toThrow("運営権限");
+  await expect(
+    changeContentAccessRole(db, clock, a.actor, {
+      companyId: s.company.id,
+      accessId: a.access.id,
+      revision: 2,
+      role: "editor",
+    }),
+  ).rejects.toThrow("運営権限");
+});
+it("管理者は自分自身と他の管理者を解除できず、管理者のメールを編集者として招待し直せない", async () => {
+  const s = await setup(),
+    a = await activate(s);
+  const second = await inviteContentEditor(db, clock, s.ops, {
+    ...s.input,
+    email: `${randomUUID()}@example.test`,
+    requestId: randomUUID(),
+  });
+  await acceptAs(second.token!);
+  await expect(
+    revokeCompanyEditor(db, clock, a.actor, { companyId: s.company.id, accessId: a.access.id, revision: 2 }),
+  ).rejects.toThrow("ご自身");
+  await expect(
+    revokeCompanyEditor(db, clock, a.actor, { companyId: s.company.id, accessId: second.access.id, revision: 2 }),
+  ).rejects.toThrow("運営にご依頼");
+  await expect(inviteEditorBy(a.actor, s.company.id, s.input.email)).rejects.toThrow("運営にご依頼");
+  const rows = await db.select().from(contentAccess);
+  expect(rows.every((r) => r.status === "active" && r.role === "admin")).toBe(true);
+});
+it("運営は役割を変えられ、有効な管理者が0人になる降格は拒否する。運営の解除は最後の管理者でも行える", async () => {
+  const s = await setup(),
+    a = await activate(s);
+  const invited = await inviteEditorBy(a.actor, s.company.id);
+  const editor = await acceptAs(invited.token!);
+  const target = { companyId: s.company.id, accessId: a.access.id };
+  await expect(changeContentAccessRole(db, clock, s.ops, { ...target, revision: 2, role: "editor" })).rejects.toThrow(
+    "有効な管理者がいなくなる",
+  );
+  const promoted = await changeContentAccessRole(db, clock, s.ops, {
+    companyId: s.company.id,
+    accessId: invited.access.id,
+    revision: 2,
+    role: "admin",
+  });
+  expect(promoted).toMatchObject({ role: "admin", revision: 3 });
+  expect(await customerContentRole(db, editor, s.company.id)).toBe("admin");
+  const demoted = await changeContentAccessRole(db, clock, s.ops, { ...target, revision: 2, role: "editor" });
+  expect(demoted).toMatchObject({ role: "editor", revision: 3 });
+  // 同じ画面からの再送は変更後の状態を返し、古い版からの変更は拒否する
+  expect(await changeContentAccessRole(db, clock, s.ops, { ...target, revision: 2, role: "editor" })).toMatchObject({
+    revision: 3,
+  });
+  await expect(changeContentAccessRole(db, clock, s.ops, { ...target, revision: 2, role: "admin" })).rejects.toThrow(
+    "変更されています",
+  );
+  await expect(inviteEditorBy(a.actor, s.company.id)).rejects.toThrow("管理者だけ");
+  await expect(changeContentAccessRole(db, clock, s.sales, { ...target, revision: 3, role: "admin" })).rejects.toThrow(
+    "運営権限",
+  );
+  const roleEvents = (await db.select().from(auditEvents)).filter((e) => e.action === "content_access.role_change");
+  expect(roleEvents).toHaveLength(2);
+  // 運営による解除は、最後の管理者でも許可する（緊急停止・解約）
+  const revoked = await revokeContentEditor(db, clock, s.ops, {
+    companyId: s.company.id,
+    accessId: invited.access.id,
+    revision: 3,
+  });
+  expect(revoked.status).toBe("revoked");
+  await expect(
+    changeContentAccessRole(db, clock, s.ops, {
+      companyId: s.company.id,
+      accessId: invited.access.id,
+      revision: 4,
+      role: "editor",
+    }),
+  ).rejects.toThrow("停止済み");
+  // 運営は役割を指定して招待できる
+  const asEditor = await inviteContentEditor(db, clock, s.ops, {
+    ...s.input,
+    email: `${randomUUID()}@example.test`,
+    requestId: randomUUID(),
+    role: "editor",
+  });
+  expect(asEditor.access.role).toBe("editor");
+  expect((await loadContentAccess(db, s.ops, s.company.id)).access.find((x) => x.id === asEditor.access.id)?.role).toBe(
+    "editor",
+  );
+});
+it("営業は担当企業のアカウントと役割を見るだけで、担当外の企業は見られない", async () => {
+  const s = await setup(),
+    a = await activate(s),
+    other = await setup();
+  // seedDeliveryBase の担当は completed。完了契約の担当営業（contracts.sales_user_id）として見られる
+  const view = await loadSalesContentAccess(db, s.sales, s.company.id);
+  expect(view.access).toEqual([
+    expect.objectContaining({ id: a.access.id, email: s.input.email, role: "admin", status: "active" }),
+  ]);
+  const json = JSON.stringify(view);
+  expect(json).not.toContain("tokenHash");
+  expect(json).not.toContain(a.token!);
+  const [row] = await db.select().from(contentAccess).where(eq(contentAccess.id, a.access.id));
+  expect(json).not.toContain(row!.tokenHash);
+  expect(json).not.toContain(s.contract.id);
+  // 担当外の営業は見られない
+  await expect(loadSalesContentAccess(db, other.sales, s.company.id)).rejects.toThrow("表示できません");
+  // 有効な担当を持てば、完了契約の担当営業でなくても見られる
+  await db.insert(assignments).values({
+    companyId: s.company.id,
+    userId: other.sales.userId,
+    status: "working",
+    claimedAt: new Date("2026-10-10T00:00:00Z"),
+  });
+  expect((await loadSalesContentAccess(db, other.sales, s.company.id)).access).toHaveLength(1);
+  // 完了契約でなくなれば、元の担当営業も見られない
+  await db.update(contracts).set({ status: "cancelled" }).where(eq(contracts.id, s.contract.id));
+  await expect(loadSalesContentAccess(db, s.sales, s.company.id)).rejects.toThrow("表示できません");
+  expect((await loadSalesContentAccess(db, s.ops, s.company.id)).access).toHaveLength(1);
+  await expect(loadSalesContentAccess(db, a.actor, s.company.id)).rejects.toThrow("営業または運営");
+  // 営業は変更できない
+  await expect(inviteContentEditor(db, clock, s.sales, s.input)).rejects.toThrow("運営権限");
+  await expect(
+    revokeContentEditor(db, clock, s.sales, { companyId: s.company.id, accessId: a.access.id, revision: 2 }),
+  ).rejects.toThrow("運営権限");
+  await expect(inviteEditorBy(s.sales as never, s.company.id)).rejects.toThrow("顧客アカウント");
+});
+it("migration で既存の利用権限は管理者になり、以後の既定は編集者になる", async () => {
+  const s = await setup();
+  await db.execute(sql`alter table content_access drop column role`);
+  await db.execute(sql`insert into content_access
+    (company_id, contract_id, email, status, token_hash, expires_at, request_id, created_by, updated_at)
+    values (${s.company.id}, ${s.contract.id}, 'legacy@example.test', 'active', ${randomUUID()},
+      now(), ${randomUUID()}, ${s.ops.userId}, now())`);
+  const migration = readFileSync(new URL("../../db/drizzle/0044_content_access_role.sql", import.meta.url), "utf8");
+  for (const statement of migration.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
+  const [legacy] = await db.select().from(contentAccess);
+  expect(legacy!.role).toBe("admin");
+  await db.execute(sql`insert into content_access
+    (company_id, contract_id, email, status, token_hash, expires_at, request_id, created_by, updated_at)
+    values (${s.company.id}, ${s.contract.id}, 'new@example.test', 'invited', ${randomUUID()},
+      now(), ${randomUUID()}, ${s.ops.userId}, now())`);
+  const [created] = await db.select().from(contentAccess).where(eq(contentAccess.email, "new@example.test"));
+  expect(created!.role).toBe("editor");
 });
