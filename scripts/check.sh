@@ -8,5 +8,6 @@ pnpm -s typecheck
 echo "== lint"
 pnpm -s exec biome check .
 echo "== test"
-pnpm -s exec vitest run
+pnpm -s test:runner
+pnpm -s test
 echo "OK: check.sh"
