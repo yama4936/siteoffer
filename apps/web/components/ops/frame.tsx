@@ -29,12 +29,9 @@ export function OpsFrame({
   sidebar,
   children,
   workspaceRole = "ops",
-  rail,
 }: {
   userName: string;
   sidebar: ReactNode;
-  /** サイドバーのさらに左に置くアイコン列（運営画面のみ。営業画面では渡さない） */
-  rail?: ReactNode;
   children: ReactNode;
   workspaceRole?: "ops" | "sales";
 }) {
@@ -71,11 +68,10 @@ export function OpsFrame({
   };
   const title = (sales ? salesTitles : titles)[pathname.split("/")[2] ?? ""] ?? "今日の仕事";
   return (
-    <div className={`ops-app ${sales ? "sales-app" : ""} ${rail ? "has-rail" : ""}`}>
+    <div className={`ops-app ${sales ? "sales-app" : ""}`}>
       <a href="#ops-main" className="ops-skip">
         本文へ移動
       </a>
-      {rail}
       <aside ref={sidebarRef} className="ops-sidebar">
         {sidebar}
       </aside>
