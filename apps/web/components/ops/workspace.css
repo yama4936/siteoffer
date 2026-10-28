@@ -2084,3 +2084,92 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* 運営サイドバーの左に置くアイコン列（Discordのサーバー一覧風）。営業画面には出さない */
+.ops-app.has-rail {
+  grid-template-columns: 64px 196px minmax(0, 1fr);
+}
+.ops-rail {
+  background: #e8eef8;
+  border-right: 1px solid #d5deec;
+  height: 100dvh;
+  position: sticky;
+  top: 0;
+  z-index: 26;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.ops-rail::-webkit-scrollbar {
+  display: none;
+}
+.ops-rail-button {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff;
+  color: #3d5272;
+  box-shadow: 0 1px 3px #1c2b4418;
+  transition:
+    border-radius 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+/* 左端の縦の印。選択中は長く、ホバーでは短く出す */
+.ops-rail-button::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 4px;
+  height: 0;
+  border-radius: 0 4px 4px 0;
+  background: var(--ops-blue);
+  transform: translateY(-50%);
+  transition: height 0.15s ease;
+}
+.ops-rail-button:hover {
+  border-radius: 14px;
+  background: #dbe5ff;
+  color: var(--ops-blue);
+}
+.ops-rail-button:hover::before {
+  height: 18px;
+}
+.ops-rail-button.is-active {
+  border-radius: 14px;
+  background: var(--ops-blue);
+  color: #fff;
+}
+.ops-rail-button.is-active::before {
+  height: 34px;
+}
+.ops-rail-button:focus-visible {
+  outline: 2px solid var(--ops-blue);
+  outline-offset: 2px;
+}
+@media (max-width: 1250px) {
+  .ops-app.has-rail {
+    grid-template-columns: 64px 174px minmax(0, 1fr);
+  }
+}
+/* 狭い画面ではサイドバーが上部の横並びになるため、アイコン列は隠す */
+@media (max-width: 850px) {
+  .ops-rail {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ops-rail-button,
+  .ops-rail-button::before {
+    transition: none;
+  }
+}

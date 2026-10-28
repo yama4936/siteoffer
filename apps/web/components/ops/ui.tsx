@@ -1,7 +1,9 @@
 import {
+  Briefcase,
   ClipboardCheck,
   DatabaseBackup,
   FileSignature,
+  Handshake,
   History,
   Images,
   KeyRound,
@@ -14,11 +16,13 @@ import {
   Settings,
   ShieldCheck,
   Users,
+  Wrench,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { PendingMaterialBadge } from "@/components/materials/pending-badge";
 import { OpsFrame } from "@/components/ops/frame";
+import { OpsRail, type OpsRailItem } from "@/components/ops/rail";
 import { AccountMenu } from "@/components/shell/account-menu";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
@@ -45,13 +49,35 @@ export const NAV_ITEMS = [
 ] as const;
 
 const NAV_GROUPS = [
-  { label: "案件・提案", hrefs: ["/ops/discovery", "/ops/designs", "/ops/review"] },
-  { label: "営業・契約", hrefs: ["/ops/consultations", "/ops/assignments", "/ops/contracts"] },
-  { label: "制作・運用", hrefs: ["/ops/materials", "/ops/delivery", "/ops/publication-checks", "/ops/content"] },
+  { label: "案件・提案", icon: Briefcase, hrefs: ["/ops/discovery", "/ops/designs", "/ops/review"] },
+  { label: "営業・契約", icon: Handshake, hrefs: ["/ops/consultations", "/ops/assignments", "/ops/contracts"] },
+  {
+    label: "制作・運用",
+    icon: Wrench,
+    hrefs: ["/ops/materials", "/ops/delivery", "/ops/publication-checks", "/ops/content"],
+  },
   {
     label: "管理",
+    icon: Settings,
     hrefs: ["/ops/settings", "/ops/history", "/ops/backups", "/ops/account-recovery"],
   },
+];
+
+/** サイドバー左のアイコン列：「今日の仕事」と各グループ。押すとグループの先頭ページへ移動する */
+const RAIL_ITEMS: OpsRailItem[] = [
+  {
+    label: NAV_ITEMS[0].label,
+    href: NAV_ITEMS[0].href,
+    hrefs: [NAV_ITEMS[0].href],
+    exact: true,
+    icon: <LayoutDashboard size={20} aria-hidden="true" />,
+  },
+  ...NAV_GROUPS.map((group) => ({
+    label: group.label,
+    href: group.hrefs[0] ?? NAV_ITEMS[0].href,
+    hrefs: group.hrefs,
+    icon: <group.icon size={20} aria-hidden="true" />,
+  })),
 ];
 
 export function OpsShell({
@@ -94,6 +120,7 @@ export function OpsShell({
   return (
     <OpsFrame
       userName={userName}
+      rail={<OpsRail items={RAIL_ITEMS} />}
       sidebar={
         <>
           <div className="ops-brand">
