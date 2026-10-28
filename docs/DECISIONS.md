@@ -3239,6 +3239,7 @@ SDK名とモデル名は別。生成にはCodex SDKを使うとユーザーが�
 - 判断・変更：判断245。AGENTS.md の「Gitへの反映（自動）」冒頭に、タスクが終わったら完了報告の前に必ずcommit・pushする（commitだけ・記録だけ・後でまとめてpushは不可、停止条件に当たる場合だけ報告して確認）を追記。「作業の進め方」の手順5にも同じ趣旨を追記した
 - 検証：`git diff --check` と scripts/git-check.sh
 - 未完了：なし
+- 訂正：この作業のコミット 57190df に、別作業がindexに載せていた packages/discovery（fetch-page、page-facts、agent-web-verify、agent-web、nta、run と各テスト）と packages/schemas の法人番号関連の計13ファイル（約1,360行）が混入し、pushされた。`git add` の前にindexを確認しなかったため（作業GWと同じ誤り）。ユーザーの選択（「そのまま残し記録で訂正」）により履歴は変えず、この訂正を追記した。混入後の確認として、packages/discovery・packages/schemas のテスト15ファイル136件はすべて成功し、packages/discovery の型検査は終了0。混入した変更の設計判断・作業記録は、その作業の担当側で記録する
 
 <!-- 新しい作業記録はこの行の直前に追加する -->
 
