@@ -3,6 +3,7 @@ import type { WorkerConfig } from "./config.ts";
 import type { JobQueue, Logger } from "./deps.ts";
 import { QUEUES, type QueueName, type StepKind } from "./queues.ts";
 import type { WorkerRuntime } from "./runtime.ts";
+import { SKILL_TIMEOUT_MS } from "./skills/definitions.ts";
 
 /** pg-boss の機能のうち、ここで使うものだけ（テストで差し替えられるようにする） */
 export type BossLike = Pick<PgBoss, "createQueue" | "updateQueue" | "work" | "schedule" | "send">;
@@ -23,7 +24,10 @@ const STEP_QUEUES: Record<StepKind, QueueName> = {
 export async function registerQueues(
   boss: BossLike,
   runtime: WorkerRuntime,
-  config: Pick<WorkerConfig, "policies" | "schedules" | "concurrency"> & { discoveryOnly?: boolean },
+  config: Pick<WorkerConfig, "policies" | "schedules" | "concurrency"> & {
+    discoveryOnly?: boolean;
+    skillConcurrency?: number;
+  },
   logger: Logger,
 ): Promise<void> {
   for (const [kind, name] of Object.entries(STEP_QUEUES) as [StepKind, QueueName][]) {
@@ -61,14 +65,35 @@ export async function registerQueues(
     );
   }
 
+  if (!config.discoveryOnly) {
+    // スキルは実Codexの費用がかかるため pg-boss では再試行しない（失敗は記録し、運営が画面から再実行する）
+    await boss.createQueue(QUEUES.skill, {
+      policy: "exclusive",
+      retryLimit: 0,
+      expireInSeconds: Math.ceil(Math.max(...Object.values(SKILL_TIMEOUT_MS)) / 1000) + 300,
+    });
+    await boss.work(QUEUES.skill, { localConcurrency: config.skillConcurrency ?? 1 }, async (jobs) => {
+      for (const job of jobs) {
+        const outcome = await runtime.run(QUEUES.skill, job.data, { signal: job.signal });
+        if (outcome.status === "invalid_payload")
+          logger.error("ジョブの内容が不正", { queue: QUEUES.skill, reason: outcome.reason });
+      }
+    });
+  }
+
   for (const [name, cron] of [
     [QUEUES.expireAssignments, config.schedules.expireAssignments],
     [QUEUES.recoverDiscovery, config.schedules.recoverDiscovery],
     [QUEUES.recoverGeneration, config.schedules.recoverGeneration],
     [QUEUES.dispatchHandoffs, config.schedules.dispatchHandoffs],
     [QUEUES.recoverPipeline, config.schedules.recoverPipeline],
+    [QUEUES.skillSchedules, config.schedules.skillSchedules],
   ] as const) {
-    if (config.discoveryOnly && (name === QUEUES.dispatchHandoffs || name === QUEUES.recoverPipeline)) continue;
+    if (
+      config.discoveryOnly &&
+      (name === QUEUES.dispatchHandoffs || name === QUEUES.recoverPipeline || name === QUEUES.skillSchedules)
+    )
+      continue;
     await boss.createQueue(name, { policy: "singleton", retryLimit: 2, retryDelay: 60, expireInSeconds: 600 });
     await boss.schedule(name, cron, {}, { tz: "Asia/Tokyo" });
     await boss.work(name, async () => {

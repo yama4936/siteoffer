@@ -292,6 +292,13 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
   "company": {"name": "株式会社例", "name_source": "evaluation.json company.name_source"},
   "content_plan_ref": "content-plan.json",
   "content_selection": {"selected_count": 8, "excluded_count": 3, "visible_claims_traced": true},
+  "parity_review": {
+    "information": {"source_items": 12, "retained": 7, "consolidated": 4, "excluded": 1, "blocked": 0, "unaccounted": 0},
+    "features": {"source_features": 4, "preserved": 2, "replaced": 1, "planned": 1, "out_of_scope": 0, "blocked": 0, "unaccounted": 0},
+    "demo_status": "complete",
+    "production_status": "gaps_remaining",
+    "production_gaps": ["SiteOffer受付APIへの接続と送信試験"]
+  },
   "demo_notice": "SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません。",
   "pages": [
     {"file": "index.html", "title": "…", "role": "top", "source_urls": ["https://example.co.jp/"], "sections": ["ファーストビュー", "業務内容", "ご依頼の流れ", "お問い合わせ"]}
@@ -334,4 +341,5 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var
 
 - `actions_applied[].action_id` は proposal.json の `actions[].id` と一致させる。全施策が `actions_applied` か `actions_not_applied` のどちらかに入ること。
 - `content_selection` の件数は content-plan.json と一致させる。`visible_claims_traced` は全HTMLの表示内容を照合してから true にする。
+- `parity_review` は content-plan.json の情報・機能台帳と集計を一致させる。`planned` を保持・置換済みに数えず、提案デモと本番相当の状態を分ける。文字数・ページ数は参考値で、未対応0件と重要項目の欠落ゼロを判定根拠にする。
 - `needs_confirmation` は営業用HTMLから省いた未確認事項を対象ごとにまとめる。関連するページと、企業へ聞く内容を書く。確認事項があること自体はデモの不合格ではなく、画面に内部注記を露出することが不合格。

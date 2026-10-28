@@ -8,7 +8,9 @@ import { WorkspaceAttention } from "@/components/shell/attention";
 const titles: Record<string, string> = {
   discovery: "企業・案件",
   companies: "企業・案件",
-  review: "提案レビュー",
+  review: "最終確認",
+  skills: "スキルの実行",
+  accounts: "アカウント管理",
   designs: "デザイン・提案書",
   content: "お知らせ・ブログ",
   materials: "顧客の写真・ロゴ",
@@ -88,10 +90,12 @@ export function OpsFrame({
             <button type="submit">検索</button>
           </form>
           <WorkspaceAttention role={workspaceRole} />
-          <div className="ops-top-user">
-            <span className="ops-avatar">{userName.slice(0, 1)}</span>
-            <span>{userName}</span>
-          </div>
+          {sales && (
+            <div className="ops-top-user">
+              <span className="ops-avatar">{userName.slice(0, 1)}</span>
+              <span>{userName}</span>
+            </div>
+          )}
         </header>
         <main id="ops-main" className={review ? "ops-main ops-main-review" : "ops-main"}>
           {children}

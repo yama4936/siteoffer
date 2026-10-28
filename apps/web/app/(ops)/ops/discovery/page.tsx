@@ -1,6 +1,6 @@
 import { systemClock } from "@siteoffer/core";
 import { discoveryAvailability } from "@siteoffer/discovery";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DiscoveryCompanyCards, DiscoveryJobCards } from "@/components/ops/discovery-index-cards";
@@ -54,7 +54,16 @@ export default async function DiscoveryPage({
   const capabilities = await discoveryAvailability(getDb(), systemClock);
   return (
     <>
-      <PageHeader title="企業・案件" description="候補の収集と企業情報を管理します。" />
+      <PageHeader
+        title="企業・案件"
+        description="候補の収集と企業情報を管理します。"
+        actions={
+          <Link href="/ops/skills" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <Sparkles />
+            スキルで探索・評価・提案を実行
+          </Link>
+        }
+      />
       <Flash searchParams={sp} />
       <DiscoveryRefresh />
       <DiscoveryStatus capabilities={capabilities} />

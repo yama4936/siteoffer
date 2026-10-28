@@ -162,6 +162,32 @@ describe("営業ユーザー・未ログイン・system は運営の処理と読
       for (const r of results) expect(r).toMatchObject({ ok: false, error: "forbidden" });
     }
   });
+
+  it("アカウント管理の一覧は運営以外には絞り込み付きでも forbidden、運営には条件どおり返す", async () => {
+    const { actor: ops } = await seedUser(db, "ops");
+    const { actor: sales, user: salesUser } = await seedUser(db, "sales");
+    const { user: stopped } = await seedUser(db, "sales");
+    expect((await suspendSalesUser(deps, ops, { userId: stopped.id, reason: "テスト" })).ok).toBe(true);
+    const outsiders: (Actor | null)[] = [
+      sales,
+      null,
+      { kind: "customer_user", userId: salesUser.id },
+      { kind: "customer", shareLinkId: salesUser.id },
+      { kind: "system", job: "test" },
+    ];
+    for (const actor of outsiders)
+      for (const filter of [{}, { role: "sales" as const }, { status: "suspended" as const }])
+        expect(await listUsersForOps(db, actor, filter)).toMatchObject({ ok: false, error: "forbidden" });
+
+    const all = await listUsersForOps(db, ops);
+    const onlyStopped = await listUsersForOps(db, ops, { role: "sales", status: "suspended" });
+    const onlyOps = await listUsersForOps(db, ops, { role: "ops" });
+    if (!all.ok || !onlyStopped.ok || !onlyOps.ok) throw new Error("運営は一覧を読めるはず");
+    expect(all.value.length).toBeGreaterThanOrEqual(3);
+    expect(onlyStopped.value.map((u) => u.id)).toEqual([stopped.id]);
+    expect(onlyOps.value.every((u) => u.role === "ops")).toBe(true);
+    expect(onlyOps.value.map((u) => u.id)).toContain(ops.userId);
+  });
 });
 
 describe("営業可能化（AC-09・14章）", () => {

@@ -14,10 +14,11 @@ import {
   renewDeliveryBuild,
 } from "@siteoffer/core";
 import type { IntakeLane, IntakePhase } from "@siteoffer/db";
-import { contentEntries, deliveries, deliveryBuilds, discoveryJobs } from "@siteoffer/db";
+import { contentEntries, deliveries, deliveryBuilds, discoveryJobs, skillRuns } from "@siteoffer/db";
+import { AGENT_WEB_PROVIDER } from "@siteoffer/discovery";
 import { type GenerationDeps, runGenerationJob } from "@siteoffer/generation";
 import type { SiteGenerationOutput } from "@siteoffer/schemas";
-import { and, asc, eq, getTableColumns, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, isNull, lte, ne, or } from "drizzle-orm";
 import { withDeliveryChange } from "./delivery-change.ts";
 import { applyDeliveryMaterials, prepareDeliveryMaterials } from "./delivery-materials.ts";
 import { withDeliveryRevision } from "./delivery-revision.ts";
@@ -26,11 +27,12 @@ import { contentSiteUrl, intakeDesignBuilds, processDesignJobs, withDesignRefere
 import { siteGenerationInputIssue } from "./input.ts";
 import { readStepState } from "./ledger.ts";
 import { stopDiscoveryJob } from "./pipeline/discovery.ts";
-import { type DiscoveryPayload, QUEUES, stepKeys } from "./queues.ts";
+import { type DiscoveryPayload, QUEUES, type SkillPayload, stepKeys } from "./queues.ts";
 
 /**
  * DBを定期的に見てジョブを受け付ける処理（webからワーカーへの経路）。
  * - 収集：status=queued の discovery_jobs を収集キューへ送る。
+ * - スキル：status=queued の skill_runs をスキルのキューへ送る。
  * - 納品：制作（building）中で、その回の制作版がない納品について、納品サイトを生成・ビルドして版を追加し、運営確認へ回す。
  * webはDBに行を作るだけで、キューには触れない。
  */
@@ -43,10 +45,12 @@ const BATCH = 20;
 export interface IntakeState {
   /** このプロセスで送った収集ジョブ（同じ行を何度も送らない。プロセスをまたぐ二重投入はキューの singletonKey と実行台帳で防ぐ） */
   sentDiscovery: Set<string>;
+  /** このプロセスで送ったスキル実行（実行の二重開始は skill_runs の状態の更新で防ぐ） */
+  sentSkills: Set<string>;
 }
 
 export function createIntakeState(): IntakeState {
-  return { sentDiscovery: new Set() };
+  return { sentDiscovery: new Set(), sentSkills: new Set() };
 }
 
 /** status=queued の収集ジョブを収集キューへ送る。送ったジョブIDを返す */
@@ -54,7 +58,8 @@ export async function intakeDiscoveryJobs(deps: WorkerDeps, state: IntakeState):
   const rows = await deps.db
     .select({ id: discoveryJobs.id, provider: discoveryJobs.provider })
     .from(discoveryJobs)
-    .where(eq(discoveryJobs.status, "queued"))
+    // agent-web はスキルの取り込み（skills/discovery-import.ts）が作成と同時に実行する。受付で拾うと取得元未設定として止めてしまう
+    .where(and(eq(discoveryJobs.status, "queued"), ne(discoveryJobs.provider, AGENT_WEB_PROVIDER)))
     .orderBy(asc(discoveryJobs.createdAt))
     .limit(BATCH);
   const sent: string[] = [];
@@ -79,6 +84,30 @@ export async function intakeDiscoveryJobs(deps: WorkerDeps, state: IntakeState):
     sent.push(r.id);
   }
   if (sent.length) deps.logger.info("収集ジョブを受け付けた", { discoveryJobIds: sent });
+  return sent;
+}
+
+/**
+ * status=queued のスキル実行をスキルのキューへ送る。送った実行IDを返す。
+ * スキル実行を設定していないワーカーは拾わない（設定したワーカーが起動するまで受付待ちのまま残す）。
+ */
+export async function intakeSkillRuns(deps: WorkerDeps, state: IntakeState): Promise<string[]> {
+  if (!deps.skills) return [];
+  const rows = await deps.db
+    .select({ id: skillRuns.id })
+    .from(skillRuns)
+    .where(eq(skillRuns.status, "queued"))
+    .orderBy(asc(skillRuns.createdAt))
+    .limit(BATCH);
+  const sent: string[] = [];
+  for (const r of rows) {
+    if (state.sentSkills.has(r.id)) continue;
+    const payload: SkillPayload = { runId: r.id };
+    await deps.queue.send(QUEUES.skill, payload, { singletonKey: `skill:${r.id}` });
+    state.sentSkills.add(r.id);
+    sent.push(r.id);
+  }
+  if (sent.length) deps.logger.info("スキルの実行を受け付けた", { skillRunIds: sent });
   return sent;
 }
 
@@ -343,6 +372,7 @@ async function runDispatch(deps: WorkerDeps, state: IntakeState, report?: Intake
   try {
     await report?.("discovery", "dispatch");
     const discovery = await intakeDiscoveryJobs(deps, state);
+    if (!deps.discoveryOnly) await intakeSkillRuns(deps, state);
     if (failed) throw failed.reason;
     await report?.("idle", "dispatch");
     return discovery;

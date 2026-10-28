@@ -6,6 +6,7 @@ import type { ConcurrencyLimiter, GenerationLimits, Generator } from "@siteoffer
 import type { GenerationInputBuilder } from "./input.ts";
 import type { QueueName, StepKind, StepPolicy } from "./queues.ts";
 import type { SiteBuilder } from "./site-builder.ts";
+import type { SkillDeps } from "./skills/run.ts";
 
 /** 次の処理をキューへ送る口。本番は pg-boss、テストはメモリ上のキュー */
 export interface JobQueue {
@@ -51,6 +52,8 @@ export interface WorkerDeps {
     limiter?: ConcurrencyLimiter;
   };
   buildGenerationInput: GenerationInputBuilder;
+  /** スキルの実行（運営画面・定期実行から起動）。未設定のワーカーは受け付けた実行を失敗として記録する */
+  skills?: SkillDeps;
   siteBuilder: SiteBuilder;
   /** デモのビルド結果の保存先（Gitに入れない場所） */
   demoArtifactRoot: string;

@@ -54,7 +54,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 
 ```json
 {
-  "schema_version": "0.2",
+  "schema_version": "0.3",
   "company": {
     "name": "株式会社例",
     "source_ref": "evaluation.json company.name"
@@ -109,6 +109,148 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
     "migration_required": false,
     "reason": "継続記事はなく、確認済みの会社情報だけを固定項目として更新する"
   },
+  "source_content_inventory": [
+    {
+      "id": "source-company-name",
+      "kind": "identity",
+      "label": "正式名称",
+      "importance": "essential",
+      "source_refs": [{"artifact": "evaluation.json", "path": "company.name"}],
+      "source_text_length": 5,
+      "disposition": "retained",
+      "target_content_ids": ["company-name"],
+      "target_pages": ["index.html"],
+      "reason": "正式名称を保持"
+    },
+    {
+      "id": "source-service-inheritance",
+      "kind": "service",
+      "label": "相続登記の相談内容",
+      "importance": "essential",
+      "source_refs": [{"artifact": "collected.json", "path": "pages[role=service].text_excerpt", "url": "https://example.jp/service/"}],
+      "source_text_length": 640,
+      "disposition": "consolidated",
+      "target_content_ids": ["service-inheritance"],
+      "target_pages": ["index.html", "services.html"],
+      "reason": "重複をまとめ、条件と意味を保った完成文として配置"
+    },
+    {
+      "id": "source-primary-phone",
+      "kind": "contact",
+      "label": "電話窓口",
+      "importance": "essential",
+      "source_refs": [{"artifact": "collected.json", "path": "pages[role=top].tel_links", "url": "https://example.jp/"}],
+      "source_text_length": 13,
+      "disposition": "retained",
+      "target_content_ids": ["primary-phone"],
+      "target_pages": ["index.html"],
+      "reason": "番号と発信先を保持"
+    },
+    {
+      "id": "source-spring-event",
+      "kind": "news",
+      "label": "春の相談会",
+      "importance": "optional",
+      "source_refs": [{"artifact": "collected.json", "path": "pages[0].text_excerpt", "url": "https://example.jp/"}],
+      "source_text_length": 80,
+      "disposition": "excluded",
+      "target_content_ids": [],
+      "target_pages": [],
+      "reason": "開催年と終了日を確認できない"
+    }
+  ],
+  "feature_inventory": [
+    {
+      "id": "feature-primary-navigation",
+      "kind": "navigation",
+      "original_behavior": "トップと業務内容ページを移動できる",
+      "importance": "supporting",
+      "evidence": [{"artifact": "collected.json", "path": "site.navigation_links_top", "url": "https://example.jp/"}],
+      "handling": "preserved",
+      "target": "index.html と services.html の通常リンク",
+      "target_refs": [{"artifact": "html", "path": "index.html"}, {"artifact": "html", "path": "services.html"}],
+      "user_visible_difference": "リンク名を保ち、全ページで同じ順序に統一",
+      "verification_status": "verified"
+    },
+    {
+      "id": "feature-primary-phone",
+      "kind": "contact",
+      "original_behavior": "電話リンクから発信できる",
+      "importance": "primary",
+      "evidence": [{"artifact": "collected.json", "path": "pages[role=top].tel_links", "url": "https://example.jp/"}],
+      "handling": "preserved",
+      "target": "index.html の tel: リンク",
+      "target_refs": [{"artifact": "html", "path": "index.html"}, {"artifact": "content-plan.json", "path": "primary-phone"}],
+      "user_visible_difference": "表示位置のみ改善し、発信先は同じ",
+      "verification_status": "verified"
+    },
+    {
+      "id": "feature-inquiry-form",
+      "kind": "form",
+      "original_behavior": "問い合わせ内容を送信できる",
+      "importance": "primary",
+      "evidence": [{"artifact": "collected.json", "path": "pages[role=contact].forms", "url": "https://example.jp/contact/"}],
+      "handling": "planned",
+      "target": "admin-schema.json inquiry_form と将来のSiteOffer受付API",
+      "target_refs": [{"artifact": "admin-schema.json", "path": "inquiry_form"}],
+      "user_visible_difference": "非公式デモでは送信せず、本番接続後に利用可能",
+      "verification_status": "planned"
+    }
+  ],
+  "parity_review": {
+    "unaccounted_content_ids": [],
+    "unaccounted_feature_ids": [],
+    "demo_status": "complete",
+    "production_status": "gaps_remaining",
+    "information_summary": {"source_items": 4, "retained": 2, "consolidated": 1, "excluded": 1, "blocked": 0},
+    "feature_summary": {"source_features": 3, "preserved": 2, "replaced": 0, "planned": 1, "out_of_scope": 0, "blocked": 0},
+    "comparison_notes": "元サイトの情報と機能を意味単位で全件照合。文字数とページ数は参考値で、問い合わせ送信は本番接続前の残件"
+  },
+  "fact_verification": {
+    "company_identity_checked": true,
+    "claims": [
+      {
+        "id": "claim-company-name",
+        "kind": "identity",
+        "statement": "正式名称は株式会社例",
+        "content_ids": ["company-name"],
+        "source_refs": [{"artifact": "evaluation.json", "path": "company.name", "evidence": "会社名欄", "observed_at": "2026-10-28T12:00:00+09:00"}],
+        "freshness": {"status": "timeless", "basis": "評価時点の会社名"},
+        "conflicts": [],
+        "surfaces": ["body", "title"],
+        "source_value": "株式会社例",
+        "display_value": "株式会社例",
+        "status": "verified"
+      },
+      {
+        "id": "claim-service-inheritance",
+        "kind": "service",
+        "statement": "相続登記の相談を受け付けている",
+        "content_ids": ["service-inheritance"],
+        "source_refs": [{"artifact": "collected.json", "path": "pages[role=service].text_excerpt", "evidence": "相続登記の相談案内", "observed_at": "2026-10-28T12:00:00+09:00"}],
+        "freshness": {"status": "current", "basis": "取得時点の恒常的な業務案内"},
+        "conflicts": [],
+        "surfaces": ["body", "title", "description"],
+        "status": "verified"
+      },
+      {
+        "id": "claim-primary-phone",
+        "kind": "contact",
+        "statement": "主要な電話窓口は00-0000-0000",
+        "content_ids": ["primary-phone"],
+        "source_refs": [{"artifact": "collected.json", "path": "pages[role=top].tel_links", "evidence": "トップの電話リンク", "observed_at": "2026-10-28T12:00:00+09:00"}],
+        "freshness": {"status": "current", "basis": "取得時点のトップページに掲載"},
+        "conflicts": [],
+        "surfaces": ["body", "cta"],
+        "source_value": "00-0000-0000",
+        "display_value": "00-0000-0000",
+        "status": "verified"
+      }
+    ],
+    "unresolved_claim_ids": [],
+    "reviewed_surfaces": ["body", "title", "description", "cta", "structured_data"],
+    "reviewed_at": "2026-10-28T12:30:00+09:00"
+  },
   "selected_content": [
     {
       "id": "company-name",
@@ -118,6 +260,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
       "placement": [{"page": "index.html", "section": "ヘッダー"}],
       "source_refs": [{"artifact": "evaluation.json", "path": "company.name", "fact": "株式会社例"}],
       "selection_reason": "確認済みの正式名称",
+      "claim_ids": ["claim-company-name"],
       "source_fidelity": {
         "mode": "verbatim_fact",
         "preserved_terms": ["株式会社例"],
@@ -143,6 +286,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
         {"artifact": "collected.json", "path": "pages[role=service].headings", "url": "https://example.jp/service/", "fact": "相続登記"}
       ],
       "selection_reason": "主要サービスとしてトップとサービスページの両方で確認できる",
+      "claim_ids": ["claim-service-inheritance"],
       "source_fidelity": {
         "mode": "faithful_rewrite",
         "preserved_terms": ["相続登記"],
@@ -162,6 +306,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
         {"artifact": "collected.json", "path": "pages[role=top].tel_links", "url": "https://example.jp/", "fact": "tel:0000000000"}
       ],
       "selection_reason": "トップページで電話窓口として確認できる",
+      "claim_ids": ["claim-primary-phone"],
       "source_fidelity": {
         "mode": "verbatim_fact",
         "preserved_terms": ["00-0000-0000"],
@@ -185,6 +330,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
     "copy_ready": true,
     "cta_targets_verified": true,
     "source_fidelity_reviewed": true,
+    "facts_verified": true,
     "presentation_ready": true,
     "reviewed_at": "2026-10-27T12:00:00+09:00"
   },
@@ -200,6 +346,10 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 
 - `source_profile` は空でない固有語、語調、情報の優先順位、出典を持つ。
 - `source_coverage.status` は `complete | incomplete`。`complete` のとき `missing_sources` は空、`incomplete` のときHTML生成を止め、content-plan.json ではなく `$OUT/rebuild-blocked.json`（site-completeness.md）に記録する。完成した content-plan.json は常に `complete`。
+- `source_content_inventory` は、元サイトで確認できた有用な情報を意味単位で全件持つ。`importance` は `essential | supporting | optional`、`disposition` は `retained | consolidated | excluded | blocked`。保持・統合は実在する `target_content_ids` と `target_pages` を持ち、`blocked` または重要情報の除外があれば完成扱いにしない。`source_text_length` は任意の参考値であり、合格率には使わない。
+- `feature_inventory` は元サイトの利用者向け機能を全件持つ。`importance` は `primary | supporting | optional`、`handling` は `preserved | replaced | planned | out_of_scope | blocked`。`target_refs` でHTML、content ID、管理定義または対象判定へ対応付ける。保持・置換は実際に検証して `verification_status: verified`、本番接続前は `planned` とする。主要機能の `blocked | out_of_scope` は不可。主要機能の `planned` は提案デモでは許容できるが、`production_status: gaps_remaining` と本番残件が必要。
+- `parity_review` は未対応情報・機能を空配列にし、台帳と同じ件数を処置別に集計する。`demo_status: complete` は比較を完了したことを表し、機能が本番接続済みという意味ではない。文字数・ページ数ではなく全件対応と重要項目の欠落ゼロで判定する。
+- `fact_verification` は [fact-verification.md](fact-verification.md) に従う。企業同一性を確認し、全claimを `verified`、矛盾と未解決を0件にする。本文・title・description・CTA・構造化データを生成後に確認し、各 `selected_content[].claim_ids` とclaimの `content_ids` を相互に一致させる。
 - `decision_coverage` は `identity | offer | fit | specifics | proof | trust | action` を重複なく持つ。`answered` は既存の `selected_content[].id` を `answered_by` に持ち、`not_applicable` は案件固有の理由を持つ。`missing` があれば完成扱いにしない。
 - `site_architecture.mode` は `single_page | multi_page` で実在HTML数と一致させる。案件固有の `reason`、トップを含む実在HTMLの `primary_navigation`、実画面確認後の `mobile_content_equivalence_reviewed: true` を持つ。詳細は [web-standards.md](web-standards.md)。
 - `page_plan` は作成する全HTMLと一致し、各ページに目的、答える問い、1件以上のcontent ID、独立させる理由を持つ。
@@ -211,7 +361,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 - `source_refs` は成果物内の位置とURLを記録する。URLがない内部成果物の場合だけ `url` を省略できる。
 - `freshness.status` は `current | timeless | unclear`。`unclear` の項目は `selected_content` に入れず `excluded_content` へ移す。
 - `excluded_content[].reason` は `unverified | stale_or_unclear | rights | irrelevant | duplicate | conflicting` のいずれか。
-- `review` の5項目は、実際にHTMLと元サイト由来の材料を照合した後だけ `true` にする。1つでも確認できなければサイトを完成扱いにしない。
+- `review` の6項目（`visible_claims_traced`、`copy_ready`、`cta_targets_verified`、`source_fidelity_reviewed`、`facts_verified`、`presentation_ready`）は、実際にHTMLと元サイト由来の材料を照合した後だけ `true` にする。1つでも確認できなければサイトを完成扱いにしない。
 - `readiness.status` は `ready_for_customer_review | incomplete`。主要サービスの説明、企業識別、主要行動に必要な文章を元サイトから作れない場合は `incomplete` とし、HTML生成・DB取り込みを止め、不足を `$OUT/rebuild-blocked.json` の `blocking_gaps`（`stage: content_readiness`）に記録する。
 - `ready_for_customer_review` は顧客へ見せられる文章品質を表す。本番公開可能を意味しない。顧客確認、権利、問い合わせ機能等の残件は `production_blockers` に記録する。
 

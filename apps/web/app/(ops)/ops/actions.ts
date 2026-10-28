@@ -9,6 +9,12 @@ import { requestPreparedAudits } from "@siteoffer/worker/audit-preparation";
 import { resumeAuditByOps } from "@siteoffer/worker/audit-recovery";
 import { requestAuditByOps } from "@siteoffer/worker/audit-request";
 import { cancelAuditRequest } from "@siteoffer/worker/audit-request-management";
+import {
+  cancelSkillRunByOps,
+  requestSkillRunByOps,
+  retrySkillRunByOps,
+  saveSkillScheduleByOps,
+} from "@siteoffer/worker/skills";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -570,4 +576,71 @@ export async function requestPreparedAuditsAction(input: unknown) {
   } catch {
     return { ok: false as const, message: "受付結果を確認できません。同じ選択で再度操作してください。" };
   }
+}
+
+// スキルの実行（企業候補の探索・サイトの評価・改善提案書・改善後サイトの作成）
+
+/** 画面の入力からスキルの起動条件を作る。数値は整数でなければ NaN にして業務関数の検証で弾く */
+function skillParamsFrom(fd: FormData) {
+  const skill = str(fd, "skill");
+  const chain = fd.get("chain") === "on";
+  if (skill === "company-discovery") {
+    const count = optInt(fd, "count");
+    return {
+      ...(optStr(fd, "prefecture") ? { prefecture: str(fd, "prefecture") } : {}),
+      ...(optStr(fd, "city") ? { city: str(fd, "city") } : {}),
+      ...(optStr(fd, "industry") ? { industry: str(fd, "industry") } : {}),
+      ...(count !== null ? { count } : {}),
+      chain,
+    };
+  }
+  if (skill === "site-rebuild") {
+    const limit = optInt(fd, "limit");
+    return limit !== null ? { limit } : {};
+  }
+  const limit = optInt(fd, "limit");
+  return { ...(limit !== null ? { limit } : {}), chain };
+}
+
+export async function requestSkillRunAction(fd: FormData) {
+  const params = skillParamsFrom(fd);
+  delete (params as { limit?: number }).limit;
+  await run(
+    fd,
+    async (d, a) => {
+      const r = await requestSkillRunByOps(d, a, {
+        skill: str(fd, "skill"),
+        params,
+        companyId: optStr(fd, "companyId"),
+        auditId: optStr(fd, "auditId"),
+      });
+      if (r.ok && !r.value.created)
+        return { ok: false, error: "already_open", message: "同じ対象の実行が受付待ち・実行中です" };
+      return r;
+    },
+    "スキルの実行を登録しました。ワーカーが順に実行します",
+  );
+}
+
+export async function cancelSkillRunAction(fd: FormData) {
+  await run(fd, (d, a) => cancelSkillRunByOps(d, a, str(fd, "runId")), "実行を取り消しました");
+}
+
+export async function retrySkillRunAction(fd: FormData) {
+  await run(fd, (d, a) => retrySkillRunByOps(d, a, str(fd, "runId")), "同じ条件で再実行を登録しました");
+}
+
+export async function saveSkillScheduleAction(fd: FormData) {
+  const interval = optInt(fd, "intervalHours");
+  await run(
+    fd,
+    (d, a) =>
+      saveSkillScheduleByOps(d, a, {
+        skill: str(fd, "skill"),
+        enabled: fd.get("enabled") === "on",
+        intervalHours: interval ?? Number.NaN,
+        params: skillParamsFrom(fd),
+      }),
+    "定期実行の設定を保存しました",
+  );
 }

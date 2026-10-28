@@ -8,12 +8,22 @@ import { auditStep } from "./pipeline/audit.ts";
 import { discoveryStep, recoverStaleDiscoveryJobs } from "./pipeline/discovery.ts";
 import { proposalStep } from "./pipeline/proposal.ts";
 import { recoverPipelineSteps } from "./pipeline-recovery.ts";
-import { auditPayloadSchema, discoveryPayloadSchema, proposalPayloadSchema, QUEUES, type QueueName } from "./queues.ts";
+import {
+  auditPayloadSchema,
+  discoveryPayloadSchema,
+  proposalPayloadSchema,
+  QUEUES,
+  type QueueName,
+  skillPayloadSchema,
+} from "./queues.ts";
+import { executeSkillRun, recoverStaleSkillRuns } from "./skills/run.ts";
+import { dispatchSkillSchedules } from "./skills/schedule.ts";
 
 export type RunOutcome =
   | StepOutcome<unknown>
   | { status: "invalid_payload"; reason: string }
-  | { status: "maintenance"; result: unknown };
+  | { status: "maintenance"; result: unknown }
+  | { status: "skill"; result: unknown };
 
 /**
  * キュー名と内容を受け取り、対応する処理を実行する。pg-boss からも、テストからも同じ入口で呼ぶ。
@@ -38,6 +48,17 @@ export function createWorkerRuntime(deps: WorkerDeps) {
         const p = proposalPayloadSchema.safeParse(data);
         if (!p.success) return { status: "invalid_payload", reason: p.error.message };
         return executeStep(deps, proposalStep, p.data, options);
+      }
+      case QUEUES.skill: {
+        const p = skillPayloadSchema.safeParse(data);
+        if (!p.success) return { status: "invalid_payload", reason: p.error.message };
+        return { status: "skill", result: await executeSkillRun(deps, p.data.runId, options?.signal) };
+      }
+      case QUEUES.skillSchedules: {
+        const recovered = await recoverStaleSkillRuns(deps);
+        if (recovered.length) deps.logger.warn("実行中のまま残ったスキル実行を失敗に戻した", { recovered });
+        const created = await dispatchSkillSchedules(deps);
+        return { status: "maintenance", result: { recovered, created } };
       }
       case QUEUES.expireAssignments: {
         const result = await releaseExpiredAssignments(deps.db, deps.clock);

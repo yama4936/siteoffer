@@ -11,6 +11,8 @@ export const QUEUES = {
   audit: "pipeline.audit",
   /** 改善提案文・電話台本・想定問答・デモサイト構成を生成し、デモをビルド・検査して運営確認待ちで保存する */
   proposal: "pipeline.proposal",
+  /** スキルの1回の実行（skill_runs の1件）。隔離コンテナのCodex SDKでスキルを実行し、成果物を取り込む */
+  skill: "pipeline.skill",
   /** 定期：担当の期限解除（12.2） */
   expireAssignments: "maintenance.expire-assignments",
   /** 定期：実行中のまま残った収集ジョブを失敗に戻す */
@@ -19,6 +21,8 @@ export const QUEUES = {
   recoverGeneration: "maintenance.recover-stale-generation",
   dispatchHandoffs: "maintenance.dispatch-proposal-handoffs",
   recoverPipeline: "maintenance.recover-pipeline",
+  /** 定期：スキルの定期実行の登録と、実行中のまま残ったスキル実行の回復 */
+  skillSchedules: "maintenance.skill-schedules",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -27,6 +31,11 @@ export const discoveryPayloadSchema = z.strictObject({
   discoveryJobId: z.uuid(),
 });
 export type DiscoveryPayload = z.infer<typeof discoveryPayloadSchema>;
+
+export const skillPayloadSchema = z.strictObject({
+  runId: z.uuid(),
+});
+export type SkillPayload = z.infer<typeof skillPayloadSchema>;
 
 export const auditPayloadSchema = z.strictObject({
   companyId: z.uuid(),
@@ -84,4 +93,5 @@ export const DEFAULT_SCHEDULES = {
   recoverGeneration: "* * * * *",
   dispatchHandoffs: "* * * * *",
   recoverPipeline: "* * * * *",
+  skillSchedules: "* * * * *",
 } as const;

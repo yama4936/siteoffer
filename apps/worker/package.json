@@ -7,7 +7,8 @@
     "./audit-preparation": "./src/audit-preparation.ts",
     "./audit-recovery": "./src/audit-recovery.ts",
     "./audit-request": "./src/audit-request.ts",
-    "./audit-request-management": "./src/audit-request-management.ts"
+    "./audit-request-management": "./src/audit-request-management.ts",
+    "./skills": "./src/skills/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.postgres.json",

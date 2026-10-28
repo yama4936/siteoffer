@@ -27,4 +27,5 @@ export * from "./sales-offer-change.ts";
 export * from "./settings.ts";
 export * from "./share-link.ts";
 export * from "./site-audit.ts";
+export * from "./skill-run.ts";
 export * from "./users.ts";

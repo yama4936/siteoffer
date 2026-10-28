@@ -1,6 +1,6 @@
 /** reports の site-proposal / site-rebuild 成果物を、運営確認待ちの提案版としてDBへ取り込む。 */
 
-import { importSkillProposalVersion } from "../apps/web/lib/ops/skill-proposal.ts";
+import { importSkillProposalVersion } from "../apps/worker/src/skills/proposal-import.ts";
 import { DEMO_DATABASE_URL } from "../demo/paths.ts";
 import { systemClock } from "../packages/core/src/common/clock.ts";
 import { createDb, siteAudits } from "../packages/db/src/index.ts";

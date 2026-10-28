@@ -22,6 +22,7 @@ const paths = {
     "/ops/contracts",
     "/ops/delivery",
     "/ops/settings",
+    "/ops/accounts",
   ],
   sales: ["/sales/companies", "/sales/assignments", "/sales/earnings"],
 };

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -31,6 +32,8 @@ import type { JobQueue, Logger, WorkerDeps } from "./deps.ts";
 import { defaultGenerationInputBuilder, fixtureGenerationInputBuilder } from "./input.ts";
 import { DEFAULT_POLICIES, DEFAULT_SCHEDULES, type StepKind, type StepPolicy } from "./queues.ts";
 import { createAstroSiteBuilder } from "./site-builder.ts";
+import { CodexSkillExecutor } from "./skills/executor.ts";
+import type { SkillDeps } from "./skills/run.ts";
 import {
   createDockerSiteBuilder,
   DEFAULT_SITE_BUILD_IMAGE,
@@ -54,11 +57,32 @@ export type GeneratorConfig =
 
 export type DiscoveryProviderName = "fixture" | "nta";
 
+/**
+ * スキルの実行（運営画面・定期実行から起動）。既定は none（受け付けた実行は失敗として記録する）。
+ * codex は生成と同じ隔離コンテナの仕組みで、Python・Chromium を足したスキル用イメージを使う。
+ * スキルは公開Webの調査とサイトの取得を行うため、外へ出られるネットワークが必要（出口プロキシの許可リストはOpenAIだけ）。
+ */
+export type SkillRunnerConfig =
+  | { kind: "none" }
+  | {
+      kind: "codex";
+      image: string;
+      network: string;
+      codexAuthFile: string;
+      model: string | null;
+      user?: string;
+      reportsRoot: string;
+      workRoot: string;
+    };
+
 export interface WorkerConfig {
   /** pg-boss とDBの接続先。値はログに出さない */
   databaseUrl: string | null;
   discoveryOnly: boolean;
   generator: GeneratorConfig;
+  skillRunner: SkillRunnerConfig;
+  /** スキル実行の同時実行数（このプロセス内） */
+  skillConcurrency: number;
   siteBuild: { kind: "local" } | { kind: "docker"; image: string; timeoutMs: number; user: string };
   discoveryProviders: DiscoveryProviderName[];
   siteSearch: "fixture" | "none" | "tavily";
@@ -82,6 +106,7 @@ export interface WorkerConfig {
     recoverGeneration: string;
     dispatchHandoffs: string;
     recoverPipeline: string;
+    skillSchedules: string;
   };
   discoveryStaleAfterMs: number;
   /** キューごとの同時実行数（このプロセス内） */
@@ -134,6 +159,37 @@ export function resolveWorkerConfig(
   } else if (genKind !== "mock") {
     problems.push(`SITEOFFER_GENERATOR は mock か codex（${genKind}）`);
   }
+
+  let skillRunner: SkillRunnerConfig = { kind: "none" };
+  const skillKind = v("SITEOFFER_SKILL_RUNNER") ?? "none";
+  if (skillKind === "codex") {
+    const image = v("SITEOFFER_SKILL_IMAGE");
+    const network = v("SITEOFFER_SKILL_NETWORK");
+    const codexAuthFile = v("SITEOFFER_CODEX_AUTH_FILE");
+    const missing = [
+      !image && "SITEOFFER_SKILL_IMAGE",
+      !network && "SITEOFFER_SKILL_NETWORK",
+      !codexAuthFile && "SITEOFFER_CODEX_AUTH_FILE",
+    ].filter(Boolean);
+    if (missing.length) problems.push(`SITEOFFER_SKILL_RUNNER=codex には ${missing.join("・")} が必要`);
+    else if (network === "host") problems.push("SITEOFFER_SKILL_NETWORK に host は使えません");
+    else
+      skillRunner = {
+        kind: "codex",
+        image: image!,
+        network: network!,
+        codexAuthFile: codexAuthFile!,
+        model: v("SITEOFFER_SKILL_MODEL") ?? v("SITEOFFER_CODEX_MODEL") ?? null,
+        user: v("SITEOFFER_CODEX_USER"),
+        reportsRoot: path.resolve(v("SITEOFFER_SKILL_REPORTS_DIR") ?? path.join(REPO_ROOT, "reports")),
+        workRoot: path.resolve(v("SITEOFFER_SKILL_WORK_DIR") ?? path.join(os.tmpdir(), "siteoffer-skill")),
+      };
+  } else if (skillKind !== "none") {
+    problems.push(`SITEOFFER_SKILL_RUNNER は none か codex（${skillKind}）`);
+  }
+  const skillConcurrency = Number(v("SITEOFFER_SKILL_CONCURRENCY") ?? 1);
+  if (!Number.isInteger(skillConcurrency) || skillConcurrency < 1 || skillConcurrency > 4)
+    problems.push("SITEOFFER_SKILL_CONCURRENCY は1〜4の整数");
 
   const siteKind = v("SITEOFFER_SITE_BUILDER") ?? (generator.kind === "codex" ? "docker" : "local");
   const siteBuildImage = v("SITEOFFER_SITE_BUILD_IMAGE") ?? DEFAULT_SITE_BUILD_IMAGE;
@@ -225,6 +281,8 @@ export function resolveWorkerConfig(
     databaseUrl: v("DATABASE_URL") ?? null,
     discoveryOnly: v("SITEOFFER_DISCOVERY_ONLY") === "true",
     generator,
+    skillRunner,
+    skillConcurrency,
     siteBuild,
     discoveryProviders,
     siteSearch: siteSearch as WorkerConfig["siteSearch"],
@@ -259,6 +317,30 @@ export function createGenerator(config: GeneratorConfig, env: NodeJS.ProcessEnv 
   return new CodexGenerator(runner, { model: config.model });
 }
 
+/** スキル実行の部品。スキルはChromiumでの表示確認を含むため、生成より資源の上限を広げる（推奨案） */
+export function createSkillDeps(config: SkillRunnerConfig, env: NodeJS.ProcessEnv = process.env): SkillDeps | undefined {
+  if (config.kind === "none") return undefined;
+  const runner = new DockerSandboxRunner(
+    {
+      image: config.image,
+      network: config.network,
+      codexAuthFile: config.codexAuthFile,
+      cpus: 2,
+      memoryMb: 4096,
+      pidsLimit: 512,
+      tmpfsMb: 1024,
+      ...(config.user ? { user: config.user } : {}),
+    },
+    env,
+  );
+  return {
+    executor: new CodexSkillExecutor(runner, { model: config.model }),
+    workRoot: config.workRoot,
+    reportsRoot: config.reportsRoot,
+    repoRoot: REPO_ROOT,
+  };
+}
+
 /** 設定から処理の部品を組み立てる */
 export function buildWorkerDeps(
   config: WorkerConfig,
@@ -273,6 +355,7 @@ export function buildWorkerDeps(
     const p = name === "fixture" ? new FixtureProvider() : new NtaCorporateNumberProvider();
     providers[p.name] = p;
   }
+  const skills = config.discoveryOnly ? undefined : createSkillDeps(config.skillRunner);
   const runner = createPythonRunner(config.auditOptions.pythonBin);
   const collector =
     config.auditCollector.kind === "python"
@@ -300,6 +383,7 @@ export function buildWorkerDeps(
     generation: { generator, limiter },
     buildGenerationInput:
       config.generationInput === "fixture" ? fixtureGenerationInputBuilder : defaultGenerationInputBuilder,
+    ...(skills ? { skills } : {}),
     siteBuilder:
       config.siteBuild.kind === "docker" ? createDockerSiteBuilder(config.siteBuild) : createAstroSiteBuilder(),
     demoArtifactRoot: config.demoArtifactRoot,
@@ -315,6 +399,8 @@ export function describeConfig(config: WorkerConfig): Record<string, unknown> {
     generator: config.generator.kind,
     siteBuilder: config.siteBuild.kind,
     requestedModel: config.generator.kind === "codex" ? config.generator.model : null,
+    skillRunner: config.skillRunner.kind,
+    skillRequestedModel: config.skillRunner.kind === "codex" ? config.skillRunner.model : null,
     discoveryProviders: config.discoveryProviders,
     discoveryOnly: config.discoveryOnly,
     siteSearch: config.siteSearch,

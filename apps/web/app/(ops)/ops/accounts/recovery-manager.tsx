@@ -6,6 +6,7 @@ import { cancelRecoveryAction, issueRecoveryAction, refreshRecoveriesAction } fr
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
+import { type AccountsQuery, accountsHref } from "@/lib/ops/accounts-query";
 import { fmtDate } from "@/lib/ops/format";
 
 type Listing = { total: number; page: number; items: RecoveryView[] };
@@ -17,7 +18,16 @@ const labels: Record<string, string> = {
   cancelled: "取り消し済み",
   expired: "期限切れ・変更済み",
 };
-export function RecoveryManager({ initial, history }: { initial: Listing; history: boolean }) {
+export function RecoveryManager({
+  initial,
+  history,
+  userFilter,
+}: {
+  initial: Listing;
+  history: boolean;
+  /** ページ送りでユーザー一覧の絞り込みを保つ */
+  userFilter: Pick<AccountsQuery, "role" | "status">;
+}) {
   const [listing, setListing] = useState(initial),
     [selected, setSelected] = useState<string | null>(null),
     [pending, setPending] = useState(false),
@@ -280,12 +290,12 @@ export function RecoveryManager({ initial, history }: { initial: Listing; histor
       </div>
       <nav aria-label="復旧依頼のページ" className="flex justify-between text-sm">
         {listing.page > 0 ? (
-          <Link href={`/ops/account-recovery?page=${listing.page - 1}&history=${history ? 1 : 0}`}>前の20件</Link>
+          <Link href={accountsHref({ ...userFilter, history, page: listing.page - 1 }, "recovery")}>前の20件</Link>
         ) : (
           <span />
         )}
         {(listing.page + 1) * 20 < listing.total && (
-          <Link href={`/ops/account-recovery?page=${listing.page + 1}&history=${history ? 1 : 0}`}>次の20件</Link>
+          <Link href={accountsHref({ ...userFilter, history, page: listing.page + 1 }, "recovery")}>次の20件</Link>
         )}
       </nav>
     </div>

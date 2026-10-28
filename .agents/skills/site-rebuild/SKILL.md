@@ -114,12 +114,16 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 - 元サイトに見出しやメニュー名しかなく、サービス本文を確認できない場合は、名称を一覧として使うだけにする。「〜に関する案内です」「お客様に寄り添います」などの説明を補わない。
 - 完成後に、HTMLだけを顧客へ見せても草稿・生成途中・制作会社の説明に見えないかを全文で確認する。`review.presentation_ready` と `review.source_fidelity_reviewed` は、この照合後だけ true にする。
 - `source_coverage` で、ナビゲーション・評価根拠・取得ページの一致を確認する。未取得の主要ページは collect.py `--add-url` で追記して補い、それでも取れない主要ページや空本文があれば止める。止めるときは content-plan.json と `site/` を残さず、`references/site-completeness.md` の `$OUT/rebuild-blocked.json` を書いて `check.py --blocked` で検査する。
+- `source_content_inventory` で元サイトの有用な情報を意味単位で全件台帳化し、保持・統合・除外・停止の処置、出典、重要度、改善後のcontent IDとページ、理由を記録する。ページ数や文字数は参考値に限り、重要情報を短縮率だけで削らない。
+- `feature_inventory` で元サイトの利用者向け機能を全件台帳化し、保持・安全な置換・本番接続予定・対象外・停止の処置、重要度、利用者から見た差、検証状態を記録する。`rebuild-scope.json.excluded_features` と矛盾させない。
+- `parity_review` で生成後に両台帳とHTML・管理定義を照合し、未対応の情報・機能を0件にする。主要機能を安全に保持・置換できなければ完成扱いにしない。静的デモの制約で `planned` とする問い合わせ・顧客管理は本番残件として分け、動作済みと報告しない。
+- `references/fact-verification.md` に従い、`fact_verification` へ表示事実をclaim単位で記録する。社名・所在地・公式ドメインで企業同一性を先に確かめ、重要な数値・条件・連絡先・年度の根拠箇所、鮮度、矛盾、表示面を確認する。異なる出典の数値や条件を結合して新しい主張を作らない。
 - `decision_coverage` で、企業識別、依頼内容、対象、具体条件、実績・根拠、会社の信頼情報、次の行動を確認する。必要な問いが未回答のまま完成扱いにしない。
 - `page_plan` で各ページの目的・答える問い・使用するcontent ID・独立ページにする理由を決める。トップへ情報を詰め込むことも、薄いページを水増しすることも避ける。
 - `media_plan` で、事例等に使える許諾済み画像と、不足する重要画像を分ける。生成画像を実績写真の代わりにしない。
 - `update_plan` で、固定項目・記事・画像をSiteOffer共通の顧客管理画面へつなぐ構成と接続状態を記録する。静的HTMLだけなら「編集可能」と報告しない。
 
-`content-plan.json` が完成するまでHTMLを書かない。公開本文、title、description、CTA、構造化データは `selected_content` の範囲だけで作る。
+`content-plan.json` が完成するまでHTMLを書かない。公開本文、title、description、CTA、構造化データは `selected_content` と `status: verified` のclaimの範囲だけで作る。矛盾・古さ・企業同一性を解決できないclaimはHTMLに出さず、確認事項へ移す。
 元サイトの材料不足で主要サービスの説明を完成できない場合は HTML生成・DB取り込みを止め、`rebuild-blocked.json`（`stage: content_readiness`）に必要な追加取得または顧客確認を記録して報告する。`ready_for_customer_review` は文章品質の判定であり、本番公開・権利許諾・顧客承認済みを意味しない。
 
 ### 4. デザイン方針と画像を決める
@@ -165,11 +169,13 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - **ナビゲーション**：標準の`<a href>`で作り、PCとスマホで項目の語・順序・行き先を保つ。現在地を示し、固定ヘッダー・下部CTAがページ内リンクの到着位置やTabフォーカスを隠さない。
 - **非公式の明記**：全ページの上部に細い帯、フッターに「SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません」。本文より強く見せない。
 - **事実**：collected / evaluation で確認できたものだけ。未確認項目はHTMLから省き、rebuild.json の `needs_confirmation` だけに記録する。
+- **事実確認**：企業固有の表示主張は `fact_verification.claims` の `verified` だけを使う。別claimの数値・対象・条件・年度を結合せず、電話、金額、件数、年月、資格名等の重要値を出典と一致させる。
 - **完成文だけ**：`content-plan.json.selected_content` の `status: ready` だけを使う。「準備中」「サンプル」「仮」「詳細は後日」などの穴埋めや、出典のない汎用的な売り文句を表示しない。
 - **元サイト由来の文章**：見出し・本文・title・description・CTAは、元サイトの用語と確認済みの意味から作る。メニュー名しか確認できない項目に説明文を足さない。
 - **業務情報だけ**：改善前後の比較、情報設計、レスポンシブ、読み上げ、余白、見出し、配色、抽象表現など制作上の説明を訪問者向け本文に表示しない。必要な非公式デモ表示を唯一の例外とする。
 - **表現**：design-brief.json の視覚方針をCSS変数とレイアウトへ一貫して反映する。何でもカード化せず、情報の関係に合う表現を選ぶ。
 - **情報量**：元サイトにある確認済みのサービス詳細、実績、年度別情報、会社情報を、見た目を簡潔にするためだけに捨てない。トップは要点と詳細ページへの入口、詳細ページは判断に必要な具体情報を担う。
+- **元サイトとの同等性**：`source_content_inventory` と `feature_inventory` の全項目を実装先へ照合する。文字数・ページ数が増えたことを同等性の証拠にせず、意味のある情報単位と利用者が行えることの欠落がないことを確認する。
 - **実績画像**：`sales_demo` 利用が確認できた実画像だけを事例の証拠として使う。生成画像を特定案件の写真に見せない。重要画像が不足する場合は完成扱いにしないか、画像なしでも判断できる根拠を示す。
 - **顧客管理**：`update_plan.mode: article` の場合は記事一覧・詳細への導線を設計し、すべてのサイトで固定項目・画像・受付フォームを `admin-schema.json` に定義する。実際のSiteOffer管理画面へ接続・検証していなければ、デモ画面や報告で編集・受付が動くと断定しない。
 
@@ -185,6 +191,7 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - `images`：画像ごとの出所、権利状態、利用範囲、確認者・確認日時、営業用HTMLでの扱い（`references/image-policy.md`）。
 - `needs_confirmation`：HTMLには出さない確認事項の一覧（対象、関連ページ、企業に何を確認するか）。
 - `content_plan_ref`：`content-plan.json`。`content_selection` に掲載件数、除外件数、全表示主張の追跡確認結果を要約する。
+- `parity_review`：元サイトとの情報・機能比較、未対応件数、提案デモと本番相当それぞれの状態を要約する。`planned` の機能を「実装済み」に数えない。
 - `admin_schema_ref`：`admin-schema.json`。`admin_integration` に固定項目数、画像枠数、記事種別、受付フォーム、接続状態を要約する。
 
 書き終えたら `python3 -m json.tool $OUT/site/rebuild.json > /dev/null` で検証する。
@@ -200,6 +207,7 @@ python3 <skill>/scripts/check.py $OUT/site > $OUT/site-check.json; echo "exit=$?
 - `errors` が1件でもあれば終了コード1。直して再実行し、0になるまで繰り返す。
 - `warnings` は内容を見て、直すか、直さない理由を rebuild.json の `check.notes` に書く。
 - ローカルで開き、PC 1440px前後とスマホ390px前後のスクリーンショットを撮る。トップだけでなく、サービス・実績・会社情報・表・記事など作成した各ページ種別を移動して確認する。`references/design-quality.md` の100点基準で `$OUT/site/quality-review.json` を作る。80点未満または致命項目ありなら最大3回まで修正・再撮影する。
+- 全HTMLの本文・title・description・CTA・構造化データを `references/fact-verification.md` のclaimへ再照合する。未追跡の企業固有主張と未解決claimを0件にし、意味・条件・数値・固有名詞が一致した後だけ `review.facts_verified: true` にする。
 - ブラウザを利用できなければ `quality-review.json` を `status: not_run` にし、「表示は未確認」と報告する。コード検査の成功をデザイン品質の合格とは呼ばない。
 
 `site-check.json` の結果の要約と quality-review.json の総合点・状態を rebuild.json の `check` に書き写す。
@@ -227,7 +235,9 @@ pnpm demo:import-proposals -- --audit-id <site_audits.id>
 - 企業ごとに選んだ掲載情報の件数・主な選定理由、載せなかった情報の件数・主な理由
 - 元サイトから保持した固有語と語調、文章の引き渡し準備状態（`ready_for_customer_review` / `incomplete`）
 - HTMLから分離した確認事項の件数と主なもの
+- 表示事実のclaim件数、未解決・未追跡が0件か、確認した表示面
 - 情報完結性の判定、シングル／複数ページを選んだ理由、未取得ページの有無
+- 元サイトとの情報・機能比較（保持・統合・除外・置換・本番接続予定の件数）、未対応が0件か、本番に残る機能差
 - 年度別表・実績・画像をどう保持したか、顧客管理画面の固定項目・記事・画像・受付フォームの定義件数と接続状態（planned / connected_verified）
 - check.py の結果、品質点、PC・スマホの表示確認をしたか
 - 保存場所（`$OUT/site/`）

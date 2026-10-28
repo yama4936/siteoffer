@@ -17,6 +17,17 @@ URLが分かる未取得ページは、止める前に site-evaluation の colle
 
 取得済みページに本文がなくても、スクリーンショット上のメニュー名だけを根拠に説明文を創作しない。メニュー名は「不足している情報の手掛かり」であり、完成原稿の根拠ではない。
 
+### 元サイトとの情報・機能比較を先に作る
+
+`source_coverage.status: complete` は、取得先が揃ったことだけを表す。改善後サイトで欠落していないことの証拠にはならない。HTMLを書く前に、取得済み材料から次の2つの台帳を `content-plan.json` に作る。
+
+- `source_content_inventory`：元サイトにある有用な情報を、サービス、対象・条件、仕様、流れ、料金、実績、表、会社情報、連絡先、記事等の意味単位で全件記録する。各項目を `retained | consolidated | excluded | blocked` のどれかにし、出典、重要度、改善後のcontent ID・ページ、理由を対応付ける。
+- `feature_inventory`：ナビゲーション、フォーム、電話・メール、外部予約、検索、ダウンロード、地図、動画、記事更新、ログイン等、利用者が操作または利用する機能を全件記録する。各機能を `preserved | replaced | planned | out_of_scope | blocked` のどれかにし、元の挙動、重要度、根拠、改善後の扱い、利用者から見た差、検証状態を持たせる。
+
+同じ内容の重複は1項目へまとめてよいが、異なる条件・数値・年度・対象を一括して消さない。`text_length`、元本文の文字数、ページ数、改善後の可視文字数は比較の参考値として記録できるが、短く忠実な編集やページ統合を劣化と誤判定するため合格率には使わない。合格条件は、意味単位の全件対応と重要情報・主要機能の欠落がないこと。
+
+静的デモでは実送信しない問い合わせや、SiteOffer接続前の顧客管理機能は `planned` とし、動作済みと書かない。提案デモとして計画を明示できても、本番相当では `production_status: gaps_remaining` と `readiness.production_blockers` に残す。元サイトの主要機能を安全に保持・置換できず、サイトの中心なら従来どおり `eligible: false`。中心でなくても納品時の機能後退になる `blocked` / `out_of_scope` は完成扱いにしない。
+
 ## 止めたときの記録（rebuild-blocked.json）
 
 取得網羅性や完成原稿の材料が足りずに止めるときは、`$OUT/site/` を作らない（作りかけがあれば削除する）。HTMLのない `site/` や、選定途中の content-plan.json を残さない。代わりに `$OUT/rebuild-blocked.json` を書き、検査する。
@@ -133,6 +144,9 @@ python3 <skill>/scripts/check.py --blocked $OUT/rebuild-blocked.json > $OUT/bloc
 次のすべてを満たしたときだけ `ready_for_customer_review` にする。
 
 - `source_coverage.status` が `complete`
+- `source_content_inventory` の全項目に処置と実在する対応先があり、未対応・`blocked`・重要情報の除外がない
+- `feature_inventory` の全機能に処置があり、主要機能に `blocked` / `out_of_scope` がない。`planned` は本番残件として明示されている
+- `parity_review` の未対応情報・未対応機能がともに0件で、台帳の集計と一致する
 - 必須の判断項目に `missing` がない
 - `site_architecture.mode` とHTML数が一致し、構成理由・主要ナビゲーション・スマホ情報同等性を確認済み
 - `page_plan` の全ページが実在し、各ページに独立した目的と完成文がある

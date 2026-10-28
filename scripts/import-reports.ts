@@ -11,26 +11,13 @@
  * 実行：pnpm reports:import（--dry-run で書き込まずに内容だけ表示）
  */
 import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { moveCompanyStatus } from "../apps/worker/src/pipeline/status.ts";
-import {
-  type CriticalFlag,
-  categoryOf,
-  checkEvidence,
-  createPythonRunner,
-  defaultAuditOptions,
-  runDecide,
-} from "../packages/audit/src/index.ts";
+import { importEvaluationDir } from "../apps/worker/src/skills/evaluation-import.ts";
+import { createPythonRunner, defaultAuditOptions } from "../packages/audit/src/index.ts";
 import { systemClock } from "../packages/core/src/common/clock.ts";
-import { recordEvent } from "../packages/core/src/common/events.ts";
 import { createDb } from "../packages/db/src/client.ts";
-import { companies, findings, siteAudits, websites } from "../packages/db/src/index.ts";
-import { normalizeUrl } from "../packages/discovery/src/url.ts";
-import { splitAddress } from "./report-address.ts";
-
-type Json = Record<string, unknown>;
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const sitesDir = path.join(repoRoot, "reports/sites");
@@ -57,23 +44,6 @@ async function findReportDirs(): Promise<{ dir: string; skipped: string[] }[]> {
   return out;
 }
 
-/** 実行記録の model 欄（「claude-opus-5-5（…注記…）」）からモデルIDだけを取る */
-function modelId(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const m = v.trim().match(/^[A-Za-z0-9][A-Za-z0-9._:-]*/);
-  return m ? m[0] : null;
-}
-
-function str(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v.trim() : null;
-}
-
-function parseDate(v: unknown): Date | null {
-  if (typeof v !== "string") return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 const options = defaultAuditOptions();
 const runner = createPythonRunner(options.pythonBin);
 const reports = await findReportDirs();
@@ -89,162 +59,22 @@ try {
       continue;
     }
     const rel = path.relative(repoRoot, dir);
-    const evaluationPath = path.join(dir, "evaluation.json");
-    const ev = JSON.parse(await readFile(evaluationPath, "utf8")) as Json;
-    const summary = (ev.summary ?? null) as Json | null;
-    const status = ev.status === "unevaluable" ? "unevaluable" : "evaluated";
-    const targetUrl = str(ev.target_url);
-    const norm = targetUrl ? normalizeUrl(targetUrl) : null;
-    if (!targetUrl || !norm?.ok) {
-      console.log(`failed（target_url が不正）: ${rel}`);
-      counts.failed++;
-      continue;
-    }
-    if (status === "evaluated" && !summary) {
-      console.log(`failed（summary なし。score.py 未実行）: ${rel}`);
-      counts.failed++;
-      continue;
-    }
-    const items = status === "evaluated" ? checkEvidence(ev.items) : null;
-    if (items && !items.ok) {
-      console.log(`failed（根拠のない項目がある: ${items.message}）: ${rel}`);
-      counts.failed++;
-      continue;
-    }
-
-    const dup = await db.query.siteAudits.findFirst({
-      columns: { id: true },
-      where: (t, { eq }) => eq(t.artifactDir, dir),
+    const r = await importEvaluationDir({ db, clock: systemClock, runner, options }, dir, {
+      actor,
+      source: rel,
+      dryRun,
     });
-    if (dup) {
+    if (r.status === "failed") {
+      console.log(`failed（${r.reason}）: ${rel}`);
+      counts.failed++;
+    } else if (r.status === "already_imported") {
       counts.alreadyImported++;
-      continue;
+    } else {
+      console.log(
+        `${dryRun ? "dry-run" : "import"}: ${rel} ${r.evaluation} ${r.totalScore ?? "-"}点 判定=${r.decision} ${r.companyName ?? "(企業名なし)"}`,
+      );
+      if (r.status === "imported") counts.imported++;
     }
-
-    const decided = await runDecide(runner, options, evaluationPath);
-    if (!decided.ok) {
-      console.log(`failed（${decided.message ?? decided.error}）: ${rel}`);
-      counts.failed++;
-      continue;
-    }
-
-    const company = (ev.company ?? {}) as Json;
-    const address = str(company.location);
-    const flags = (Array.isArray(ev.critical_flags) ? ev.critical_flags : []) as CriticalFlag[];
-    const criticalItems = new Set(flags.map((f) => f.item).filter((i): i is string => typeof i === "string"));
-    const totalScore = summary?.total_score;
-    console.log(
-      `${dryRun ? "dry-run" : "import"}: ${rel} ${status} ${totalScore ?? "-"}点 判定=${decided.value.decision} ${str(company.name) ?? "(企業名なし)"}`,
-    );
-    if (dryRun) continue;
-
-    await db.transaction(async (tx) => {
-      const now = systemClock.now();
-      const site = await tx.query.websites.findFirst({
-        where: (t, { eq }) => eq(t.normalizedUrl, norm.value.normalizedUrl),
-      });
-      let companyId = site?.companyId;
-      let websiteId = site?.id;
-      if (companyId && status === "evaluated") {
-        // 収集ジョブ（company-discovery スキル等）で入った診断前の企業は、評価の取り込みで診断済みに進める
-        await moveCompanyStatus(tx, systemClock, {
-          companyId,
-          from: ["collected", "site_confirmed"],
-          to: "audited",
-          reason: "スキルの評価結果を取り込んだ",
-          meta: { source: rel },
-        });
-      }
-      if (!companyId) {
-        const [row] = await tx
-          .insert(companies)
-          .values({
-            name: str(company.name) ?? norm.value.domain,
-            ...splitAddress(address),
-            address,
-            industry: str(company.industry_guess),
-            // 評価で読んだサイトだが、運営は公式サイトか確認していない。
-            // 評価不能はサイトを読めず企業名も公式サイトで確かめていないので、確認待ちにする
-            officialSiteStatus: status === "unevaluable" ? "needs_review" : "candidate",
-            pipelineStatus: "audited",
-            createdAt: now,
-            updatedAt: now,
-          })
-          .returning({ id: companies.id });
-        companyId = row!.id;
-        await recordEvent(tx, systemClock, {
-          actor,
-          action: "company.imported",
-          targetType: "company",
-          targetId: companyId,
-          after: { source: rel },
-        });
-      }
-      if (!websiteId) {
-        const [row] = await tx
-          .insert(websites)
-          .values({
-            companyId,
-            url: targetUrl,
-            normalizedUrl: norm.value.normalizedUrl,
-            domain: norm.value.domain,
-            kind: "current",
-            isPrimary: true,
-          })
-          .returning({ id: websites.id });
-        websiteId = row!.id;
-      }
-      const [audit] = await tx
-        .insert(siteAudits)
-        .values({
-          companyId,
-          websiteId,
-          status,
-          targetUrl,
-          finalUrl: str(ev.final_url),
-          rubricVersion: str(summary?.rubric_version) ?? str(ev.rubric_version),
-          totalScore: typeof totalScore === "number" ? String(totalScore) : null,
-          coverage: typeof summary?.coverage === "number" ? String(summary.coverage) : null,
-          scoreConfirmed: status === "evaluated" ? summary?.score_confirmed === true : false,
-          criticalFlags: flags,
-          summary,
-          decision: decided.value.decision,
-          decisionReason: decided.value.reasons.join("。"),
-          unevaluableReason: status === "unevaluable" ? (str(ev.fatal_reason) ?? "採点で評価不能と判断された") : null,
-          evaluatorModel: modelId((ev.evaluator as Json | undefined)?.model),
-          artifactDir: dir,
-          attempts: 1,
-          fetchedAt: parseDate(ev.collected_at),
-          evaluatedAt: parseDate(ev.evaluated_at),
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning({ id: siteAudits.id });
-      if (items?.ok && items.value.length) {
-        await tx.insert(findings).values(
-          items.value.map((it) => ({
-            auditId: audit!.id,
-            itemCode: it.id,
-            category: categoryOf(it.id),
-            status: it.status,
-            score: it.status === "scored" ? (it.level ?? null) : null,
-            reason: it.reason ?? null,
-            observations: it.observations ?? [],
-            improvementHint: it.improvement_hint ?? null,
-            inference: it.inference === true,
-            critical: criticalItems.has(it.id),
-          })),
-        );
-      }
-      await recordEvent(tx, systemClock, {
-        actor,
-        action: "site_audit.imported",
-        targetType: "site_audit",
-        targetId: audit!.id,
-        after: { source: rel, status, totalScore: totalScore ?? null, decision: decided.value.decision },
-      });
-    });
-    counts.imported++;
   }
 } finally {
   await close();

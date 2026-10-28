@@ -41,7 +41,7 @@ export async function resetRecoveryAction(input: { token: string; password: stri
 export async function issueRecoveryAction(input: IssueRecoveryInput) {
   try {
     const result = await issuePasswordRecovery(getDb(), systemClock, await token(), input);
-    revalidatePath("/ops/account-recovery");
+    revalidatePath("/ops/accounts");
     return { ok: true as const, ...result };
   } catch (error) {
     return failure(error);
@@ -50,7 +50,7 @@ export async function issueRecoveryAction(input: IssueRecoveryInput) {
 export async function cancelRecoveryAction(input: { id: string; revision: number }) {
   try {
     const item = await cancelPasswordRecovery(getDb(), systemClock, await token(), input);
-    revalidatePath("/ops/account-recovery");
+    revalidatePath("/ops/accounts");
     return { ok: true as const, item };
   } catch (error) {
     return failure(error);

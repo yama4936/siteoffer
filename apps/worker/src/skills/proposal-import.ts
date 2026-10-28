@@ -1,13 +1,40 @@
 /** site-proposal / site-rebuild の成果物を、会社別の新しい提案版として取り込む。 */
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { type Actor, authorize, type Clock, err, ok, type Result, recordEvent } from "@siteoffer/core";
 import { type DbOrTx, proposals, proposalVersions, siteAudits } from "@siteoffer/db";
 import { proposalTextSchema } from "@siteoffer/schemas";
 import { and, desc, eq } from "drizzle-orm";
-import { resolveImprovementSiteDir } from "../sales/improvement-files.ts";
 
 type Json = Record<string, unknown>;
+
+function inside(root: string, target: string) {
+  return target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+/**
+ * 改善後サイトのルート（<artifactDir>/site の実体）。site が成果物の外を指すリンクでないことと、
+ * index.html が通常ファイルであることを確かめる（apps/web/lib/sales/improvement-files.ts の resolveImprovementSiteDir と同じ判定）。
+ */
+export async function resolveImprovementSiteDir(artifactDir: string | null): Promise<string | null> {
+  if (!artifactDir || !path.isAbsolute(artifactDir)) return null;
+  try {
+    const root = await realpath(artifactDir);
+    const site = await realpath(path.join(root, "site"));
+    if (!inside(root, site) || !(await stat(site)).isDirectory()) return null;
+    const index = await realpath(path.join(site, "index.html"));
+    if (!inside(site, index)) return null;
+    const handle = await open(index, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      return (await handle.stat()).isFile() ? site : null;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
 
 export type ImportSkillProposalError =
   | "forbidden"

@@ -20,6 +20,7 @@ export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intak
     imageConfigured: !deps.discoveryOnly && !!process.env.OPENAI_API_KEY?.trim(),
     generator: kind === "mock" || kind === "codex" ? kind : "unknown",
     intakeIntervalMs,
+    skillRunner: deps.skills ? "codex" : "none",
     ...(!deps.discoveryOnly && typeof deps.generation.generator.recoverStop === "function"
       ? { generationStopRecovery: 1 as const }
       : {}),

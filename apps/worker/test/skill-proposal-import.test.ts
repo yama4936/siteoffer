@@ -7,7 +7,7 @@ import { auditEvents, type Db, proposals, proposalVersions, siteAudits, websites
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { importSkillProposalVersion } from "./skill-proposal.ts";
+import { importSkillProposalVersion } from "../src/skills/proposal-import.ts";
 
 let db: Db;
 let close: () => Promise<void>;

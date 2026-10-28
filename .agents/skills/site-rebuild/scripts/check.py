@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.parse
 from html.parser import HTMLParser
 
@@ -58,6 +59,14 @@ RESOURCE_ATTRS = {
     "video": ["src", "poster"], "audio": ["src"], "track": ["src"], "embed": ["src"],
     "object": ["data"], "input": ["src"],
 }
+
+
+def normalize_fact_value(value):
+    """表記上の空白・記号・全半角差を除き、重要値の取り違えを検出する。"""
+    if not isinstance(value, str):
+        return None
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(char for char in normalized if char.isalnum())
 
 
 class Page(HTMLParser):
@@ -436,6 +445,8 @@ class Checker:
         plan = self.read_json("content-plan.json", check="content_plan")
         if not isinstance(plan, dict):
             return None
+        if plan.get("schema_version") != "0.3":
+            self.err("content-plan.json", None, "content_plan", "schema_version は 0.3")
         company = plan.get("company")
         if not isinstance(company, dict) or not company.get("name") or not company.get("source_ref"):
             self.err("content-plan.json", None, "content_plan", "company.name / company.source_ref が必要")
@@ -452,6 +463,7 @@ class Checker:
             self.err("content-plan.json", None, "content_plan", "selected_content は1件以上必要")
             selected = []
         seen = set()
+        selected_claim_ids = {}
         for index, item in enumerate(selected):
             label = f"selected_content[{index}]"
             if not isinstance(item, dict):
@@ -464,6 +476,17 @@ class Checker:
                 self.err("content-plan.json", None, "content_plan", f"id が重複している：{item_id}")
             else:
                 seen.add(item_id)
+            claim_ids = item.get("claim_ids")
+            if not isinstance(claim_ids, list) or not claim_ids or not all(
+                    isinstance(claim_id, str) and claim_id.strip() for claim_id in claim_ids):
+                self.err("content-plan.json", None, "fact_verification",
+                         f"{label}.claim_ids は1件以上のclaim IDにする")
+                claim_ids = []
+            elif len(claim_ids) != len(set(claim_ids)):
+                self.err("content-plan.json", None, "fact_verification",
+                         f"{label}.claim_ids が重複している")
+            if isinstance(item_id, str) and item_id.strip():
+                selected_claim_ids[item_id] = set(claim_ids)
             if item.get("status") != "ready":
                 self.err("content-plan.json", None, "content_plan", f"{label}.status は ready にする")
             for key in ("purpose", "selection_reason"):
@@ -520,6 +543,9 @@ class Checker:
             for key in ("observed_navigation", "collected_sources", "missing_sources"):
                 if not isinstance(source_coverage.get(key), list):
                     self.err("content-plan.json", None, "content_plan", f"source_coverage.{key} は配列にする")
+            for key in ("observed_navigation", "collected_sources"):
+                if not source_coverage.get(key):
+                    self.err("content-plan.json", None, "content_plan", f"source_coverage.{key} は1件以上必要")
             if not isinstance(source_coverage.get("basis"), str) or not source_coverage["basis"].strip():
                 self.err("content-plan.json", None, "content_plan", "source_coverage.basis がない")
             if coverage_status == "incomplete":
@@ -676,12 +702,251 @@ class Checker:
                     self.err("content-plan.json", None, "content_plan",
                              f"excluded_content[{index}] に subject と既知の reason が必要")
 
+        source_inventory = plan.get("source_content_inventory")
+        source_counts = {key: 0 for key in ("retained", "consolidated", "excluded", "blocked")}
+        source_ids = set()
+        if not isinstance(source_inventory, list) or not source_inventory:
+            self.err("content-plan.json", None, "content_parity", "source_content_inventory は1件以上必要")
+            source_inventory = []
+        for index, item in enumerate(source_inventory):
+            label = f"source_content_inventory[{index}]"
+            if not isinstance(item, dict):
+                self.err("content-plan.json", None, "content_parity", f"{label} はオブジェクトでない")
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id.strip() or item_id in source_ids:
+                self.err("content-plan.json", None, "content_parity", f"{label}.id がない、または重複")
+            else:
+                source_ids.add(item_id)
+            if not item.get("kind") or not item.get("label"):
+                self.err("content-plan.json", None, "content_parity", f"{label} に kind / label が必要")
+            importance = item.get("importance")
+            if importance not in ("essential", "supporting", "optional"):
+                self.err("content-plan.json", None, "content_parity", f"{label}.importance が不正")
+            refs = item.get("source_refs")
+            if not isinstance(refs, list) or not refs or any(
+                    not isinstance(ref, dict) or not ref.get("artifact") or not ref.get("path") for ref in refs):
+                self.err("content-plan.json", None, "content_parity", f"{label}.source_refs が不正")
+            source_length = item.get("source_text_length")
+            if source_length is not None and (not isinstance(source_length, int) or isinstance(source_length, bool) or source_length < 0):
+                self.err("content-plan.json", None, "content_parity", f"{label}.source_text_length は0以上の整数")
+            disposition = item.get("disposition")
+            if disposition not in source_counts:
+                self.err("content-plan.json", None, "content_parity", f"{label}.disposition が不正")
+            else:
+                source_counts[disposition] += 1
+            target_ids = item.get("target_content_ids")
+            target_pages = item.get("target_pages")
+            if not isinstance(target_ids, list) or not isinstance(target_pages, list):
+                self.err("content-plan.json", None, "content_parity", f"{label} の対応先は配列にする")
+                target_ids, target_pages = [], []
+            unknown_ids = [target for target in target_ids if target not in seen]
+            unknown_pages = [target for target in target_pages if target not in self.pages]
+            if unknown_ids or unknown_pages:
+                self.err("content-plan.json", None, "content_parity",
+                         f"{label} の対応先が存在しない：content={unknown_ids} pages={unknown_pages}")
+            if disposition in ("retained", "consolidated") and (not target_ids or not target_pages):
+                self.err("content-plan.json", None, "content_parity", f"{label} の保持・統合先がない")
+            if not isinstance(item.get("reason"), str) or not item["reason"].strip():
+                self.err("content-plan.json", None, "content_parity", f"{label}.reason がない")
+            if disposition == "blocked" or (importance == "essential" and disposition == "excluded"):
+                self.err("content-plan.json", None, "content_parity", f"{label} の重要情報が改善後サイトで欠落する")
+
+        feature_inventory = plan.get("feature_inventory")
+        feature_counts = {key: 0 for key in ("preserved", "replaced", "planned", "out_of_scope", "blocked")}
+        feature_ids = set()
+        primary_planned = False
+        if not isinstance(feature_inventory, list):
+            self.err("content-plan.json", None, "feature_parity", "feature_inventory は配列にする")
+            feature_inventory = []
+        for index, item in enumerate(feature_inventory):
+            label = f"feature_inventory[{index}]"
+            if not isinstance(item, dict):
+                self.err("content-plan.json", None, "feature_parity", f"{label} はオブジェクトでない")
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id.strip() or item_id in feature_ids:
+                self.err("content-plan.json", None, "feature_parity", f"{label}.id がない、または重複")
+            else:
+                feature_ids.add(item_id)
+            for key in ("kind", "original_behavior", "target", "user_visible_difference"):
+                if not isinstance(item.get(key), str) or not item[key].strip():
+                    self.err("content-plan.json", None, "feature_parity", f"{label}.{key} がない")
+            importance = item.get("importance")
+            if importance not in ("primary", "supporting", "optional"):
+                self.err("content-plan.json", None, "feature_parity", f"{label}.importance が不正")
+            evidence = item.get("evidence")
+            if not isinstance(evidence, list) or not evidence or any(
+                    not isinstance(ref, dict) or not ref.get("artifact") or not ref.get("path") for ref in evidence):
+                self.err("content-plan.json", None, "feature_parity", f"{label}.evidence が不正")
+            target_refs = item.get("target_refs")
+            if not isinstance(target_refs, list) or not target_refs:
+                self.err("content-plan.json", None, "feature_parity", f"{label}.target_refs がない")
+                target_refs = []
+            for ref in target_refs:
+                artifact = ref.get("artifact") if isinstance(ref, dict) else None
+                path = ref.get("path") if isinstance(ref, dict) else None
+                if artifact not in ("html", "content-plan.json", "admin-schema.json", "rebuild-scope.json") or not path:
+                    self.err("content-plan.json", None, "feature_parity", f"{label}.target_refs が不正")
+                elif artifact == "html" and path not in self.pages:
+                    self.err("content-plan.json", None, "feature_parity", f"{label} のHTML対応先が存在しない：{path}")
+                elif artifact == "content-plan.json" and path not in seen:
+                    self.err("content-plan.json", None, "feature_parity", f"{label} のcontent対応先が存在しない：{path}")
+            handling = item.get("handling")
+            if handling not in feature_counts:
+                self.err("content-plan.json", None, "feature_parity", f"{label}.handling が不正")
+            else:
+                feature_counts[handling] += 1
+            verification = item.get("verification_status")
+            if verification not in ("verified", "planned", "not_applicable", "unverified", "blocked"):
+                self.err("content-plan.json", None, "feature_parity", f"{label}.verification_status が不正")
+            if handling in ("preserved", "replaced") and verification != "verified":
+                self.err("content-plan.json", None, "feature_parity", f"{label} の保持・置換は verified が必要")
+            if handling == "planned" and verification != "planned":
+                self.err("content-plan.json", None, "feature_parity", f"{label} の planned と検証状態が一致しない")
+            if importance == "primary" and handling in ("out_of_scope", "blocked"):
+                self.err("content-plan.json", None, "feature_parity", f"{label} の主要機能が欠落する")
+            if importance == "primary" and handling == "planned":
+                primary_planned = True
+
+        parity = plan.get("parity_review")
+        if not isinstance(parity, dict):
+            self.err("content-plan.json", None, "parity_review", "parity_review がない")
+        else:
+            if parity.get("unaccounted_content_ids") != [] or parity.get("unaccounted_feature_ids") != []:
+                self.err("content-plan.json", None, "parity_review", "未対応の情報・機能は0件にする")
+            if parity.get("demo_status") != "complete":
+                self.err("content-plan.json", None, "parity_review", "demo_status は complete が必要")
+            production_status = parity.get("production_status")
+            if production_status not in ("equivalent_or_improved", "gaps_remaining"):
+                self.err("content-plan.json", None, "parity_review", "production_status が不正")
+            info_summary = parity.get("information_summary")
+            expected_info = {"source_items": len(source_inventory), **source_counts}
+            if info_summary != expected_info:
+                self.err("content-plan.json", None, "parity_review",
+                         f"information_summary が台帳と一致しない：期待={expected_info}")
+            feature_summary = parity.get("feature_summary")
+            expected_features = {"source_features": len(feature_inventory), **feature_counts}
+            if feature_summary != expected_features:
+                self.err("content-plan.json", None, "parity_review",
+                         f"feature_summary が台帳と一致しない：期待={expected_features}")
+            if not isinstance(parity.get("comparison_notes"), str) or not parity["comparison_notes"].strip():
+                self.err("content-plan.json", None, "parity_review", "comparison_notes がない")
+            if primary_planned and production_status != "gaps_remaining":
+                self.err("content-plan.json", None, "parity_review",
+                         "planned の主要機能は production_status=gaps_remaining にする")
+
+        fact_verification = plan.get("fact_verification")
+        claim_ids = set()
+        claims_by_content = {content_id: set() for content_id in seen}
+        identity_claim_found = False
+        if not isinstance(fact_verification, dict):
+            self.err("content-plan.json", None, "fact_verification", "fact_verification がない")
+        else:
+            if fact_verification.get("company_identity_checked") is not True:
+                self.err("content-plan.json", None, "fact_verification",
+                         "company_identity_checked は同名他社・支店を照合後に true にする")
+            claims = fact_verification.get("claims")
+            if not isinstance(claims, list) or not claims:
+                self.err("content-plan.json", None, "fact_verification", "claims は1件以上必要")
+                claims = []
+            valid_kinds = {"identity", "contact", "service", "price", "credential",
+                           "achievement", "date", "condition", "other"}
+            valid_surfaces = {"body", "title", "description", "cta", "structured_data"}
+            value_kinds = {"identity", "contact", "price", "credential", "achievement",
+                           "date", "condition"}
+            for index, claim in enumerate(claims):
+                label = f"fact_verification.claims[{index}]"
+                if not isinstance(claim, dict):
+                    self.err("content-plan.json", None, "fact_verification", f"{label} はオブジェクトでない")
+                    continue
+                claim_id = claim.get("id")
+                if not isinstance(claim_id, str) or not claim_id.strip() or claim_id in claim_ids:
+                    self.err("content-plan.json", None, "fact_verification",
+                             f"{label}.id がない、または重複している")
+                else:
+                    claim_ids.add(claim_id)
+                kind = claim.get("kind")
+                if kind not in valid_kinds:
+                    self.err("content-plan.json", None, "fact_verification", f"{label}.kind が不正")
+                if kind == "identity":
+                    identity_claim_found = True
+                if not isinstance(claim.get("statement"), str) or not claim["statement"].strip():
+                    self.err("content-plan.json", None, "fact_verification", f"{label}.statement がない")
+                content_ids = claim.get("content_ids")
+                if not isinstance(content_ids, list) or not content_ids:
+                    self.err("content-plan.json", None, "fact_verification", f"{label}.content_ids がない")
+                    content_ids = []
+                elif any(content_id not in seen for content_id in content_ids):
+                    self.err("content-plan.json", None, "fact_verification",
+                             f"{label}.content_ids に未定義IDがある")
+                for content_id in content_ids:
+                    if content_id in claims_by_content and isinstance(claim_id, str):
+                        claims_by_content[content_id].add(claim_id)
+                refs = claim.get("source_refs")
+                if not isinstance(refs, list) or not refs:
+                    self.err("content-plan.json", None, "fact_verification", f"{label}.source_refs がない")
+                else:
+                    for ref_index, ref in enumerate(refs):
+                        required = ("artifact", "path", "evidence", "observed_at")
+                        if not isinstance(ref, dict) or any(not ref.get(key) for key in required):
+                            self.err("content-plan.json", None, "fact_verification",
+                                     f"{label}.source_refs[{ref_index}] に artifact / path / evidence / observed_at が必要")
+                freshness = claim.get("freshness")
+                if not isinstance(freshness, dict) or freshness.get("status") not in ("current", "timeless"):
+                    self.err("content-plan.json", None, "fact_verification",
+                             f"{label}.freshness.status は current / timeless にする")
+                if not isinstance(freshness, dict) or not isinstance(freshness.get("basis"), str) or not freshness["basis"].strip():
+                    self.err("content-plan.json", None, "fact_verification", f"{label}.freshness.basis がない")
+                if claim.get("status") != "verified":
+                    self.err("content-plan.json", None, "fact_verification",
+                             f"{label}.status は表示前に verified にする")
+                if claim.get("conflicts") != []:
+                    self.err("content-plan.json", None, "fact_verification",
+                             f"{label}.conflicts は完成時に空にする")
+                surfaces = claim.get("surfaces")
+                if not isinstance(surfaces, list) or not surfaces or any(
+                        surface not in valid_surfaces for surface in surfaces):
+                    self.err("content-plan.json", None, "fact_verification", f"{label}.surfaces が不正")
+                source_value = claim.get("source_value")
+                display_value = claim.get("display_value")
+                if kind in value_kinds and (not isinstance(source_value, str) or not source_value.strip()
+                                            or not isinstance(display_value, str) or not display_value.strip()):
+                    self.err("content-plan.json", None, "fact_verification",
+                             f"{label} の重要値には source_value / display_value が必要")
+                elif source_value is not None or display_value is not None:
+                    if normalize_fact_value(source_value) != normalize_fact_value(display_value):
+                        self.err("content-plan.json", None, "fact_verification",
+                                 f"{label} の重要値が出典と表示で一致しない")
+            if not identity_claim_found:
+                self.err("content-plan.json", None, "fact_verification", "企業同一性のclaimがない")
+            unresolved = fact_verification.get("unresolved_claim_ids")
+            if unresolved != []:
+                self.err("content-plan.json", None, "fact_verification", "unresolved_claim_ids は完成時に空にする")
+            reviewed_surfaces = fact_verification.get("reviewed_surfaces")
+            if not isinstance(reviewed_surfaces, list) or set(reviewed_surfaces) != valid_surfaces:
+                self.err("content-plan.json", None, "fact_verification",
+                         "reviewed_surfaces で body / title / description / cta / structured_data を全て確認する")
+            if not fact_verification.get("reviewed_at"):
+                self.err("content-plan.json", None, "fact_verification", "reviewed_at がない")
+
+        for content_id in seen:
+            declared = selected_claim_ids.get(content_id, set())
+            actual = claims_by_content.get(content_id, set())
+            unknown = declared - claim_ids
+            if unknown:
+                self.err("content-plan.json", None, "fact_verification",
+                         f"selected_content[{content_id}].claim_ids に未定義IDがある：{sorted(unknown)}")
+            if declared != actual:
+                self.err("content-plan.json", None, "fact_verification",
+                         f"selected_content[{content_id}] とclaimの対応が一致しない")
+
         review = plan.get("review")
         if not isinstance(review, dict):
             self.err("content-plan.json", None, "content_plan", "review がない")
         else:
             for key in ("visible_claims_traced", "copy_ready", "cta_targets_verified",
-                        "source_fidelity_reviewed", "presentation_ready"):
+                        "source_fidelity_reviewed", "facts_verified", "presentation_ready"):
                 if review.get(key) is not True:
                     self.err("content-plan.json", None, "content_plan", f"review.{key} は照合後に true にする")
             if not review.get("reviewed_at"):
@@ -702,6 +967,8 @@ class Checker:
                 self.err("content-plan.json", None, "content_plan", "ready_for_customer_review の blocking_gaps は空にする")
             if not isinstance(readiness.get("production_blockers"), list):
                 self.err("content-plan.json", None, "content_plan", "readiness.production_blockers は配列にする")
+            elif primary_planned and not readiness.get("production_blockers"):
+                self.err("content-plan.json", None, "feature_parity", "planned の主要機能を production_blockers に明記する")
         return plan
 
     def read_json(self, name, check="quality_artifact"):

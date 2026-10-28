@@ -29,7 +29,7 @@ class ContentPlanCheckTest(unittest.TestCase):
             "status": "not_run", "scores": {}, "total": 0, "fatal_issues": [], "viewports": [],
         })
         self.write_json(root / "content-plan.json", {
-            "schema_version": "0.2",
+            "schema_version": "0.3",
             "company": {"name": "株式会社例", "source_ref": "evaluation.json company.name"},
             "source_profile": {
                 "distinctive_terms": ["株式会社例"], "tone": "簡潔な敬体",
@@ -72,15 +72,60 @@ class ContentPlanCheckTest(unittest.TestCase):
                 "placement": [{"page": "index.html", "section": "h1"}],
                 "source_refs": [{"artifact": "evaluation.json", "path": "company.name"}],
                 "selection_reason": "確認済みの正式名称",
+                "claim_ids": ["claim-company-name"],
                 "source_fidelity": {"mode": "verbatim_fact", "preserved_terms": ["株式会社例"],
                                     "meaning_preserved": True, "editorial_changes": "見出し用に会社案内を付加"},
                 "freshness": {"status": "timeless", "basis": "取得時点の会社名"},
                 "status": "ready",
             }],
+            "source_content_inventory": [{
+                "id": "source-company-name", "kind": "identity", "label": "正式名称",
+                "importance": "essential",
+                "source_refs": [{"artifact": "evaluation.json", "path": "company.name"}],
+                "source_text_length": 5, "disposition": "retained",
+                "target_content_ids": ["company-name"], "target_pages": ["index.html"],
+                "reason": "正式名称を見出しへ保持",
+            }],
+            "feature_inventory": [{
+                "id": "feature-navigation", "kind": "navigation",
+                "original_behavior": "トップページから会社情報を閲覧できる",
+                "importance": "supporting",
+                "evidence": [{"artifact": "collected.json", "path": "site.navigation_links_top"}],
+                "handling": "preserved", "target": "index.html の通常リンク",
+                "target_refs": [{"artifact": "html", "path": "index.html"}],
+                "user_visible_difference": "なし", "verification_status": "verified",
+            }],
+            "parity_review": {
+                "unaccounted_content_ids": [], "unaccounted_feature_ids": [],
+                "demo_status": "complete", "production_status": "equivalent_or_improved",
+                "information_summary": {"source_items": 1, "retained": 1, "consolidated": 0,
+                                        "excluded": 0, "blocked": 0},
+                "feature_summary": {"source_features": 1, "preserved": 1, "replaced": 0,
+                                    "planned": 0, "out_of_scope": 0, "blocked": 0},
+                "comparison_notes": "文字数は参考値とし、元の情報と機能を意味単位で照合",
+            },
+            "fact_verification": {
+                "company_identity_checked": True,
+                "claims": [{
+                    "id": "claim-company-name", "kind": "identity",
+                    "statement": "正式名称は株式会社例", "content_ids": ["company-name"],
+                    "source_refs": [{"artifact": "evaluation.json", "path": "company.name",
+                                     "evidence": "会社名欄",
+                                     "observed_at": "2026-10-27T11:30:00+09:00"}],
+                    "freshness": {"status": "timeless", "basis": "評価時点の会社名"},
+                    "conflicts": [], "surfaces": ["body", "title"],
+                    "source_value": "株式会社例", "display_value": "株式会社例",
+                    "status": "verified",
+                }],
+                "unresolved_claim_ids": [],
+                "reviewed_surfaces": ["body", "title", "description", "cta", "structured_data"],
+                "reviewed_at": "2026-10-27T12:00:00+09:00",
+            },
             "excluded_content": [],
             "review": {"visible_claims_traced": True, "copy_ready": True,
                        "cta_targets_verified": True, "source_fidelity_reviewed": True,
-                       "presentation_ready": True, "reviewed_at": "2026-10-27T12:00:00+09:00"},
+                       "facts_verified": True, "presentation_ready": True,
+                       "reviewed_at": "2026-10-27T12:00:00+09:00"},
             "readiness": {"status": "ready_for_customer_review", "blocking_gaps": [],
                           "production_blockers": ["顧客確認"]},
         })
@@ -185,6 +230,40 @@ class ContentPlanCheckTest(unittest.TestCase):
             messages = [item["message"] for item in result["errors"]]
             self.assertTrue(any("source_fidelity" in message for message in messages))
             self.assertTrue(any("完成原稿になっていない" in message for message in messages))
+
+    def test_unresolved_or_changed_fact_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            claim = plan["fact_verification"]["claims"][0]
+            claim["status"] = "conflicted"
+            claim["conflicts"] = ["会社概要とフッターで表記が異なる"]
+            claim["display_value"] = "株式会社別例"
+            plan["fact_verification"]["unresolved_claim_ids"] = ["claim-company-name"]
+            plan["review"]["facts_verified"] = False
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            messages = " ".join(item["message"] for item in result["errors"])
+            self.assertIn("status は表示前に verified", messages)
+            self.assertIn("conflicts", messages)
+            self.assertIn("重要値が出典と表示で一致しない", messages)
+            self.assertIn("unresolved_claim_ids", messages)
+            self.assertIn("review.facts_verified", messages)
+
+    def test_untracked_selected_content_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["selected_content"][0]["claim_ids"] = ["claim-missing"]
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            messages = " ".join(item["message"] for item in result["errors"])
+            self.assertIn("未定義ID", messages)
+            self.assertIn("claimの対応が一致しない", messages)
 
     def test_incomplete_source_coverage_or_decision_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -293,6 +372,98 @@ class ContentPlanCheckTest(unittest.TestCase):
             messages = [item["message"] for item in result["errors"]]
             self.assertTrue(any("HTML binding" in message for message in messages))
             self.assertTrue(any("email_notification" in message for message in messages))
+
+    def test_unaccounted_or_blocked_source_content_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["source_content_inventory"][0]["disposition"] = "blocked"
+            plan["source_content_inventory"][0]["target_content_ids"] = []
+            plan["source_content_inventory"][0]["target_pages"] = []
+            plan["parity_review"]["unaccounted_content_ids"] = ["source-company-name"]
+            plan["parity_review"]["information_summary"] = {
+                "source_items": 1, "retained": 0, "consolidated": 0, "excluded": 0, "blocked": 1,
+            }
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            checks = {item["check"] for item in result["errors"]}
+            self.assertIn("content_parity", checks)
+            self.assertIn("parity_review", checks)
+
+    def test_unaccounted_feature_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["parity_review"]["unaccounted_feature_ids"] = ["feature-navigation"]
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            self.assertTrue(any(item["check"] == "parity_review" for item in result["errors"]))
+
+    def test_primary_planned_feature_requires_production_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            feature = plan["feature_inventory"][0]
+            feature.update({"importance": "primary", "handling": "planned",
+                            "verification_status": "planned",
+                            "user_visible_difference": "デモでは送信せず、本番接続後に利用可能"})
+            plan["parity_review"]["feature_summary"] = {
+                "source_features": 1, "preserved": 0, "replaced": 0,
+                "planned": 1, "out_of_scope": 0, "blocked": 0,
+            }
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            messages = " ".join(item["message"] for item in result["errors"])
+            self.assertIn("production_status=gaps_remaining", messages)
+
+    def test_primary_blocked_feature_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            feature = plan["feature_inventory"][0]
+            feature.update({"importance": "primary", "handling": "blocked",
+                            "verification_status": "blocked"})
+            plan["parity_review"]["feature_summary"] = {
+                "source_features": 1, "preserved": 0, "replaced": 0,
+                "planned": 0, "out_of_scope": 0, "blocked": 1,
+            }
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            self.assertTrue(any("主要機能が欠落" in item["message"] for item in result["errors"]))
+
+    def test_inventory_target_must_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["source_content_inventory"][0]["target_content_ids"] = ["missing-content"]
+            plan["source_content_inventory"][0]["target_pages"] = ["missing.html"]
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            self.assertTrue(any("対応先が存在しない" in item["message"] for item in result["errors"]))
+
+    def test_parity_summary_must_match_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["parity_review"]["information_summary"]["retained"] = 0
+            plan["parity_review"]["feature_summary"]["preserved"] = 0
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            messages = " ".join(item["message"] for item in result["errors"])
+            self.assertIn("information_summary", messages)
+            self.assertIn("feature_summary", messages)
 
 
 class BlockedRecordCheckTest(unittest.TestCase):

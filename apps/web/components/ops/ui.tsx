@@ -1,23 +1,19 @@
 import {
+  Bot,
   ClipboardCheck,
   DatabaseBackup,
   FileSignature,
   History,
-  Images,
-  KeyRound,
   LayoutDashboard,
   MessageCircle,
   Newspaper,
   PackageCheck,
-  Palette,
-  Search,
   Settings,
-  ShieldCheck,
+  UserCog,
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
-import { PendingMaterialBadge } from "@/components/materials/pending-badge";
 import { OpsFrame } from "@/components/ops/frame";
 import { AccountMenu } from "@/components/shell/account-menu";
 import { Brand } from "@/components/shell/brand";
@@ -28,30 +24,25 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export const NAV_ITEMS = [
   { href: "/ops", label: "今日の仕事", icon: LayoutDashboard, exact: true },
-  { href: "/ops/discovery", label: "企業・案件", icon: Search },
-  { href: "/ops/designs", label: "デザイン・提案書", icon: Palette },
-  { href: "/ops/review", label: "提案レビュー", icon: ClipboardCheck },
-  { href: "/ops/materials", label: "顧客の写真・ロゴ", icon: Images },
+  { href: "/ops/skills", label: "スキルの実行", icon: Bot },
+  { href: "/ops/review", label: "最終確認", icon: ClipboardCheck },
+  { href: "/ops/accounts", label: "アカウント管理", icon: UserCog },
   { href: "/ops/content", label: "お知らせ・ブログ", icon: Newspaper },
   { href: "/ops/delivery", label: "制作・公開", icon: PackageCheck },
-  { href: "/ops/publication-checks", label: "公開後の素材確認", icon: ShieldCheck },
   { href: "/ops/consultations", label: "営業からの相談", icon: MessageCircle },
   { href: "/ops/assignments", label: "担当・引き継ぎ", icon: Users },
   { href: "/ops/contracts", label: "契約・報酬", icon: FileSignature },
   { href: "/ops/settings", label: "設定・操作履歴", icon: Settings },
   { href: "/ops/history", label: "操作履歴を探す", icon: History },
   { href: "/ops/backups", label: "バックアップ", icon: DatabaseBackup },
-  { href: "/ops/account-recovery", label: "ログイン復旧", icon: KeyRound },
 ] as const;
 
+/** 運営の仕事は skills の実行・最終確認・アカウント管理に絞り、確認作業はAIが行う（2026-10-28 のユーザー決定） */
 const NAV_GROUPS = [
-  { label: "案件・提案", hrefs: ["/ops/discovery", "/ops/designs", "/ops/review"] },
+  { label: "運営の仕事", hrefs: ["/ops/skills", "/ops/review", "/ops/accounts"] },
   { label: "営業・契約", hrefs: ["/ops/consultations", "/ops/assignments", "/ops/contracts"] },
-  { label: "制作・運用", hrefs: ["/ops/materials", "/ops/delivery", "/ops/publication-checks", "/ops/content"] },
-  {
-    label: "管理",
-    hrefs: ["/ops/settings", "/ops/history", "/ops/backups", "/ops/account-recovery"],
-  },
+  { label: "制作・公開", hrefs: ["/ops/delivery", "/ops/content"] },
+  { label: "管理", hrefs: ["/ops/settings", "/ops/history", "/ops/backups"] },
 ];
 
 export function OpsShell({
@@ -59,13 +50,11 @@ export function OpsShell({
   children,
   unreadCount,
   recoveryCount = null,
-  materialCount = null,
 }: {
   userName: string;
   children: ReactNode;
   unreadCount: number | null;
   recoveryCount?: number | null;
-  materialCount?: number | null;
 }) {
   function renderLink(item: (typeof NAV_ITEMS)[number]) {
     return (
@@ -79,8 +68,7 @@ export function OpsShell({
         <item.icon aria-hidden="true" />
         <span>{item.label}</span>
         {item.href.endsWith("/consultations") && <ConsultationUnreadBadge initialCount={unreadCount} />}
-        {item.href === "/ops/materials" && <PendingMaterialBadge initialCount={materialCount} />}
-        {item.href === "/ops/account-recovery" && recoveryCount !== null && recoveryCount > 0 && (
+        {item.href === "/ops/accounts" && recoveryCount !== null && recoveryCount > 0 && (
           <span
             className="ml-auto rounded-full bg-blue-100 px-2 text-xs text-blue-900"
             title={`未完了 ${recoveryCount}件`}

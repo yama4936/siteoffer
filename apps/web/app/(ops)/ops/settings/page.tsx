@@ -6,7 +6,6 @@ import { HistoryList } from "@/components/ops/history-list";
 import { ProductionSettings } from "@/components/ops/production-status";
 import { Flash, Forbidden, first, ReturnTo } from "@/components/ops/ui";
 import { inlineFormClass } from "@/components/ops/ui-parts-1";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, Section } from "@/components/ui/page";
@@ -16,9 +15,9 @@ import { fmtDate } from "@/lib/ops/format";
 import { readAuditHistory } from "@/lib/ops/history";
 import { historyHref, parseHistoryQuery } from "@/lib/ops/history-query";
 import { getProductionStatusForOps, imageRequestReadiness } from "@/lib/ops/production-status";
-import { getSettingsForOps, listUsersForOps } from "@/lib/ops/queries";
+import { getSettingsForOps } from "@/lib/ops/queries";
 import { getCurrentActor } from "@/lib/session";
-import { reactivateUserAction, suspendUserAction, updateSettingAction } from "../actions";
+import { updateSettingAction } from "../actions";
 
 export default async function SettingsPage({
   searchParams,
@@ -38,13 +37,12 @@ export default async function SettingsPage({
     view: filter.actionPrefix?.startsWith("session.") ? "all" : undefined,
   });
   if (!historyQuery) notFound();
-  const [settings, users, events, production] = await Promise.all([
+  const [settings, events, production] = await Promise.all([
     getSettingsForOps(db, actor),
-    listUsersForOps(db, actor),
     readAuditHistory(db, actor, historyQuery),
     getProductionStatusForOps(db, systemClock, actor),
   ]);
-  if (!settings.ok || !users.ok || !events.ok || !production.ok) return <Forbidden />;
+  if (!settings.ok || !events.ok || !production.ok) return <Forbidden />;
   const here = "/ops/settings";
 
   return (
@@ -57,8 +55,8 @@ export default async function SettingsPage({
         </Link>
       </p>
       <p className="mb-4 text-sm">
-        <Link href="/ops/account-recovery" className="text-primary underline">
-          ログインの復旧依頼を確認
+        <Link href="/ops/accounts" className="text-primary underline">
+          アカウント管理（利用停止・ログインの復旧）
         </Link>
       </p>
       <p className="mb-5 text-sm">
@@ -116,60 +114,6 @@ export default async function SettingsPage({
                       変更
                     </Button>
                   </form>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Section>
-
-      <Section
-        title="ユーザー"
-        description="利用停止にすると、ログインと既存のセッションでの操作ができなくなります。運営アカウントは対象外です。"
-      >
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>表示名</TableHead>
-              <TableHead>メール</TableHead>
-              <TableHead>役割</TableHead>
-              <TableHead>状態</TableHead>
-              <TableHead>有効な担当</TableHead>
-              <TableHead>登録</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {users.value.map((u) => (
-              <TableRow key={u.id}>
-                <TableCell className="font-medium">{u.displayName}</TableCell>
-                <TableCell className="break-all">{u.email}</TableCell>
-                <TableCell>
-                  <Badge variant={u.role === "ops" ? "info" : "outline"}>
-                    {u.role === "ops" ? "運営" : u.role === "customer" ? "顧客" : "営業"}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <Badge variant={u.status === "suspended" ? "destructive" : "success"}>
-                    {u.status === "suspended" ? "利用停止" : "利用中"}
-                  </Badge>
-                </TableCell>
-                <TableCell className="tabular-nums">{u.activeAssignments}</TableCell>
-                <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtDate(u.createdAt)}</TableCell>
-                <TableCell className="min-w-64">
-                  {u.role !== "ops" ? (
-                    <form
-                      action={u.status === "active" ? suspendUserAction : reactivateUserAction}
-                      className={inlineFormClass}
-                    >
-                      <ReturnTo path={here} />
-                      <input type="hidden" name="userId" value={u.id} />
-                      <Input name="reason" placeholder="理由" className="h-8 w-auto flex-1 basis-32" />
-                      <Button type="submit" variant={u.status === "active" ? "destructive" : "outline"} size="xs">
-                        {u.status === "active" ? "利用停止" : "利用停止を解除"}
-                      </Button>
-                    </form>
-                  ) : null}
                 </TableCell>
               </TableRow>
             ))}

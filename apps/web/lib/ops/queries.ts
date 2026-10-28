@@ -460,11 +460,19 @@ export async function listAuditEventsForOps(
   return ok(rows);
 }
 
-export async function listUsersForOps(db: DbOrTx, actor: Actor | null) {
+/** アカウント管理の一覧。filter は役割・状態の絞り込み（省略時は全件） */
+export async function listUsersForOps(
+  db: DbOrTx,
+  actor: Actor | null,
+  filter: { role?: "sales" | "ops" | "customer"; status?: "active" | "suspended" } = {},
+) {
   const g = guard(actor);
   if (!g.ok) return g;
   const auth = authorizeUser(actor, "list", { type: "user", userId: "", role: "sales" });
   if (!auth.ok) return auth;
+  const conditions: SQL[] = [];
+  if (filter.role) conditions.push(eq(users.role, filter.role));
+  if (filter.status) conditions.push(eq(users.status, filter.status));
   const rows = await db
     .select({
       id: users.id,
@@ -475,6 +483,7 @@ export async function listUsersForOps(db: DbOrTx, actor: Actor | null) {
       createdAt: users.createdAt,
     })
     .from(users)
+    .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(asc(users.role), asc(users.createdAt));
   const activeCounts = await db
     .select({ userId: assignments.userId, n: count() })

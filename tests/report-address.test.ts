@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitAddress } from "../scripts/report-address.ts";
+import { splitAddress } from "../apps/worker/src/skills/report-address.ts";
 
 describe("splitAddress", () => {
   it("通常の市区町村を取り出す", () => {
