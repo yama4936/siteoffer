@@ -206,6 +206,12 @@ async function runDiscoveryAttempt(
       failures.push({ externalId: cand.externalId, stage: "candidate", reason: area });
       continue;
     }
+    if (cand.exclusionReason) {
+      // 実在を確認できなかった候補は自動で除外する。企業を作らず・既存企業も更新せず、理由をジョブに残す
+      counts.skipped++;
+      failures.push({ externalId: cand.externalId, stage: "candidate", reason: cand.exclusionReason });
+      continue;
+    }
     await write(async () => {});
     try {
       const outcome = await processCandidate(db, write, clock, jobId, cand, limited, failures);

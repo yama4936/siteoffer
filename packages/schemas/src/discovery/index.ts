@@ -26,6 +26,28 @@ export const discoveryCriteriaSchema = z
 export type DiscoveryCriteria = z.output<typeof discoveryCriteriaSchema>;
 export type DiscoveryCriteriaInput = z.input<typeof discoveryCriteriaSchema>;
 
+/**
+ * 法人番号の検査用数字（先頭1桁）を計算する。
+ * 国税庁「法人番号の指定等に関する省令」第2条の算式：基礎番号12桁の最下位桁から n 桁目を Pn、
+ * n が奇数なら Qn=1、偶数なら Qn=2 として、検査用数字 = 9 − (Σ Pn×Qn を 9 で割った余り)。
+ * 基礎番号が12桁の数字でなければ null。
+ */
+export function corporateNumberCheckDigit(base: string): number | null {
+  if (!/^\d{12}$/.test(base)) return null;
+  let sum = 0;
+  for (let n = 1; n <= 12; n++) {
+    const p = Number(base[12 - n]);
+    sum += p * (n % 2 === 1 ? 1 : 2);
+  }
+  return 9 - (sum % 9);
+}
+
+/** 13桁の法人番号として形式と検査用数字が正しいか（実在の確認ではない） */
+export function isValidCorporateNumber(value: string): boolean {
+  if (!/^\d{13}$/.test(value)) return false;
+  return corporateNumberCheckDigit(value.slice(1)) === Number(value[0]);
+}
+
 /** 公式サイトの確度（companies.official_site_status と同じ値） */
 export const officialSiteStatusSchema = z.enum(["confirmed", "candidate", "needs_review", "not_found"]);
 export type OfficialSiteStatusValue = z.infer<typeof officialSiteStatusSchema>;
@@ -51,6 +73,11 @@ export const companyCandidateSchema = z.object({
   representativePhone: z.string().nullable().default(null),
   /** 取得元の応答（保存用）。秘密値を入れない */
   raw: z.unknown().optional(),
+  /**
+   * 取得元が実在を確認できず、自動で除外すると判断した理由。
+   * 値があれば収集は企業を作らず・更新せず、理由をジョブの失敗理由（stage=candidate）に残す。
+   */
+  exclusionReason: z.string().min(1).optional(),
 });
 export type CompanyCandidate = z.output<typeof companyCandidateSchema>;
 export type CompanyCandidateInput = z.input<typeof companyCandidateSchema>;
@@ -90,6 +117,8 @@ export type DiscoveryFailure = z.infer<typeof discoveryFailureSchema>;
 /**
  * company-discovery スキル（エージェントのWeb調査）が書く候補ファイル（candidates.json）の1社分。
  * 項目名はスキルの成果物に合わせてスネークケース。evidence はページ上に書かれていたものだけ（推測で埋めない）。
+ * ここでは形式だけを検査する。法人番号の検査用数字・公式サイトの実取得・国税庁APIでの照合は
+ * 取り込み時（packages/discovery の agent-web）に行い、AIの申告（evidence を含む）をそのまま信用しない。
  */
 export const agentWebCandidateSchema = z.object({
   name: z.string().trim().min(1),

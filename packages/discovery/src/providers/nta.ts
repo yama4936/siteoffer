@@ -284,6 +284,34 @@ export class NtaCorporateNumberProvider implements DiscoveryProvider {
     return ok([...byNumber.values()]);
   }
 
+  /** アプリケーションIDが設定されているか（未設定なら番号照会はできない） */
+  hasApplicationId(): boolean {
+    return !!this.env.NTA_APPLICATION_ID?.trim();
+  }
+
+  /**
+   * 法人番号指定（GET /{ver}/num?id=&number=&type=12&history=0）で最新の1件を照会する。
+   * 該当がなければ corporation は null。sourceUrl はIDを含まない出典URL。
+   */
+  async lookupNumber(
+    corporateNumber: string,
+  ): Promise<Result<{ corporation: NtaCorporation | null; sourceUrl: string }, DiscoveryProviderError>> {
+    const appId = this.env.NTA_APPLICATION_ID?.trim();
+    if (!appId) return err("nta_application_id_missing", "環境変数 NTA_APPLICATION_ID が未設定");
+    if (!this.fetchFn) return err("network_error", "fetch が使えない環境");
+    if (!/^\d{13}$/.test(corporateNumber)) return err("nta_bad_request", "法人番号は13桁の数字");
+    const params = new URLSearchParams([
+      ["endpoint", "num"],
+      ["number", corporateNumber],
+      ["type", "12"],
+      ["history", "0"],
+    ]);
+    const res = await this.fetchOne(this.urlFor(params, 1, appId));
+    if (!res.ok) return res;
+    const corporation = res.value.corporations.find((c) => c.corporateNumber === corporateNumber) ?? null;
+    return ok({ corporation, sourceUrl: this.urlFor(params, 1, null) });
+  }
+
   private async fetchOne(url: string): Promise<Result<NtaResponse, DiscoveryProviderError>> {
     let status: number;
     let body: string;
