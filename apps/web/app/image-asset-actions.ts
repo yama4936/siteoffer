@@ -30,7 +30,7 @@ export async function uploadImageAssetAction(fd: FormData) {
       ok: true,
       message: r.alreadyStored
         ? "同じ画像は登録済みです。"
-        : "画像を登録しました。この画像の利用許諾と配置先を確認してください。",
+        : "画像を登録しました。この画像の配置先を確認してください。",
     };
   } catch (e) {
     return {

@@ -13,6 +13,7 @@ import {
   type CustomerReview,
   decideAsCustomer,
   getCustomerReview,
+  IMAGE_RIGHTS_CONSENT_VERSION,
 } from "./core.ts";
 
 export interface CustomerDeps {
@@ -60,7 +61,8 @@ const fail = (message: string): CustomerActionState => ({ status: "error", messa
 
 /**
  * 承認・修正依頼のフォーム。項目：token、versionId、decision（approved / changes_requested）、
- * comment（修正依頼では必須）、confirmed（承認では内容確認のチェックが必須）。
+ * comment（修正依頼では必須）、confirmed（承認では内容確認のチェックが必須）、
+ * imageRightsConsent・imageRightsConsentVersion（承認では写真・ロゴ等の権利への同意が必須。表示した文言の版を送る）。
  */
 export async function submitCustomerDecision(deps: CustomerDeps, fd: FormData): Promise<CustomerActionState> {
   const token = str(fd, "token");
@@ -77,10 +79,21 @@ export async function submitCustomerDecision(deps: CustomerDeps, fd: FormData): 
   if (decision === "approved" && fd.get("confirmed") !== "on") {
     return fail("掲載内容（会社名・連絡先・サービス内容など）をご確認のうえ、確認のチェックを入れてください。");
   }
+  const consentVersion = str(fd, "imageRightsConsentVersion");
+  if (decision === "approved" && fd.get("imageRightsConsent") !== "on")
+    return fail("写真・ロゴ等の権利についての同意の内容をご確認のうえ、同意のチェックを入れてください。");
+  if (decision === "approved" && consentVersion !== IMAGE_RIGHTS_CONSENT_VERSION)
+    return fail("同意の文言が更新されました。ページを読み直し、最新の内容をご確認ください。");
 
   const requestKey = str(fd, "requestKey");
   if (!UUID_RE.test(requestKey)) return fail("受付情報を確認できません。入力を控えてページを読み直してください。");
-  const r = await decideAsCustomer(deps.db, deps.clock, token, { versionId, decision, comment, requestKey });
+  const r = await decideAsCustomer(deps.db, deps.clock, token, {
+    versionId,
+    decision,
+    comment,
+    requestKey,
+    ...(decision === "approved" ? { imageRightsConsent: { accepted: true, textVersion: consentVersion } } : {}),
+  });
   if (r.ok) return { status: "ok", message: SUCCESS[decision] };
   switch (r.error) {
     case "link_invalid":

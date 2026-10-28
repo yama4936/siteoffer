@@ -40,17 +40,21 @@ export function DecisionForm({
   versionId,
   versionNumber,
   commentMax,
+  imageRightsConsent,
 }: {
   action: Action;
   token: string;
   versionId: string;
   versionNumber: number;
   commentMax: number;
+  /** 承認時に同意してもらう写真・ロゴ等の権利の文言と、その版 */
+  imageRightsConsent: { text: string; version: string };
 }) {
   const [state, setState] = useState<CustomerActionState>();
   const [decision, setDecision] = useState<"approved" | "changes_requested" | "">("");
   const [comment, setComment] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [consented, setConsented] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState(false);
   const [unknown, setUnknown] = useState(false);
@@ -87,6 +91,10 @@ export function DecisionForm({
         fd.set("decision", decision);
         fd.set("comment", comment);
         if (confirmed) fd.set("confirmed", "on");
+        if (decision === "approved" && consented) {
+          fd.set("imageRightsConsent", "on");
+          fd.set("imageRightsConsentVersion", imageRightsConsent.version);
+        }
         fd.set("requestKey", crypto.randomUUID());
         attempt.current = fd;
       }
@@ -122,6 +130,7 @@ export function DecisionForm({
             第{versionNumber}版への{decision === "approved" ? "承認" : "修正依頼"}
           </p>
           <p className="whitespace-pre-wrap break-words text-sm">{comment.trim() || "ご連絡事項なし"}</p>
+          {decision === "approved" && <p className="text-sm">写真・ロゴ等の権利：{imageRightsConsent.text}</p>}
           <p className="text-sm text-muted-foreground">
             {decision === "approved"
               ? "この版を公開対象として固定します。この操作だけではサイトは公開されません。"
@@ -179,6 +188,7 @@ export function DecisionForm({
             onChange={() => {
               setDecision("approved");
               setConfirmed(false);
+              setConsented(false);
             }}
           />
           この内容で承認する（公開の準備に進みます）
@@ -192,6 +202,7 @@ export function DecisionForm({
             onChange={() => {
               setDecision("changes_requested");
               setConfirmed(false);
+              setConsented(false);
             }}
           />
           修正を依頼する
@@ -206,6 +217,23 @@ export function DecisionForm({
               onChange={(event) => setConfirmed(event.target.checked)}
             />
             掲載内容（会社名・所在地・連絡先・サービス内容など）を確認しました
+          </Label>
+        )}
+        {decision === "approved" && (
+          <Label className="items-start font-normal leading-snug [&>input]:mt-0.5">
+            <Input
+              type="checkbox"
+              name="imageRightsConsent"
+              required
+              checked={consented}
+              onChange={(event) => setConsented(event.target.checked)}
+            />
+            <span>
+              {imageRightsConsent.text}
+              <span className="mt-1 block text-muted-foreground text-xs">
+                承認には、この同意が必要です。同意の内容は承認の記録と一緒に保存します。
+              </span>
+            </span>
           </Label>
         )}
         <div className="grid gap-1.5">

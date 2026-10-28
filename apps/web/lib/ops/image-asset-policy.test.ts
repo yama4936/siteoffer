@@ -129,3 +129,20 @@ it("顧客提出は確認待ち・取り下げ済みなら台帳から許可を�
     error: "customer_scope",
   });
 });
+it("権利状態を画面で選ばない保存（空）は今の値を保ち、営業デモを許可したときだけ確認済みにする", async () => {
+  const s = await setup();
+  const base = { ...s.input, rightsStatus: "" as const, allowProduction: false, placement: "logo" as const };
+  expect(await updateImageAssetPolicy({ db, clock }, s.ops, base)).toMatchObject({
+    ok: true,
+    value: { rightsStatus: "unknown", placement: "logo", allowSalesDemo: false, confirmedBy: null },
+  });
+  expect(
+    await updateImageAssetPolicy({ db, clock }, s.ops, { ...base, expectedRevision: 1, allowSalesDemo: true }),
+  ).toMatchObject({
+    ok: true,
+    value: { rightsStatus: "use_approved", allowSalesDemo: true, allowProduction: false, confirmedBy: s.ops.userId },
+  });
+  expect(
+    await updateImageAssetPolicy({ db, clock }, s.ops, { ...s.input, rightsStatus: "bogus" as never }),
+  ).toMatchObject({ ok: false, error: "invalid_input" });
+});

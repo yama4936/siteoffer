@@ -22,7 +22,7 @@ import {
 } from "./build.ts";
 import { decideAsCustomer, getCustomerReview } from "./customer.ts";
 import { addDeliveryVersion, createDeliveryForContract, sendToCustomerReview, transitionDelivery } from "./delivery.ts";
-import { seedDeliveryBase } from "./test-helpers.ts";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "./test-helpers.ts";
 
 let db: Db, close: () => Promise<void>;
 const clock = fixedClock("2026-10-16T00:00:00Z"),
@@ -83,9 +83,15 @@ it("同じ時刻の差し戻しを別の制作回にし、古い版・取り下�
   });
   must(await sendToCustomerReview(db, clock, b.ops, b.delivery.id, { versionId: second.id }));
   expect(must(await getCustomerReview(db, clock, sent.issued.token)).state).toBe("closed");
-  expect((await decideAsCustomer(db, clock, sent.issued.token, { versionId: first.id, decision: "approved" })).ok).toBe(
-    false,
-  );
+  expect(
+    (
+      await decideAsCustomer(db, clock, sent.issued.token, {
+        versionId: first.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      })
+    ).ok,
+  ).toBe(false);
 });
 it("複数ワーカーの同時受付で1つだけ実行権限を持ち、別の所有者は延長できない", async () => {
   const b = await seed(),

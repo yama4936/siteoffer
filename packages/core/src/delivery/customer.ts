@@ -16,6 +16,11 @@ import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { findSecretInFields } from "../domain-preference/secrets.ts";
 import { deliveryVersionImagesValid } from "../image-assets.ts";
+import {
+  IMAGE_RIGHTS_CONSENT_VERSION,
+  loadVersionImages,
+  recordCustomerImageRightsConsent,
+} from "../image-rights-consent.ts";
 import { verifyShareLink } from "../share-link/share-link.ts";
 import { beginDeliveryBuild } from "./build-state.ts";
 import type { DeliveryRow } from "./delivery.ts";
@@ -110,6 +115,11 @@ export interface CustomerDecisionInput {
   /** 修正依頼では必須。承認では任意 */
   comment?: string | null;
   requestKey?: string;
+  /**
+   * 写真・ロゴ等の権利についての同意（承認では必須）。画面に表示した文言の版を送る。
+   * 文言の版が今の版と違えば受け付けない（表示していない文言への同意にしない）。
+   */
+  imageRightsConsent?: { accepted: boolean; textVersion: string } | null;
 }
 
 export type CustomerDecisionError = "link_invalid" | "invalid_input" | "not_under_review" | "request_conflict";
@@ -147,6 +157,15 @@ export async function decideAsCustomer(
   if (input.decision === "changes_requested" && !comment) {
     return err("invalid_input", "修正してほしい点をご記入ください");
   }
+  const consent = input.imageRightsConsent;
+  if (
+    input.decision === "approved" &&
+    (consent?.accepted !== true || consent.textVersion !== IMAGE_RIGHTS_CONSENT_VERSION)
+  )
+    return err(
+      "invalid_input",
+      "写真・ロゴ等の権利についての同意が必要です。同意の内容をご確認のうえチェックを入れてください",
+    );
 
   return db.transaction(async (tx): Promise<Result<CustomerDecisionResult, CustomerDecisionError>> => {
     // 用途と版の両方が一致するリンクだけ（別の版のリンクでは承認できない）
@@ -162,7 +181,13 @@ export async function decideAsCustomer(
     if (!currentLink.ok) return err("link_invalid", currentLink.message);
     const hash = (s: string) => createHash("sha256").update(s).digest("hex");
     const receiptKey = input.requestKey ? hash(JSON.stringify([link.value.linkId, input.requestKey])) : null;
-    const payloadHash = hash(JSON.stringify([input.versionId, input.decision, comment]));
+    const payloadHash = hash(
+      JSON.stringify(
+        input.decision === "approved"
+          ? [input.versionId, input.decision, comment, IMAGE_RIGHTS_CONSENT_VERSION]
+          : [input.versionId, input.decision, comment],
+      ),
+    );
     if (receiptKey) {
       const [previous] = await tx.select().from(approvals).where(eq(approvals.receiptKey, receiptKey));
       if (previous) {
@@ -206,6 +231,22 @@ export async function decideAsCustomer(
       .returning();
 
     const approved = input.decision === "approved";
+    if (approved) {
+      // 承認と同じトランザクションで、版の画像の組への同意を記録する
+      const images = await loadVersionImages(tx, version.id);
+      if (!images) throw new Error(`delivery version ${version.id} images could not be read`);
+      await recordCustomerImageRightsConsent(tx, clock, {
+        actor: link.value.actor,
+        companyId: images.companyId,
+        deliveryId: delivery.id,
+        versionId: version.id,
+        version: version.version,
+        buildId: version.buildId,
+        approvalId: approval!.id,
+        shareLinkId: link.value.linkId,
+        images: images.images,
+      });
+    }
     const build = approved ? null : await beginDeliveryBuild(tx, clock, delivery);
     const [row] = await tx
       .update(deliveries)

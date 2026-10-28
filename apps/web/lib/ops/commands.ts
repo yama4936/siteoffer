@@ -375,7 +375,11 @@ export async function updateImageAssetPolicy(
   input: {
     companyId: string;
     imageAssetId: string;
-    rightsStatus: ImageAssetRightsStatus;
+    /**
+     * 権利状態。空文字は「画面で選ばない」（2026-10-28 以降、運営画面は素材ごとの許諾を入力しない）。
+     * 空のときは今の値を保ち、未確認の素材に営業デモ等を許可した場合だけ運営の確認（use_approved）とする。
+     */
+    rightsStatus: ImageAssetRightsStatus | "";
     allowSalesDemo: boolean;
     allowProduction: boolean;
     note?: string;
@@ -391,7 +395,7 @@ export async function updateImageAssetPolicy(
     return err("invalid_input");
   const ops = authorizeCompanyManage(actor, input.companyId);
   if (!ops.ok) return ops;
-  if (!(IMAGE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) {
+  if (input.rightsStatus !== "" && !(IMAGE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) {
     return err("invalid_input", "権利状態が不正です");
   }
   if (input.rightsStatus === "unknown" && (input.allowSalesDemo || input.allowProduction)) {
@@ -442,12 +446,20 @@ export async function updateImageAssetPolicy(
       );
     const placement = input.placement ?? before.placement;
     const note = input.note?.trim() || null;
-    const confirmed = input.rightsStatus !== "unknown";
+    const rightsStatus: ImageAssetRightsStatus =
+      input.rightsStatus !== ""
+        ? input.rightsStatus
+        : (input.allowSalesDemo || input.allowProduction) && before.rightsStatus === "unknown"
+          ? "use_approved"
+          : before.rightsStatus;
+    if (rightsStatus === "unknown" && (input.allowSalesDemo || input.allowProduction))
+      return fail("rights_unconfirmed", "権利未確認の素材は評価参照にしか使えません");
+    const confirmed = rightsStatus !== "unknown";
     // Saving unchanged values must not invalidate proposals pinned to this permission revision.
     // Keep this after authorization, optimistic concurrency, and customer-scope checks.
     if (
       placement === before.placement &&
-      input.rightsStatus === before.rightsStatus &&
+      rightsStatus === before.rightsStatus &&
       input.allowSalesDemo === before.allowSalesDemo &&
       input.allowProduction === before.allowProduction &&
       note === before.note &&
@@ -466,7 +478,7 @@ export async function updateImageAssetPolicy(
       .set({
         placement,
         policyRevision: before.policyRevision + 1,
-        rightsStatus: input.rightsStatus,
+        rightsStatus: rightsStatus,
         allowSalesDemo: input.allowSalesDemo,
         allowProduction: input.allowProduction,
         confirmedBy: confirmed ? ops.value.userId : null,
@@ -492,7 +504,7 @@ export async function updateImageAssetPolicy(
         imageAssetId: before.id,
         placement,
         replacedPlacementAssetIds: replaced.map((a) => a.id),
-        rightsStatus: input.rightsStatus,
+        rightsStatus: rightsStatus,
         allowSalesDemo: input.allowSalesDemo,
         allowProduction: input.allowProduction,
       },

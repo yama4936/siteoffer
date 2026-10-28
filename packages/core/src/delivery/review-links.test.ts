@@ -9,7 +9,7 @@ import { createShareTokenRecovery } from "../share-link/token.ts";
 import { decideAsCustomer } from "./customer.ts";
 import { addDeliveryVersion, createDeliveryForContract, sendToCustomerReview, transitionDelivery } from "./delivery.ts";
 import { listCustomerReviewLinks, recoverCustomerReviewLink, revokeCustomerReviewLink } from "./review-links.ts";
-import { seedDeliveryBase } from "./test-helpers.ts";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "./test-helpers.ts";
 
 let db: Db, close: () => Promise<void>;
 const clock = fixedClock("2026-10-16T00:00:00Z"),
@@ -116,9 +116,15 @@ it("本人だけが再表示でき、運営は他の運営のリンクを取り�
   must(await revokeCustomerReviewLink(db, clock, b.ops, a.deliveryId, id));
   expect((await verifyShareLink(db, clock, sent.issued.token)).ok).toBe(false);
   expect(await db.select().from(auditEvents).where(eq(auditEvents.action, "share_link.revoke"))).toHaveLength(1);
-  expect((await decideAsCustomer(db, clock, sent.issued.token, { versionId: a.v.id, decision: "approved" })).ok).toBe(
-    false,
-  );
+  expect(
+    (
+      await decideAsCustomer(db, clock, sent.issued.token, {
+        versionId: a.v.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      })
+    ).ok,
+  ).toBe(false);
 });
 it("期限切れ・鍵の変更・利用停止・顧客確認の終了では再表示せず、取り消しは過去の判断を消さない", async () => {
   const b = await seed(),
@@ -139,7 +145,13 @@ it("期限切れ・鍵の変更・利用停止・顧客確認の終了では再�
   await db.update(users).set({ status: "suspended" }).where(eq(users.id, b.ops.userId));
   expect((await recoverCustomerReviewLink(db, clock, b.ops, b.deliveryId, id, recovery)).ok).toBe(false);
   await db.update(users).set({ status: "active" }).where(eq(users.id, b.ops.userId));
-  must(await decideAsCustomer(db, clock, sent.issued.token, { versionId: b.v.id, decision: "approved" }));
+  must(
+    await decideAsCustomer(db, clock, sent.issued.token, {
+      versionId: b.v.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    }),
+  );
   expect(await recoverCustomerReviewLink(db, clock, b.ops, b.deliveryId, id, recovery)).toMatchObject({
     ok: false,
     error: "not_under_review",
@@ -162,7 +174,11 @@ it("納品のロック待ちで有効期限を過ぎた判断を確定しない"
   let reads = 0;
   const advancing = { now: () => (++reads === 1 ? clock.now() : new Date(clock.now().getTime() + 3600001)) };
   expect(
-    await decideAsCustomer(db, advancing, sent.issued.token, { versionId: b.v.id, decision: "approved" }),
+    await decideAsCustomer(db, advancing, sent.issued.token, {
+      versionId: b.v.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    }),
   ).toMatchObject({ ok: false, error: "link_invalid" });
   expect(await db.select().from(approvals)).toHaveLength(0);
 });

@@ -90,7 +90,7 @@ export function ImageAssetUpload({
             {busy ? "取り込み中…" : "画像を取り込む"}
           </Button>
           <p className="max-w-52 text-xs text-muted-foreground">
-            PNG・JPEG・WebP / 12MBまで。取込後に画像を確認し、利用許諾を設定してください。
+            PNG・JPEG・WebP / 12MBまで。取込後に画像と配置先を確認してください。
           </p>
         </form>
       )}

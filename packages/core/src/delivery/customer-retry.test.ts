@@ -7,7 +7,7 @@ import { fixedClock } from "../common/clock.ts";
 import { revokeShareLink } from "../share-link/share-link.ts";
 import { decideAsCustomer } from "./customer.ts";
 import { addDeliveryVersion, createDeliveryForContract, sendToCustomerReview, transitionDelivery } from "./delivery.ts";
-import { seedDeliveryBase } from "./test-helpers.ts";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "./test-helpers.ts";
 
 let db: Db, close: () => Promise<void>;
 const clock = fixedClock("2026-10-16T00:00:00Z");
@@ -53,7 +53,13 @@ it("並行再送は同じ受付結果を返し、修正依頼・操作履歴を1
 });
 it("承認の応答消失は同じ結果へ復旧し、異なる判断・本文の同じ受付キーは拒否する", async () => {
   const b = await seed(),
-    request = { versionId: b.v.id, decision: "approved" as const, comment: "確認しました", requestKey: randomUUID() };
+    request = {
+      versionId: b.v.id,
+      decision: "approved" as const,
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      comment: "確認しました",
+      requestKey: randomUUID(),
+    };
   const first = must(await decideAsCustomer(db, clock, b.issued.token, request));
   expect(must(await decideAsCustomer(db, clock, b.issued.token, request)).approvalId).toBe(first.approvalId);
   for (const change of [{ comment: "違う内容" }, { decision: "changes_requested" as const }])
@@ -83,7 +89,12 @@ it("新しい制作回が進んでも古い送信を再実行せず、受付済�
 it("別リンク・期限切れ・取り消し済みリンクで受付結果を取得しない", async () => {
   const b = await seed(),
     second = must(await sendToCustomerReview(db, clock, b.ops, b.delivery.id, { versionId: b.v.id }));
-  const request = { versionId: b.v.id, decision: "approved" as const, requestKey: randomUUID() };
+  const request = {
+    versionId: b.v.id,
+    decision: "approved" as const,
+    imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    requestKey: randomUUID(),
+  };
   must(await decideAsCustomer(db, clock, b.issued.token, request));
   expect(await decideAsCustomer(db, clock, second.issued.token, request)).toMatchObject({
     ok: false,
@@ -141,7 +152,12 @@ it("秘密情報・不正な受付値を保存せず、途中失敗では承認�
   const b = await seed();
   for (const patch of [{ comment: "password=fixture12345" }, { requestKey: "invalid" }])
     expect(
-      await decideAsCustomer(db, clock, b.issued.token, { versionId: b.v.id, decision: "approved", ...patch }),
+      await decideAsCustomer(db, clock, b.issued.token, {
+        versionId: b.v.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+        ...patch,
+      }),
     ).toMatchObject({ ok: false, error: "invalid_input" });
   await db.execute(
     sql`create function fail_customer_audit() returns trigger language plpgsql as $$ begin raise exception 'fixture'; end $$`,
@@ -150,7 +166,12 @@ it("秘密情報・不正な受付値を保存せず、途中失敗では承認�
     sql`create trigger fail_customer before insert on audit_events for each row execute function fail_customer_audit()`,
   );
   await expect(
-    decideAsCustomer(db, clock, b.issued.token, { versionId: b.v.id, decision: "approved", requestKey: randomUUID() }),
+    decideAsCustomer(db, clock, b.issued.token, {
+      versionId: b.v.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      requestKey: randomUUID(),
+    }),
   ).rejects.toThrow();
   expect(await db.select().from(approvals)).toHaveLength(0);
   const [d] = await db.select().from(deliveries).where(eq(deliveries.id, b.delivery.id));

@@ -13,6 +13,10 @@ import {
   websites,
 } from "@siteoffer/db";
 import type { Actor } from "../common/actor.ts";
+import { IMAGE_RIGHTS_CONSENT_VERSION } from "../image-rights-consent.ts";
+
+/** 顧客承認に添える、写真・ロゴ等の権利への同意（テスト用） */
+export const CUSTOMER_IMAGE_CONSENT = { accepted: true, textVersion: IMAGE_RIGHTS_CONSENT_VERSION } as const;
 
 let seq = 0;
 

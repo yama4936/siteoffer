@@ -63,7 +63,7 @@ export function ArticleImages({
           記事の写真 <span className="text-sm font-normal">{images.length} / 8枚</span>
         </h3>
         <p className="mt-2 text-sm leading-6 text-slate-500">
-          写真は本文の前に並びます。最初の写真を記事一覧にも表示します。掲載には素材の利用許諾と代替テキストが必要です。
+          写真は本文の前に並びます。最初の写真を記事一覧にも表示します。掲載には代替テキストが必要です。顧客の提出写真は運営の受付後、運営が登録した写真は納品時に顧客が画像の権利に同意した後に掲載できます。
         </p>
       </div>
       {images.map((image, index) => {

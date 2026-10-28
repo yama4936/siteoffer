@@ -25,9 +25,12 @@ export default async function Page({
     const prefix = `/ops/materials?${companyId ? `company=${companyId}&` : ""}`;
     return (
       <>
-        <PageHeader title="顧客からの写真・ロゴ" description="画像と利用許可を確認し、必要な説明を顧客へ返します。" />
+        <PageHeader
+          title="顧客からの写真・ロゴ"
+          description="提出された画像を受理するか、説明の追加を顧客へ依頼します。"
+        />
         <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm leading-7">
-          提出された画像は、確認するまで営業デモ・本番サイトには使いません。顧客が許可した用途の範囲で確認し、配置先は画像素材台帳で指定します。
+          提出された画像は、受理するまで営業デモ・本番サイトには使いません。受理した画像は顧客が申告した用途で使います。画像の権利は顧客が提出時と納品版の承認時に同意するため、運営が権利を確認する必要はありません。配置先は画像素材台帳で指定します。
         </div>
         <nav className="mb-5 flex flex-wrap gap-3 text-sm" aria-label="素材の確認状況">
           <Link
@@ -57,7 +60,7 @@ export default async function Page({
             className="text-blue-700 underline"
             href={`/ops/publication-checks${companyId ? `?company=${companyId}` : ""}`}
           >
-            利用許可の変更が公開済みサイトに影響していないか確認
+            素材の変更が公開済みサイトに影響していないか確認
           </Link>
         </p>
         {assetId && (

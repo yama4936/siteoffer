@@ -252,11 +252,18 @@ it("確認チェック・用途・説明・正規化画像の形式を検査す�
     await expect(submitCustomerImage(db, clock, s.actor, { ...s.input, ...change })).rejects.toThrow();
   expect(await db.select().from(imageAssets)).toHaveLength(0);
   const r = await submitCustomerImage(db, clock, s.actor, s.input);
-  await expect(
-    reviewCustomerImage(db, clock, s.ops, { ...review(s, r.item.assetId), confirmed: false }),
-  ).rejects.toThrow("確認");
+  await expect(reviewCustomerImage(db, clock, s.ops, { ...review(s, r.item.assetId), note: "短い" })).rejects.toThrow(
+    "確認",
+  );
   await db.update(users).set({ status: "suspended" }).where(eq(users.id, s.ops.userId));
   await expect(reviewCustomerImage(db, clock, s.ops, review(s, r.item.assetId))).rejects.toThrow("運営");
+});
+it("受理では用途を選ばず確認チェックも求めず、顧客が申告した用途をそのまま使う", async () => {
+  const s = await setup(),
+    r = await submitCustomerImage(db, clock, s.actor, { ...s.input, requestedDemo: true }),
+    { allowDemo: _d, allowProduction: _p, confirmed: _c, ...plain } = review(s, r.item.assetId);
+  const accepted = await reviewCustomerImage(db, clock, s.ops, plain);
+  expect(accepted.item).toMatchObject({ status: "accepted", allowSalesDemo: true, allowProduction: true });
 });
 it("会社の保存容量を超える提出は全体を残さず拒否する", async () => {
   const s = await setup(),

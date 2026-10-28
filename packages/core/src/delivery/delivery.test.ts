@@ -27,7 +27,7 @@ import {
   sendToCustomerReview,
   transitionDelivery,
 } from "./delivery.ts";
-import { seedDeliveryBase } from "./test-helpers.ts";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "./test-helpers.ts";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -119,7 +119,13 @@ describe("納品の作成", () => {
 describe("状態遷移の正常・不正", () => {
   it("情報確認 → 制作 → 運営確認 → 顧客確認 → 公開準備 → 公開 → 納品 まで進み、各変更が履歴に残る", async () => {
     const { deliveryId, token, v1 } = await deliveryInCustomerReview();
-    must(await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" }));
+    must(
+      await decideAsCustomer(db, clock, token, {
+        versionId: v1.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      }),
+    );
     expect((await loadDelivery(deliveryId)).status).toBe("ready");
     const pub = must(
       await recordPublication(db, clock, ops, deliveryId, { environment: "production", url: "https://example.test/" }),
@@ -237,7 +243,12 @@ describe("顧客確認（AC-18）", () => {
     expect(JSON.stringify(view)).not.toContain("/artifacts/");
 
     const r = must(
-      await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved", comment: "問題ありません" }),
+      await decideAsCustomer(db, clock, token, {
+        versionId: v1.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+        comment: "問題ありません",
+      }),
     );
     expect(r.delivery.status).toBe("ready");
     expect(r.delivery.lockedVersionId).toBe(v1.id);
@@ -259,7 +270,13 @@ describe("顧客確認（AC-18）", () => {
 
   it("承認後に再生成（版の追加）をしても、固定した版は変わらない", async () => {
     const { deliveryId, v1, token } = await deliveryInCustomerReview();
-    must(await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" }));
+    must(
+      await decideAsCustomer(db, clock, token, {
+        versionId: v1.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      }),
+    );
     const v2 = must(await addDeliveryVersion(db, clock, ops, deliveryId, { artifactDir: "/artifacts/delivery/v2" }));
     expect(v2.version).toBe(2);
     const d = await loadDelivery(deliveryId);
@@ -295,13 +312,27 @@ describe("顧客確認（AC-18）", () => {
     const sent = must(await sendToCustomerReview(db, clock, ops, deliveryId, { versionId: v2.id }));
 
     // 前の回（v1）のリンクはまだ期限内だが、v1 は確認中ではないので承認できない
-    const old = await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" });
+    const old = await decideAsCustomer(db, clock, token, {
+      versionId: v1.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(old.ok ? null : old.error).toBe("not_under_review");
     // v1 のリンクで v2 を承認しようとしても拒否（別の版のリンク）
-    const cross = await decideAsCustomer(db, clock, token, { versionId: v2.id, decision: "approved" });
+    const cross = await decideAsCustomer(db, clock, token, {
+      versionId: v2.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(cross.ok ? null : cross.error).toBe("link_invalid");
 
-    const ok2 = must(await decideAsCustomer(db, clock, sent.issued.token, { versionId: v2.id, decision: "approved" }));
+    const ok2 = must(
+      await decideAsCustomer(db, clock, sent.issued.token, {
+        versionId: v2.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      }),
+    );
     expect(ok2.delivery.lockedVersionId).toBe(v2.id);
     expect(await db.select().from(deliveryVersions).where(eq(deliveryVersions.deliveryId, deliveryId))).toHaveLength(2);
   });
@@ -310,7 +341,11 @@ describe("顧客確認（AC-18）", () => {
     const { deliveryId, v1, token } = await deliveryInCustomerReview();
     clock.advance(72 * HOUR);
     expect((await getCustomerReview(db, clock, token)).ok).toBe(false);
-    const r = await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" });
+    const r = await decideAsCustomer(db, clock, token, {
+      versionId: v1.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(r.ok ? null : r.error).toBe("link_invalid");
     expect((await loadDelivery(deliveryId)).lockedVersionId).toBeNull();
     expect(await db.select().from(approvals)).toHaveLength(0);
@@ -318,20 +353,34 @@ describe("顧客確認（AC-18）", () => {
     const again = must(await sendToCustomerReview(db, clock, ops, deliveryId, { versionId: v1.id }));
     const ev = await db.select().from(auditEvents).where(eq(auditEvents.action, "delivery.customer_review_reissue"));
     expect(ev).toHaveLength(1);
-    must(await decideAsCustomer(db, clock, again.issued.token, { versionId: v1.id, decision: "approved" }));
+    must(
+      await decideAsCustomer(db, clock, again.issued.token, {
+        versionId: v1.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      }),
+    );
   });
 
   it("取り消し済みのリンクでは承認できない", async () => {
     const { deliveryId, v1, token, linkId } = await deliveryInCustomerReview();
     must(await revokeShareLink(db, clock, ops, linkId));
-    const r = await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" });
+    const r = await decideAsCustomer(db, clock, token, {
+      versionId: v1.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(r.ok ? null : r.error).toBe("link_invalid");
     expect((await loadDelivery(deliveryId)).status).toBe("customer_review");
   });
 
   it("提案用のリンクや形式違いのトークンでは承認できない", async () => {
     const { deliveryId, v1 } = await deliveryInCustomerReview();
-    const bad = await decideAsCustomer(db, clock, "not-a-token", { versionId: v1.id, decision: "approved" });
+    const bad = await decideAsCustomer(db, clock, "not-a-token", {
+      versionId: v1.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(bad.ok ? null : bad.error).toBe("link_invalid");
     // 同じ企業の提案リンク（用途が proposal）では、納品の承認も閲覧もできない
     const [pv] = await db
@@ -340,7 +389,11 @@ describe("顧客確認（AC-18）", () => {
       .where(eq(proposalVersions.id, proposalVersionId))
       .returning();
     const proposalLink = must(await issueShareLink(db, clock, ops, { purpose: "proposal", targetId: pv!.id }));
-    const r = await decideAsCustomer(db, clock, proposalLink.token, { versionId: v1.id, decision: "approved" });
+    const r = await decideAsCustomer(db, clock, proposalLink.token, {
+      versionId: v1.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(r.ok ? null : r.error).toBe("link_invalid");
     expect((await getCustomerReview(db, clock, proposalLink.token)).ok).toBe(false);
     expect((await loadDelivery(deliveryId)).status).toBe("customer_review");
@@ -350,7 +403,11 @@ describe("顧客確認（AC-18）", () => {
     const { deliveryId, v1, token } = await deliveryInCustomerReview();
     must(await transitionDelivery(db, clock, ops, deliveryId, "building"));
     expect(must(await getCustomerReview(db, clock, token)).state).toBe("closed");
-    const r = await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" });
+    const r = await decideAsCustomer(db, clock, token, {
+      versionId: v1.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    });
     expect(r.ok ? null : r.error).toBe("not_under_review");
   });
 });
@@ -388,7 +445,13 @@ describe("権限（AC-18）", () => {
 
   it("運営は詳細（版・判断・公開記録）を読める", async () => {
     const { deliveryId, v1, token } = await deliveryInCustomerReview();
-    must(await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved" }));
+    must(
+      await decideAsCustomer(db, clock, token, {
+        versionId: v1.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      }),
+    );
     must(await recordPublication(db, clock, ops, deliveryId, { environment: "staging" }));
     const d = must(await getDeliveryDetail(db, ops, deliveryId));
     expect(d.companyId).toBe(companyId);

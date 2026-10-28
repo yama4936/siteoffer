@@ -1,6 +1,7 @@
 import {
   type Actor,
   deliveryImageAssetsValid,
+  deliveryVersionImageConsent,
   err,
   findDomainPreferenceForContract,
   loadDeliveryInputSource,
@@ -15,6 +16,7 @@ import {
   designVersions,
   imageAssetFiles,
   imageAssets,
+  imageSubmissions,
   proposals,
   proposalVersions,
   runReadQueries,
@@ -43,11 +45,12 @@ export async function getDeliveryPreparation(db: DbOrTx, actor: Actor | null, de
       db
         .select({
           total: sql<number>`count(*)::int`,
-          production: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null)::int`,
-          ready: sql<number>`count(*) filter(where ${imageAssets.allowProduction} and ${imageAssets.rightsStatus}<>'unknown' and ${imageAssets.confirmedBy} is not null and ${imageAssets.confirmedAt} is not null and ${imageAssets.placement}<>'reference' and ${imageAssetFiles.assetId} is not null)::int`,
+          // 制作に使う素材（captureDeliveryImageAssets と同じ条件）。運営の許諾は見ない。
+          ready: sql<number>`count(*) filter(where ${imageAssets.placement}<>'reference' and ${imageAssetFiles.assetId} is not null and (${imageSubmissions.assetId} is null or (${imageSubmissions.status}='accepted' and ${imageSubmissions.requestedProduction})))::int`,
         })
         .from(imageAssets)
         .leftJoin(imageAssetFiles, eq(imageAssetFiles.assetId, imageAssets.id))
+        .leftJoin(imageSubmissions, eq(imageSubmissions.assetId, imageAssets.id))
         .where(eq(imageAssets.companyId, company.id)),
     () =>
       db
@@ -157,9 +160,12 @@ export async function getDeliveryPreparation(db: DbOrTx, actor: Actor | null, de
     assets: {
       ...assets[0]!,
       currentBuildCount: Array.isArray(build?.imageAssetSnapshot) ? build.imageAssetSnapshot.length : 0,
-      currentBuildAllowed: delivery.currentBuildId
+      /** 今回の制作に固定した素材が残り、ファイルが変わっていないか（運営の許諾は見ない） */
+      currentBuildIntact: delivery.currentBuildId
         ? await deliveryImageAssetsValid(db, delivery.currentBuildId, delivery.id)
         : true,
+      /** 公開対象の版への顧客の画像の権利の同意（未承認なら null） */
+      consent: delivery.lockedVersionId ? await deliveryVersionImageConsent(db, delivery.lockedVersionId) : null,
     },
     articles: articles[0]!,
     blockers: source.blockers,

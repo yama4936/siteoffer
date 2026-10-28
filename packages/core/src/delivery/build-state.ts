@@ -34,7 +34,7 @@ export async function beginDeliveryBuild(tx: DbOrTx, clock: Clock, delivery: typ
       previousId: delivery.currentBuildId,
       preparationId: preparation?.id ?? null,
       changeId: change?.id ?? null,
-      imageAssetSnapshot: await captureDeliveryImageAssets(tx, delivery.contractId),
+      imageAssetSnapshot: await captureDeliveryImageAssets(tx, delivery.contractId, now),
       createdAt: now,
     })
     .returning();

@@ -143,7 +143,7 @@ it("未完了契約・未評価診断では開始しない", async () => {
   expect(d.blockers.join()).toContain("契約確認");
   expect(d.blockers.join()).toContain("診断");
 });
-it("本番の許諾確認と現在のドメイン希望をまとめ、無許可素材を確認済みにしない", async () => {
+it("制作に使う素材と現在のドメイン希望をまとめ、運営の許諾ではなく配置とファイルで数える", async () => {
   const s = await setup();
   await db.insert(imageAssets).values([
     { companyId: s.company.id, label: "未確認", sourceType: "original_site" },
@@ -175,7 +175,7 @@ it("本番の許諾確認と現在のドメイン希望をまとめ、無許可�
     needsOpsReview: true,
   });
   const d = must(await getDeliveryPreparation(db, s.ops, s.delivery.id));
-  expect(d.assets).toEqual({ total: 3, production: 1, ready: 0, currentBuildCount: 0, currentBuildAllowed: true });
+  expect(d.assets).toEqual({ total: 3, ready: 0, currentBuildCount: 0, currentBuildIntact: true, consent: null });
   expect(d.domain).toMatchObject({ intent: "keep", confirmed: false });
   expect(d.design?.updatePlan).toContain("10件");
 });

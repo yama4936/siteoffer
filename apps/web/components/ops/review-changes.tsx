@@ -49,9 +49,7 @@ export function ReviewChanges({
         <span>比較できた項目 {comparison.compared}件</span>
         {partial && <span>一部は比較できません</span>}
       </p>
-      <p className="review-change-help">
-        表示用の文章・設定の比較です。表示、リンク、画像の許諾も確認してから承認してください。
-      </p>
+      <p className="review-change-help">表示用の文章・設定の比較です。表示とリンクも確認してから承認してください。</p>
       {comparison.changed === 0 && (
         <p className="review-change-empty">
           比較できた範囲では、保存データ上の変更はありません。サイトの見た目や動作は別途確認してください。

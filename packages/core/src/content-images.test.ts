@@ -7,6 +7,7 @@ import {
   type Db,
   deliveries,
   imageAssetFiles,
+  imageAssets,
   users,
 } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
@@ -14,12 +15,19 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
 import { publishArticle, saveArticle } from "./content.ts";
-import { getArticleEditorImage, listArticleImageChoices, parseArticleImages } from "./content-images.ts";
+import {
+  getArticleEditorImage,
+  getPublishedImageBytes,
+  listArticleImageChoices,
+  parseArticleImages,
+} from "./content-images.ts";
 import { commitArticleImport, previewArticleImport } from "./content-import.ts";
 import { findPublishedArticle, getPublishedArticleImage, listPublishedArticles } from "./content-published.ts";
 import { loadArticleWorkspace, saveArticleWorkingCopy, submitArticleOperation } from "./content-workspace.ts";
 import { createDeliveryForContract } from "./delivery/delivery.ts";
 import { seedDeliveryBase } from "./delivery/test-helpers.ts";
+import { attachImageAssetFile } from "./image-assets.ts";
+import { recordCustomerImageRightsConsent } from "./image-rights-consent.ts";
 import { reviewCustomerImage, submitCustomerImage, withdrawCustomerImage } from "./image-submissions.ts";
 
 let db: Db, close: () => Promise<void>;
@@ -141,7 +149,7 @@ it("未確認の自分の写真は下書きで使え、承認後だけ掲載で�
     e = await article(s);
   expect((await listArticleImageChoices(db, s.actor, s.company.id))[0]?.approved).toBe(false);
   expect((await getArticleEditorImage(db, s.actor, s.company.id, s.image.assetId))?.bytes).toEqual(png);
-  await expect(publish(s, e)).rejects.toThrow("利用許諾");
+  await expect(publish(s, e)).rejects.toThrow("掲載条件");
   expect((await db.select().from(contentEntries))[0]?.publishedRevision).toBeNull();
   await approve(s);
   await publish(s, e);
@@ -209,7 +217,7 @@ it("取り下げた写真は一覧・本文・直接配信から消し、記事�
       expectedRevision: 1,
       expectedPublicationRevision: 1,
     }),
-  ).rejects.toThrow("利用許諾");
+  ).rejects.toThrow("掲載条件");
 });
 it("未公開サイト・未掲載記事・別記事・別会社の写真を直接指定で公開しない", async () => {
   const s = await setup(),
@@ -294,6 +302,54 @@ it("同じ会社でも他の顧客の未確認写真を見せず、承認後は�
   await approve(s);
   expect((await listArticleImageChoices(db, other.actor, s.company.id)).map((i) => i.id)).toEqual([s.image.assetId]);
   expect((await getArticleEditorImage(db, other.actor, s.company.id, s.image.assetId))?.bytes).toEqual(png);
+});
+it("運営が登録した写真は、会社の画像の権利の同意記録か旧来の運営の許諾があるときだけ掲載できる", async () => {
+  const s = await setup();
+  const [asset] = await db
+    .insert(imageAssets)
+    .values({ companyId: s.company.id, label: "運営が登録した外観", sourceType: "operator_upload" })
+    .returning();
+  await attachImageAssetFile(db, clock, s.ops, {
+    companyId: s.company.id,
+    assetId: asset!.id,
+    png,
+    width: 2,
+    height: 2,
+  });
+  const choice = async (actor: typeof s.actor | typeof s.ops) =>
+    (await listArticleImageChoices(db, actor, s.company.id)).find((c) => c.id === asset!.id);
+  expect(await choice(s.ops)).toMatchObject({ approved: false, status: "納品時の画像の権利の同意後に掲載できます" });
+  expect(await choice(s.actor)).toBeUndefined();
+  expect(await getPublishedImageBytes(db, s.company.id, asset!.id)).toBeNull();
+  // 旧データ：運営の許諾（本番使用可）がある写真は掲載を続ける
+  await db
+    .update(imageAssets)
+    .set({ rightsStatus: "use_approved", allowProduction: true, confirmedBy: s.ops.userId, confirmedAt: clock.now() })
+    .where(eq(imageAssets.id, asset!.id));
+  expect((await choice(s.actor))?.approved).toBe(true);
+  await db
+    .update(imageAssets)
+    .set({ rightsStatus: "unknown", allowProduction: false, confirmedBy: null, confirmedAt: null })
+    .where(eq(imageAssets.id, asset!.id));
+  expect(await choice(s.actor)).toBeUndefined();
+  // 顧客が納品版の承認時に同意すると、その会社の運営登録の写真を掲載できる
+  await db.transaction((tx) =>
+    recordCustomerImageRightsConsent(tx, clock, {
+      actor: { kind: "customer", shareLinkId: randomUUID() },
+      companyId: s.company.id,
+      deliveryId: s.delivery.id,
+      versionId: randomUUID(),
+      version: 1,
+      buildId: null,
+      approvalId: randomUUID(),
+      shareLinkId: randomUUID(),
+      images: [],
+    }),
+  );
+  expect(await choice(s.actor)).toMatchObject({ approved: true, status: "掲載に利用できます" });
+  // 顧客が提出した写真は、同意記録があっても受理前は掲載できない
+  const submitted = (await listArticleImageChoices(db, s.ops, s.company.id)).find((c) => c.id === s.image.assetId);
+  expect(submitted).toMatchObject({ approved: false, status: "運営の受付後に掲載できます" });
 });
 it("重複・9枚以上・不正なID・過長な説明・不明フィールドを拒否する", () => {
   const image = { assetId: randomUUID(), alt: "", caption: "" };

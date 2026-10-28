@@ -28,6 +28,7 @@ export * from "./design.ts";
 export * from "./design-input-switch.ts";
 export * from "./domain-preference/index.ts";
 export * from "./image-assets.ts";
+export * from "./image-rights-consent.ts";
 export * from "./image-submissions.ts";
 export * from "./permissions/index.ts";
 export * from "./proposal-images.ts";

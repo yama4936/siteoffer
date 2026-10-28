@@ -1,6 +1,6 @@
 // 運営の納品操作の結合テスト（PGlite）。運営以外は操作できない、顧客確認のURL、一覧（15・18章・AC-18）
 import { type Actor, addDeliveryVersion, decideAsCustomer, fixedClock, getCustomerReview } from "@siteoffer/core";
-import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "@siteoffer/core/delivery/testing";
 import { type Db, deliveries, deployments } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
@@ -89,7 +89,12 @@ describe("納品の操作（運営）", () => {
     expect(review.ok).toBe(true);
 
     must(
-      await decideAsCustomer(db, clock, token, { versionId: v1.id, decision: "approved", comment: "問題ありません" }),
+      await decideAsCustomer(db, clock, token, {
+        versionId: v1.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+        comment: "問題ありません",
+      }),
     );
     const [afterApprove] = await db.select().from(deliveries).where(eq(deliveries.id, deliveryId));
     expect(afterApprove!.status).toBe("ready");

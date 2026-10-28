@@ -16,6 +16,7 @@ import type { Clock } from "../common/clock.ts";
 import { recordEvent } from "../common/events.ts";
 import { err, ok, type Result } from "../common/result.ts";
 import { deliveryImageAssetsValid, deliveryVersionImagesValid } from "../image-assets.ts";
+import { deliveryVersionImageConsent, IMAGE_RIGHTS_CONSENT_MESSAGES } from "../image-rights-consent.ts";
 import { authorize } from "../permissions/policy.ts";
 import { type IssuedShareLink, type IssueShareLinkError, issueShareLink } from "../share-link/share-link.ts";
 import type { ShareTokenRecovery } from "../share-link/token.ts";
@@ -218,7 +219,10 @@ export async function addDeliveryVersion(
         return err("stale_build");
     } else if (build?.status === "running") return err("invalid_state", "制作処理の実行中は別の版を追加できません");
     if (!(await deliveryImageAssetsValid(tx, delivery.currentBuildId, delivery.id, true)))
-      return err("image_rights_changed", "制作に使った画像の許諾が変更されています。素材を確認して再制作してください");
+      return err(
+        "image_rights_changed",
+        "制作に使った画像の素材またはファイルが変更・削除されています。素材を確認して再制作してください",
+      );
     if (jobId !== null) {
       const [job] = await tx
         .select({ companyId: generationJobs.companyId, purpose: generationJobs.purpose, status: generationJobs.status })
@@ -420,7 +424,10 @@ export async function sendToCustomerReview(
     }
     if (!version.artifactDir) return err("no_artifact", "この版には成果物がありません");
     if (!(await deliveryVersionImagesValid(tx, version.id, true)))
-      return err("image_rights_changed", "画像の利用許諾が変更されています。素材を確認して再制作してください");
+      return err(
+        "image_rights_changed",
+        "使用画像の素材またはファイルが変更・削除されています。素材を確認して再制作してください",
+      );
 
     const issued = await issueShareLink(
       tx,
@@ -470,10 +477,12 @@ export type RecordPublicationError =
   | "invalid_transition"
   | "not_locked"
   | "invalid_input"
-  | "image_rights_changed";
+  | "image_rights_changed"
+  | "image_consent_required";
 
 /**
  * 公開準備（ready）→ 公開（published）。固定した版で deployments に記録を1行残す。
+ * 使用画像が変わっていないことと、顧客の画像の権利への同意（旧データは運営の許諾）を条件にする。
  * 状態の記録だけで、AWSへの公開・DNS変更・稼働確認は行わない（15章・現時点の範囲外）。
  */
 export async function recordPublication(
@@ -507,8 +516,14 @@ export async function recordPublication(
       return err("invalid_transition", "公開準備の納品だけを公開済みにできます");
     }
     if (!delivery.lockedVersionId) return err("not_locked", "公開対象の版が固定されていません");
-    if (!(await deliveryVersionImagesValid(tx, delivery.lockedVersionId, true)))
-      return err("image_rights_changed", "画像の利用許諾が変更されています。公開前に確認してください");
+    const consent = await deliveryVersionImageConsent(tx, delivery.lockedVersionId, true);
+    if (!consent.ok)
+      return err(
+        consent.reason === "images_invalid" || consent.reason === "version_not_found"
+          ? "image_rights_changed"
+          : "image_consent_required",
+        IMAGE_RIGHTS_CONSENT_MESSAGES[consent.reason],
+      );
     const now = clock.now();
     const [deployment] = await tx
       .insert(deployments)

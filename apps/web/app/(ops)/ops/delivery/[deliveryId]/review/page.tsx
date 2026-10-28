@@ -90,7 +90,7 @@ export default async function DeliveryReviewPage({
         <aside aria-label="この版の確認と次の操作" className="min-w-0 space-y-5 rounded-xl border bg-card p-5">
           <h2 className="font-semibold">顧客へ渡す前に</h2>
           <p className="text-sm text-muted-foreground">
-            会社情報・連絡先、素材の利用許可、PC・スマホでの表示、修正依頼の反映を確認してください。
+            会社情報・連絡先、使用画像、PC・スマホでの表示、修正依頼の反映を確認してください。
           </p>
           {latestRequest && (
             <section

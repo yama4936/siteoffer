@@ -70,13 +70,6 @@ const IMAGE_SOURCE_LABEL: Record<string, string> = {
   operator_upload: "運営登録",
 };
 
-const IMAGE_RIGHTS_LABEL: Record<string, string> = {
-  unknown: "未確認（評価参照のみ）",
-  customer_claimed: "顧客が権利を申告",
-  license_verified: "ライセンス確認済み",
-  use_approved: "利用許諾確認済み",
-};
-
 export default async function CompanyPage({
   params,
   searchParams,
@@ -431,7 +424,7 @@ export default async function CompanyPage({
         </Table>
       </Section>
 
-      <Section id="image-assets" title="画像素材と利用許諾">
+      <Section id="image-assets" title="画像素材">
         <p className="mb-4 text-sm">
           <Link href={`/ops/materials?company=${companyId}&all=1`} className="underline">
             この会社の顧客提出素材を確認
@@ -439,8 +432,8 @@ export default async function CompanyPage({
         </p>
         <Alert>
           <AlertDescription>
-            元サイトの画像は登録しただけでは営業デモや納品サイトに使えません。権利状態と利用範囲を画像ごとに確認してください。外部画像の直リンクは行いません。
-            デモに掲載する写真・ロゴは、ファイル・営業デモの許可・配置先を登録すると次回の提案制作に反映されます。デザイン画像はレイアウトの参照に使います。
+            納品サイトの写真・ロゴの権利は、運営が素材ごとに確認せず、顧客が納品版を承認するときに一括で同意します。同意がない版は公開できません。外部画像の直リンクは行いません。
+            画像ファイルと配置先を登録した素材は次回の制作に使います。営業デモに使う場合だけ「営業デモで使用可」を付けてください（元サイトの画像はデモに使いません）。デザイン画像はレイアウトの参照に使います。
           </AlertDescription>
         </Alert>
         <details className={detailsClass}>
@@ -476,7 +469,7 @@ export default async function CompanyPage({
           </form>
         </details>
         <div className="grid gap-4">
-          {d.imageAssets.map(({ asset, confirmerName, file }) => (
+          {d.imageAssets.map(({ asset, file }) => (
             <article
               key={asset.id}
               aria-label={`素材：${asset.label}`}
@@ -496,27 +489,7 @@ export default async function CompanyPage({
                 ) : null}
               </div>
               <div className="min-w-0 space-y-3">
-                <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">権利：</span>
-                    {label(IMAGE_RIGHTS_LABEL, asset.rightsStatus)}
-                  </div>
-                  <div>
-                    <div>評価参照：可</div>
-                    <div>営業デモ：{asset.allowSalesDemo ? "可" : "不可"}</div>
-                    <div>本番：{asset.allowProduction ? "可" : "不可"}</div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {asset.confirmedAt ? (
-                      <>
-                        <div>{confirmerName ?? "運営ユーザー"}</div>
-                        <div className="whitespace-nowrap tabular-nums">{fmtDate(asset.confirmedAt)}</div>
-                      </>
-                    ) : (
-                      "未確認"
-                    )}
-                  </div>
-                </div>
+                <div className="text-sm">営業デモ：{asset.allowSalesDemo ? "使用可" : "使用しない"}</div>
                 <div className="min-w-0">
                   <form key={asset.policyRevision} action={updateImageAssetPolicyAction} className="grid gap-2">
                     <ReturnTo path={here} />
@@ -532,39 +505,31 @@ export default async function CompanyPage({
                       <option value="logo">ロゴ</option>
                     </NativeSelect>
                     <p className="max-w-72 text-xs text-muted-foreground">
-                      画像ファイルを登録し、下で許可した用途の次回制作に配置します。各配置先に1点。営業デモの許可だけでは納品サイトに使いません。
+                      画像ファイルを登録した素材を次回の制作に配置します。各配置先に1点。顧客が提出した画像は、受理済みで顧客が本番利用を申告したものだけを納品サイトに使います。
                     </p>
                     <p className="max-w-72 text-xs text-muted-foreground">
-                      許諾や配置の保存内容が変わると、この素材を使う既存の提案共有は停止します。変更後の素材で新しい提案を制作してください。
+                      配置や営業デモの設定が変わると、この素材を使う既存の提案共有は停止します。変更後の素材で新しい提案を制作してください。
                     </p>
-                    <NativeSelect
+                    {/* 権利状態・本番使用可は画面から外し、今の値を保つ（旧データの公開判定に使う） */}
+                    <input
+                      type="hidden"
                       name="rightsStatus"
-                      defaultValue={asset.rightsStatus}
-                      aria-label={`${asset.label}の権利状態`}
-                    >
-                      {Object.entries(IMAGE_RIGHTS_LABEL).map(([value, text]) => (
-                        <option key={value} value={value}>
-                          {text}
-                        </option>
-                      ))}
-                    </NativeSelect>
+                      value={asset.rightsStatus === "unknown" ? "" : asset.rightsStatus}
+                    />
+                    {asset.allowProduction ? <input type="hidden" name="allowProduction" value="on" /> : null}
                     <label className="flex items-center gap-2 text-sm">
                       <input type="checkbox" name="allowSalesDemo" defaultChecked={asset.allowSalesDemo} />
                       営業デモで使用可
                     </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" name="allowProduction" defaultChecked={asset.allowProduction} />
-                      納品サイトで使用可
-                    </label>
                     <Input
                       name="note"
                       defaultValue={asset.note ?? ""}
-                      placeholder="確認根拠・条件"
-                      aria-label={`${asset.label}の確認メモ`}
+                      placeholder="メモ（出所・条件など）"
+                      aria-label={`${asset.label}のメモ`}
                     />
                     <div>
                       <Button type="submit" size="sm">
-                        利用方針を更新
+                        配置・営業デモの設定を更新
                       </Button>
                     </div>
                   </form>
@@ -574,7 +539,7 @@ export default async function CompanyPage({
           ))}
         </div>
         {d.imageAssets.length === 0 && (
-          <EmptyState>画像素材を登録すると、画像の取込・許諾確認・配置先の指定ができます。</EmptyState>
+          <EmptyState>画像素材を登録すると、画像の取込と配置先の指定ができます。</EmptyState>
         )}
       </Section>
 

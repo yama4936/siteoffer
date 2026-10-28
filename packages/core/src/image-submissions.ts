@@ -310,9 +310,14 @@ export async function reviewCustomerImage(
     requestId: string;
     decision: "accepted" | "needs_changes";
     note: string;
-    allowDemo: boolean;
-    allowProduction: boolean;
-    confirmed: boolean;
+    /**
+     * 用途の指定（任意）。2026-10-28 から運営画面では用途を選ばず、顧客が申告した用途をそのまま使う。
+     * 画像の権利は顧客が提出時と納品承認時に同意する。
+     */
+    allowDemo?: boolean;
+    allowProduction?: boolean;
+    /** 旧画面の確認チェック。受け付けるが必須にしない */
+    confirmed?: boolean;
   },
 ) {
   if (
@@ -321,11 +326,11 @@ export async function reviewCustomerImage(
     typeof input.note !== "string" ||
     input.note.trim().length < 5 ||
     input.note.trim().length > 2000 ||
-    typeof input.allowDemo !== "boolean" ||
-    typeof input.allowProduction !== "boolean" ||
-    input.confirmed !== true
+    (input.allowDemo !== undefined && typeof input.allowDemo !== "boolean") ||
+    (input.allowProduction !== undefined && typeof input.allowProduction !== "boolean") ||
+    (input.confirmed !== undefined && typeof input.confirmed !== "boolean")
   )
-    throw new ImageSubmissionError("確認結果と顧客へ伝える内容を入力し、確認チェックを付けてください");
+    throw new ImageSubmissionError("確認結果と顧客へ伝える内容を入力してください");
   return db.transaction(async (tx) => {
     const who = await operator(tx, actor, input.companyId),
       note = input.note.trim(),
@@ -336,19 +341,21 @@ export async function reviewCustomerImage(
         input.revision,
         input.decision,
         note,
-        input.allowDemo,
-        input.allowProduction,
+        input.allowDemo ?? null,
+        input.allowProduction ?? null,
       ]),
       prior = await receipt(tx, op);
     if (prior) return { item: await read(tx, input.companyId, prior.assetId), replayed: true };
     const { asset, submission: s } = await lockSubmission(tx, input.companyId, input.assetId);
     if (s.revision !== input.revision || s.status !== "pending")
       throw new ImageSubmissionError("提出内容や確認状況が変わりました。一覧を更新して確認してください");
+    const allowDemo = input.allowDemo ?? s.requestedDemo,
+      allowProduction = input.allowProduction ?? s.requestedProduction;
     if (
       input.decision === "accepted" &&
-      ((!input.allowDemo && !input.allowProduction) ||
-        (input.allowDemo && !s.requestedDemo) ||
-        (input.allowProduction && !s.requestedProduction))
+      ((!allowDemo && !allowProduction) ||
+        (allowDemo && !s.requestedDemo) ||
+        (allowProduction && !s.requestedProduction))
     )
       throw new ImageSubmissionError("顧客が許可した範囲から、確認済みの用途を選んでください");
     const accepted = input.decision === "accepted";
@@ -367,8 +374,8 @@ export async function reviewCustomerImage(
       .update(imageAssets)
       .set({
         rightsStatus: accepted ? "customer_claimed" : "unknown",
-        allowSalesDemo: accepted && input.allowDemo,
-        allowProduction: accepted && input.allowProduction,
+        allowSalesDemo: accepted && allowDemo,
+        allowProduction: accepted && allowProduction,
         confirmedBy: accepted ? who.userId : null,
         confirmedAt: accepted ? clock.now() : null,
         note: accepted ? note : null,
@@ -386,8 +393,8 @@ export async function reviewCustomerImage(
         assetId: asset.id,
         revision: s.revision + 1,
         status: input.decision,
-        allowSalesDemo: accepted && input.allowDemo,
-        allowProduction: accepted && input.allowProduction,
+        allowSalesDemo: accepted && allowDemo,
+        allowProduction: accepted && allowProduction,
       },
     });
     return { item: await read(tx, input.companyId, asset.id), replayed: false };

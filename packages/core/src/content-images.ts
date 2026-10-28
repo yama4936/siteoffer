@@ -5,6 +5,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor } from "./common/actor.ts";
 import { authorizeContentEditor, ContentError } from "./content-auth.ts";
 import { findSecretInFields } from "./domain-preference/secrets.ts";
+import { companyHasImageRightsConsent, legacyProductionPermitted } from "./image-rights-consent.ts";
 
 export type { ArticleImage } from "@siteoffer/db";
 
@@ -31,19 +32,20 @@ const columns = {
 };
 type ChoiceRow = {
   allowProduction: boolean;
-  rightsStatus: string;
+  rightsStatus: "unknown" | "customer_claimed" | "license_verified" | "use_approved";
   confirmedBy: string | null;
   confirmedAt: Date | null;
   submissionStatus: string | null;
 };
-function approved(r: ChoiceRow) {
-  return (
-    r.allowProduction &&
-    r.rightsStatus !== "unknown" &&
-    !!r.confirmedBy &&
-    !!r.confirmedAt &&
-    (r.submissionStatus === null || r.submissionStatus === "accepted")
-  );
+/**
+ * 掲載できる写真（2026-10-28 ユーザー決定：運営の素材ごとの許諾確認をやめ、顧客の一括同意にした）。
+ * - 顧客が提出した写真：提出時の同意で掲載できる（運営が受理済みであること）。
+ * - 運営が登録した写真：その会社に顧客の画像の権利の同意記録があれば掲載できる。
+ *   同意記録がない会社では、旧来の運営の許諾（本番使用可）がある写真だけを引き続き掲載する。
+ */
+function approved(r: ChoiceRow, consented: boolean) {
+  if (r.submissionStatus !== null) return r.submissionStatus === "accepted";
+  return consented || legacyProductionPermitted(r);
 }
 async function rows(db: DbOrTx, companyId: string, ids?: string[]) {
   if (ids && !ids.length) return [];
@@ -55,25 +57,30 @@ async function rows(db: DbOrTx, companyId: string, ids?: string[]) {
     .where(and(eq(imageAssets.companyId, companyId), ids ? inArray(imageAssets.id, ids) : undefined))
     .orderBy(desc(imageAssets.createdAt), desc(imageAssets.id));
 }
-function visible(r: Awaited<ReturnType<typeof rows>>[number], actor: Actor) {
-  return actor.kind === "ops" || approved(r) || (actor.kind === "customer_user" && r.submittedBy === actor.userId);
+function visible(r: Awaited<ReturnType<typeof rows>>[number], actor: Actor, consented: boolean) {
+  return (
+    actor.kind === "ops" || approved(r, consented) || (actor.kind === "customer_user" && r.submittedBy === actor.userId)
+  );
 }
 export async function listArticleImageChoices(db: DbOrTx, actor: Actor | null, companyId: string) {
   return db.transaction(async (tx) => {
     const who = await authorizeContentEditor(tx, actor, companyId);
+    const consented = await companyHasImageRightsConsent(tx, companyId);
     return (await rows(tx, companyId))
-      .filter((r) => visible(r, who))
+      .filter((r) => visible(r, who, consented))
       .map((r) => ({
         id: r.id,
         label: r.label,
         width: r.width,
         height: r.height,
-        approved: approved(r),
-        status: approved(r)
+        approved: approved(r, consented),
+        status: approved(r, consented)
           ? "掲載に利用できます"
           : r.submissionStatus === "withdrawn"
             ? "取り下げ済み"
-            : "利用許諾の確認が必要です",
+            : r.submissionStatus !== null
+              ? "運営の受付後に掲載できます"
+              : "納品時の画像の権利の同意後に掲載できます",
       }));
   });
 }
@@ -92,15 +99,19 @@ export async function validateArticleImageSelection(
     companyId,
     images.map((i) => i.assetId),
   );
+  const consented = images.length ? await companyHasImageRightsConsent(db, companyId) : false;
   for (const image of images) {
     const item = items.find((r) => r.id === image.assetId);
-    if (!item || !visible(item, actor))
+    if (!item || !visible(item, actor, consented))
       throw new ContentError("記事の写真が見つかりません。会社と素材を確認してください");
-    if (publishing && (!approved(item) || !image.alt.trim()))
-      throw new ContentError("写真の利用許諾と代替テキストを確認してから掲載してください");
+    if (publishing && (!approved(item, consented) || !image.alt.trim()))
+      throw new ContentError(
+        "写真の掲載条件（受付済み・画像の権利の同意）と代替テキストを確認してから掲載してください",
+      );
   }
 }
 export async function filterPublishedArticleImages(db: DbOrTx, companyId: string, images: ArticleImage[]) {
+  const consented = images.length ? await companyHasImageRightsConsent(db, companyId) : false;
   const permitted = new Set(
     (
       await rows(
@@ -109,7 +120,7 @@ export async function filterPublishedArticleImages(db: DbOrTx, companyId: string
         images.map((i) => i.assetId),
       )
     )
-      .filter(approved)
+      .filter((r) => approved(r, consented))
       .map((r) => r.id),
   );
   return images.filter((i) => permitted.has(i.assetId));
@@ -126,12 +137,12 @@ export async function getArticleEditorImage(db: DbOrTx, actor: Actor | null, com
   return db.transaction(async (tx) => {
     const who = await authorizeContentEditor(tx, actor, companyId);
     const [r] = await rows(tx, companyId, [assetId]);
-    return r && visible(r, who) ? file(tx, assetId) : null;
+    return r && visible(r, who, await companyHasImageRightsConsent(tx, companyId)) ? file(tx, assetId) : null;
   });
 }
 /** Public callers must prove the article is currently published and references this asset. */
 export async function getPublishedImageBytes(db: DbOrTx, companyId: string, assetId: string) {
   if (!uuid.test(assetId)) return null;
   const [r] = await rows(db, companyId, [assetId]);
-  return r && approved(r) ? file(db, assetId) : null;
+  return r && approved(r, await companyHasImageRightsConsent(db, companyId)) ? file(db, assetId) : null;
 }

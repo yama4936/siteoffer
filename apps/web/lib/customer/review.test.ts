@@ -7,11 +7,13 @@ import {
   createDeliveryForContract,
   fixedClock,
   HOUR,
+  IMAGE_RIGHTS_CONSENT_ACTION,
+  IMAGE_RIGHTS_CONSENT_VERSION,
   sendToCustomerReview,
   transitionDelivery,
 } from "@siteoffer/core";
 import { seedDeliveryBase } from "@siteoffer/core/delivery/testing";
-import { approvals, type Db, deliveries } from "@siteoffer/db";
+import { approvals, auditEvents, type Db, deliveries } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -48,6 +50,8 @@ afterEach(async () => {
 });
 
 const deps = () => ({ db, clock });
+/** 承認に添える、写真・ロゴ等の権利への同意（画面のチェックと表示した文言の版） */
+const CONSENT = { imageRightsConsent: "on", imageRightsConsentVersion: IMAGE_RIGHTS_CONSENT_VERSION };
 
 function form(values: Record<string, string>): FormData {
   const fd = new FormData();
@@ -85,13 +89,34 @@ describe("submitCustomerDecision", () => {
     expect(noCheck?.status).toBe("error");
     expect((await loadDelivery()).lockedVersionId).toBeNull();
 
-    const r = await submitCustomerDecision(deps(), form({ token, versionId, decision: "approved", confirmed: "on" }));
+    const r = await submitCustomerDecision(
+      deps(),
+      form({ token, versionId, decision: "approved", confirmed: "on", ...CONSENT }),
+    );
     expect(r?.status).toBe("ok");
     expect(r?.message).not.toMatch(/保証|必ず/);
     const d = await loadDelivery();
     expect(d.status).toBe("ready");
     expect(d.lockedVersionId).toBe(versionId);
     expect((await loadCustomerReview(deps(), token))!.state).toBe("approved");
+  });
+
+  it("承認は写真・ロゴ等の権利への同意が必要。古い文言の版では受け付けず、同意は承認と一緒に記録する", async () => {
+    const base = { token, versionId, decision: "approved", confirmed: "on" };
+    const noConsent = await submitCustomerDecision(deps(), form(base));
+    expect(noConsent).toMatchObject({ status: "error", message: expect.stringContaining("同意") });
+    const stale = await submitCustomerDecision(
+      deps(),
+      form({ ...base, imageRightsConsent: "on", imageRightsConsentVersion: "2020-01-01.v0" }),
+    );
+    expect(stale).toMatchObject({ status: "error", message: expect.stringContaining("読み直し") });
+    expect(await db.select().from(approvals)).toHaveLength(0);
+    expect((await loadDelivery()).lockedVersionId).toBeNull();
+
+    expect((await submitCustomerDecision(deps(), form({ ...base, ...CONSENT })))?.status).toBe("ok");
+    const events = await db.select().from(auditEvents).where(eq(auditEvents.action, IMAGE_RIGHTS_CONSENT_ACTION));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.after).toMatchObject({ versionId, textVersion: IMAGE_RIGHTS_CONSENT_VERSION });
   });
 
   it("修正依頼はコメント必須。受け付けると制作に戻り、コメントが保存される", async () => {
@@ -111,7 +136,13 @@ describe("submitCustomerDecision", () => {
   it("期限切れのリンク・別の版のID・不正な判断値は受け付けない", async () => {
     const wrongVersion = await submitCustomerDecision(
       deps(),
-      form({ token, versionId: "00000000-0000-4000-8000-000000000000", decision: "approved", confirmed: "on" }),
+      form({
+        token,
+        versionId: "00000000-0000-4000-8000-000000000000",
+        decision: "approved",
+        confirmed: "on",
+        ...CONSENT,
+      }),
     );
     expect(wrongVersion).toEqual({ status: "error", message: INVALID_LINK_MESSAGE });
 
@@ -121,7 +152,7 @@ describe("submitCustomerDecision", () => {
     clock.advance(48 * HOUR);
     const expired = await submitCustomerDecision(
       deps(),
-      form({ token, versionId, decision: "approved", confirmed: "on" }),
+      form({ token, versionId, decision: "approved", confirmed: "on", ...CONSENT }),
     );
     expect(expired).toEqual({ status: "error", message: INVALID_LINK_MESSAGE });
     expect((await loadDelivery()).status).toBe("customer_review");
@@ -129,7 +160,7 @@ describe("submitCustomerDecision", () => {
   });
 
   it("受付が終わった版（承認済み）への再送は受け付けない", async () => {
-    await submitCustomerDecision(deps(), form({ token, versionId, decision: "approved", confirmed: "on" }));
+    await submitCustomerDecision(deps(), form({ token, versionId, decision: "approved", confirmed: "on", ...CONSENT }));
     const again = await submitCustomerDecision(
       deps(),
       form({ token, versionId, decision: "changes_requested", comment: "やはり直したい" }),

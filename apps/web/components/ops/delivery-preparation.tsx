@@ -156,21 +156,30 @@ export function DeliveryPreparation({ data: d }: { data: DeliveryPreparationData
           </p>
         </section>
         <section className="min-w-0 space-y-3 rounded-xl border p-4">
-          <h4 className="font-semibold text-sm">画像素材の利用許諾</h4>
+          <h4 className="font-semibold text-sm">画像素材と顧客の同意</h4>
           <p className="text-sm">
-            登録 {d.assets.total}件 / 本番利用の確認済み {d.assets.production}件 / 次回の制作で配置 {d.assets.ready}件
+            登録 {d.assets.total}件 / 次回の制作で配置 {d.assets.ready}件
           </p>
           <p className="text-xs text-muted-foreground">
-            画像ファイルを登録し、本番利用と配置先を確認した素材を次回の制作へ渡します。未確認・デモ限定の素材は本番に使用しません。
+            ファイルと配置先がある素材を次回の制作へ渡します（顧客の提出画像は受理済みで本番利用の申告があるものだけ）。写真・ロゴ等の権利は、顧客が納品版を承認するときに一括で同意します。
           </p>
           <p className="text-sm">今回の制作に固定した素材 {d.assets.currentBuildCount}件</p>
-          {!d.assets.currentBuildAllowed && (
+          {!d.assets.currentBuildIntact && (
             <p role="alert" className="text-sm text-destructive">
-              今回使用した画像の利用許諾を確認できません。素材の許諾を確認するか、使用画像を変更して再制作してください。顧客向け共有は停止中です。公開前に許諾を確認してください。
+              今回使用した画像の素材またはファイルが変更・削除されています。使用画像を確認して再制作してください。顧客向け共有は停止中です。
+            </p>
+          )}
+          {d.assets.consent && (
+            <p role={d.assets.consent.ok ? "status" : "alert"} className="text-sm">
+              {d.assets.consent.ok
+                ? d.assets.consent.basis === "customer_consent"
+                  ? "公開対象の版：顧客が画像の権利に同意済み"
+                  : "公開対象の版：同意の仕組みより前の承認（旧来の運営の許諾で公開可）"
+                : "公開対象の版：顧客の画像の権利の同意を確認できません。新しい版を作成し、顧客に再承認を依頼してください。"}
             </p>
           )}
           <Link href={`${companyHref}#image-assets`} className="text-sm text-primary underline">
-            素材と利用許諾を確認
+            画像素材を確認
           </Link>
         </section>
         <section className="min-w-0 space-y-3 rounded-xl border p-4">

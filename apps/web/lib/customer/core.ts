@@ -7,4 +7,6 @@ export {
   type CustomerReviewState,
   decideAsCustomer,
   getCustomerReview,
+  IMAGE_RIGHTS_CONSENT_TEXT,
+  IMAGE_RIGHTS_CONSENT_VERSION,
 } from "@siteoffer/core";

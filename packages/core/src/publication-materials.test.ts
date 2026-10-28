@@ -18,6 +18,7 @@ import { asc, desc, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
 import { seedDeliveryBase } from "./delivery/test-helpers.ts";
+import { recordCustomerImageRightsConsent } from "./image-rights-consent.ts";
 import {
   confirmPublicationMaterialBatch,
   confirmPublicationMaterialCheck,
@@ -118,13 +119,13 @@ async function setup() {
   }
   return { ...b, delivery: d!, asset: a!, publish, listing, withdraw, input, first };
 }
-it("利用許可の停止を検出し、素材なしと追跡不能の旧版を区別する", async () => {
+it("同意記録のない旧版は運営の許可の停止を検出し、素材なしと追跡不能の旧版を区別する", async () => {
   const s = await setup();
   expect(await s.listing()).toMatchObject({ scanned: 1, pending: 0, items: [{ state: "clear" }] });
   await s.withdraw();
   expect(await s.listing()).toMatchObject({
     pending: 1,
-    items: [{ issues: [{ reason: "本番サイトでの利用許可が停止しています" }] }],
+    items: [{ issues: [{ reason: "顧客の画像の権利への同意がありません" }] }],
   });
   await s.publish(2, { snapshot: [] });
   await s.publish(3, { snapshot: null });
@@ -134,6 +135,31 @@ it("利用許可の停止を検出し、素材なしと追跡不能の旧版を�
   expect(r.items.find((x) => x.version === 2)!.state).toBe("clear");
   expect(r.items.find((x) => x.version === 3)!.issues[0]!.reason).toContain("旧版");
   expect(JSON.stringify(r)).not.toContain("pngBase64");
+});
+it("顧客の同意がある版は運営の許可を見ず、同意した画像の組と違えば要確認にする", async () => {
+  const s = await setup();
+  const consent = (images: { assetId: string; slot: string; sha256: string }[], at = clock) =>
+    db.transaction((tx) =>
+      recordCustomerImageRightsConsent(tx, at, {
+        actor: { kind: "customer", shareLinkId: randomUUID() },
+        companyId: s.company.id,
+        deliveryId: s.delivery.id,
+        versionId: s.first.version.id,
+        version: 1,
+        buildId: s.first.build.id,
+        approvalId: randomUUID(),
+        shareLinkId: randomUUID(),
+        images: images.map((i) => ({ ...i, slot: i.slot as "hero", label: "x", policy: {} as never })),
+      }),
+    );
+  await consent([{ assetId: s.asset.id, slot: "hero", sha256: "a".repeat(64) }]);
+  await s.withdraw();
+  expect(await s.listing()).toMatchObject({ pending: 0, items: [{ state: "clear" }] });
+  await consent([{ assetId: s.asset.id, slot: "logo", sha256: "a".repeat(64) }], fixedClock("2026-10-18T00:00:00Z"));
+  expect(await s.listing()).toMatchObject({
+    pending: 1,
+    items: [{ issues: [{ reason: "顧客が同意した画像と公開した画像が一致しません" }] }],
+  });
 });
 it("保存ファイルの欠落とハッシュ不一致を検出する", async () => {
   const s = await setup();

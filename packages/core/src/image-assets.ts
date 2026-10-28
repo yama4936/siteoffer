@@ -7,10 +7,11 @@ import {
   deliveryVersions,
   imageAssetFiles,
   imageAssets,
+  imageSubmissions,
   users,
 } from "@siteoffer/db";
 import type { ImagePolicy } from "@siteoffer/schemas";
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import type { Actor } from "./common/actor.ts";
 import type { Clock } from "./common/clock.ts";
 import { recordEvent } from "./common/events.ts";
@@ -110,10 +111,18 @@ export type DeliveryImageAsset = {
   label: string;
   policy: ImagePolicy;
 };
-const productionAllowed = (a: typeof imageAssets.$inferSelect) =>
-  a.allowProduction && a.rightsStatus !== "unknown" && !!a.confirmedBy && !!a.confirmedAt;
-/** 呼び出し側の制作受付トランザクション内で配置と素材を固定する。 */
-export async function captureDeliveryImageAssets(tx: DbOrTx, contractId: string): Promise<DeliveryImageAsset[]> {
+/** 生成に渡す利用方針の確認者。運営の許諾ではなく、納品承認時の顧客同意で本番利用を確定することを表す。 */
+export const CUSTOMER_CONSENT_CONFIRMER = "customer_consent_at_delivery_approval";
+/**
+ * 呼び出し側の制作受付トランザクション内で配置と素材を固定する。
+ * 運営の許諾は見ない（権利は顧客が納品版の承認時に一括で同意し、同意がなければ公開しない）。
+ * ファイルと配置がある素材を使う。顧客が提出した画像は、受理済みで顧客が本番での利用を申告したものに限る。
+ */
+export async function captureDeliveryImageAssets(
+  tx: DbOrTx,
+  contractId: string,
+  capturedAt: Date = new Date(),
+): Promise<DeliveryImageAsset[]> {
   const [c] = await tx.select({ companyId: contracts.companyId }).from(contracts).where(eq(contracts.id, contractId));
   if (!c) throw new ImageAssetError("契約を確認できません");
   const assets = await tx
@@ -122,9 +131,26 @@ export async function captureDeliveryImageAssets(tx: DbOrTx, contractId: string)
     .where(and(eq(imageAssets.companyId, c.companyId), ne(imageAssets.placement, "reference")))
     .orderBy(asc(imageAssets.id))
     .for("share");
+  const submissions = assets.length
+    ? await tx
+        .select({
+          assetId: imageSubmissions.assetId,
+          status: imageSubmissions.status,
+          requestedProduction: imageSubmissions.requestedProduction,
+        })
+        .from(imageSubmissions)
+        .where(
+          inArray(
+            imageSubmissions.assetId,
+            assets.map((a) => a.id),
+          ),
+        )
+    : [];
   const result: DeliveryImageAsset[] = [];
   for (const a of assets) {
-    if (!productionAllowed(a) || a.placement === "reference") continue;
+    if (a.placement === "reference") continue;
+    const submission = submissions.find((s) => s.assetId === a.id);
+    if (submission && (submission.status !== "accepted" || !submission.requestedProduction)) continue;
     const [f] = await tx
       .select({ sha256: imageAssetFiles.sha256 })
       .from(imageAssetFiles)
@@ -138,10 +164,10 @@ export async function captureDeliveryImageAssets(tx: DbOrTx, contractId: string)
       policy: {
         sourceType: a.sourceType,
         sourceUrl: a.sourceUrl,
-        rightsStatus: a.rightsStatus,
+        rightsStatus: "customer_claimed",
         allowedUses: ["production"],
-        confirmedBy: a.confirmedBy,
-        confirmedAt: a.confirmedAt!.toISOString(),
+        confirmedBy: CUSTOMER_CONSENT_CONFIRMER,
+        confirmedAt: capturedAt.toISOString(),
         note: a.note,
       },
     });
@@ -168,7 +194,7 @@ export function parseDeliveryImageSnapshot(raw: unknown): DeliveryImageAsset[] |
     return null;
   return raw;
 }
-/** 再許可が必要な素材・他社素材・消失したファイルでは制作や顧客共有を止める。 */
+/** 他社素材・消失した素材・変わったファイルでは制作や顧客共有を止める。運営の許諾状態は見ない。 */
 export async function deliveryImageAssetsValid(db: DbOrTx, buildId: string | null, deliveryId: string, lock = false) {
   if (!buildId) return true;
   const [b] = await db
@@ -186,7 +212,13 @@ export async function deliveryImageAssetsValid(db: DbOrTx, buildId: string | nul
       .from(imageAssets)
       .where(and(eq(imageAssets.id, s.assetId), eq(imageAssets.companyId, b.companyId)));
     const [a] = await (lock ? query.for("share") : query);
-    if (!a || !productionAllowed(a)) return false;
+    if (!a) return false;
+    // 顧客が取り下げた提出画像は、素材の消失として扱う
+    const [submission] = await db
+      .select({ status: imageSubmissions.status })
+      .from(imageSubmissions)
+      .where(eq(imageSubmissions.assetId, a.id));
+    if (submission?.status === "withdrawn") return false;
     const [f] = await db
       .select({ sha256: imageAssetFiles.sha256 })
       .from(imageAssetFiles)
@@ -205,7 +237,9 @@ export async function deliveryVersionImagesValid(db: DbOrTx, versionId: string, 
 /** ワーカー専用。固定した素材だけを取得し、実バイトのハッシュも検査する。 */
 export async function loadDeliveryImageAssets(db: DbOrTx, buildId: string, deliveryId: string) {
   if (!(await deliveryImageAssetsValid(db, buildId, deliveryId)))
-    throw new ImageAssetError("制作に使う画像の許諾が変更されています。素材を確認して再制作してください");
+    throw new ImageAssetError(
+      "制作に使う画像の素材またはファイルが変更・削除されています。素材を確認して再制作してください",
+    );
   const [b] = await db
     .select({ snapshot: deliveryBuilds.imageAssetSnapshot })
     .from(deliveryBuilds)

@@ -22,6 +22,11 @@ import { recordEvent } from "./common/events.ts";
 import { activeContentOperator, lockContentCompany } from "./content-auth.ts";
 import { findSecretInFields } from "./domain-preference/secrets.ts";
 import { parseDeliveryImageSnapshot } from "./image-assets.ts";
+import {
+  evaluateImageRightsConsent,
+  latestImageRightsConsents,
+  legacyProductionPermitted,
+} from "./image-rights-consent.ts";
 
 export class PublicationMaterialError extends Error {}
 const uuid = (value: unknown): value is string =>
@@ -68,10 +73,32 @@ async function publicationAssets(db: DbOrTx, snapshots: unknown[]) {
 type ImageSource = {
   companyId: string;
   deliveryId: string;
+  versionId: string;
   versionDeliveryId: string | undefined;
   build: { id: string; snapshot: unknown } | null;
 };
-function publicationIssues(row: ImageSource, assets: Awaited<ReturnType<typeof publicationAssets>>) {
+type PublicationContext = {
+  assets: Awaited<ReturnType<typeof publicationAssets>>;
+  approved: Set<string>;
+  consents: Map<string, unknown>;
+};
+async function publicationContext(
+  db: DbOrTx,
+  rows: { snapshot: unknown; versionId: string }[],
+): Promise<PublicationContext> {
+  const versionIds = [...new Set(rows.map((r) => r.versionId))];
+  return {
+    assets: await publicationAssets(
+      db,
+      rows.map((r) => r.snapshot),
+    ),
+    approved: await publicationApprovals(db, versionIds),
+    consents: await latestImageRightsConsents(db, versionIds),
+  };
+}
+/** 公開した版の素材が残り、ファイルが変わらず、顧客の画像の権利の同意（旧データは運営の許諾）があるか。 */
+function publicationIssues(row: ImageSource, context: PublicationContext) {
+  const { assets } = context;
   const issues: Issue[] = [],
     states: unknown[] = [];
   const snapshot = parseDeliveryImageSnapshot(row.build?.snapshot);
@@ -80,7 +107,7 @@ function publicationIssues(row: ImageSource, assets: Awaited<ReturnType<typeof p
   else if (row.build.snapshot === null)
     issues.push({ assetId: null, label: "使用素材の記録", reason: "使用素材が記録されていない旧版です" });
   else if (!snapshot) issues.push({ assetId: null, label: "使用素材の記録", reason: "素材の記録を読み取れません" });
-  else
+  else {
     for (const source of snapshot) {
       const found = assets.get(source.assetId),
         a = found?.asset,
@@ -98,15 +125,36 @@ function publicationIssues(row: ImageSource, assets: Awaited<ReturnType<typeof p
       const reason =
         !a || a.companyId !== row.companyId
           ? "素材を確認できません"
-          : !a.allowProduction || a.rightsStatus === "unknown" || !a.confirmedBy || !a.confirmedAt
-            ? "本番サイトでの利用許可が停止しています"
-            : !f
-              ? "画像ファイルを確認できません"
-              : f.sha256 !== source.sha256
-                ? "公開記録と画像ファイルが一致しません"
-                : null;
+          : !f
+            ? "画像ファイルを確認できません"
+            : f.sha256 !== source.sha256
+              ? "公開記録と画像ファイルが一致しません"
+              : null;
       if (reason) issues.push({ assetId: source.assetId, label: source.label, reason });
     }
+    if (!issues.length) {
+      const consent = context.consents.get(row.versionId) ?? null;
+      states.push(["consent", consent]);
+      const status = evaluateImageRightsConsent({
+        images: snapshot,
+        consent,
+        approved: context.approved.has(row.versionId),
+        legacyPermitted: (id) => {
+          const a = assets.get(id)?.asset;
+          return !!a && legacyProductionPermitted(a);
+        },
+      });
+      if (!status.ok)
+        issues.push({
+          assetId: null,
+          label: "画像の権利の同意",
+          reason:
+            status.reason === "images_changed"
+              ? "顧客が同意した画像と公開した画像が一致しません"
+              : "顧客の画像の権利への同意がありません",
+        });
+    }
+  }
   return { issues, states };
 }
 function batchRequestIdFor(deploymentId: SQLWrapper) {
@@ -178,20 +226,21 @@ async function scan(db: DbOrTx, filter: ScanScope = {}) {
       ),
     )
     .orderBy(desc(deployments.createdAt), desc(deliveryVersions.version), desc(deployments.id));
-  const assets = await publicationAssets(
+  const context = await publicationContext(
     db,
-    rows.map((r) => r.build?.snapshot),
+    rows.map((r) => ({ snapshot: r.build?.snapshot, versionId: r.deployment.deliveryVersionId })),
   );
-  const approved = await publicationApprovals(db, [...new Set(rows.map((r) => r.deployment.deliveryVersionId))]);
+  const { approved } = context;
   return rows.map((row) => {
     const { issues, states } = publicationIssues(
       {
         companyId: row.companyId,
         deliveryId: row.delivery.id,
+        versionId: row.deployment.deliveryVersionId,
         versionDeliveryId: row.version?.deliveryId,
         build: row.build,
       },
-      assets,
+      context,
     );
     const checked = !!row.check && !row.check.revokedAt;
     return {
@@ -285,20 +334,21 @@ async function scanFacts(db: DbOrTx, filter: ScanScope = {}) {
     )
     // Keep database precision and its NULL ordering for pagination and latest-target selection.
     .orderBy(desc(deployments.createdAt), desc(deliveryVersions.version), desc(deployments.id));
-  const assets = await publicationAssets(
+  const context = await publicationContext(
       db,
-      rows.map((r) => r.build?.snapshot),
+      rows.map((r) => ({ snapshot: r.build?.snapshot, versionId: r.deliveryVersionId })),
     ),
-    approved = await publicationApprovals(db, [...new Set(rows.map((r) => r.deliveryVersionId))]);
+    { approved } = context;
   const facts: PublicationFact[] = rows.map((row) => {
     const { issues } = publicationIssues(
       {
         companyId: row.companyId,
         deliveryId: row.deliveryId,
+        versionId: row.deliveryVersionId,
         versionDeliveryId: row.version?.deliveryId,
         build: row.build,
       },
-      assets,
+      context,
     );
     return {
       deploymentId: row.deploymentId,
@@ -455,6 +505,7 @@ export async function getPublicationMaterialWork(
           .select({
             id: deployments.id,
             deliveryId: deliveries.id,
+            versionId: deployments.deliveryVersionId,
             companyId: companies.id,
             companyName: companies.name,
             version: { number: deliveryVersions.version, deliveryId: deliveryVersions.deliveryId },
@@ -476,7 +527,7 @@ export async function getPublicationMaterialWork(
             and(
               eq(deployments.status, "recorded"),
               or(isNull(publicationMaterialChecks.deploymentId), isNotNull(publicationMaterialChecks.revokedAt)),
-              // Only an intact, explicitly empty snapshot is certainly clear without inspecting policies.
+              // Only an intact, explicitly empty snapshot is certainly clear: no images need consent (approved versions only).
               or(
                 isNull(deliveryBuilds.id),
                 ne(deliveryVersions.deliveryId, deliveries.id),
@@ -489,19 +540,20 @@ export async function getPublicationMaterialWork(
           // Walk the existing primary key; retain only the oldest 20 summaries below.
           .orderBy(asc(deployments.id))
           .limit(500);
-        const assets = await publicationAssets(
+        const context = await publicationContext(
           tx,
-          rows.map((r) => r.build?.snapshot),
+          rows.map((r) => ({ snapshot: r.build?.snapshot, versionId: r.versionId })),
         );
         for (const row of rows) {
           const { issues } = publicationIssues(
             {
               companyId: row.companyId,
               deliveryId: row.deliveryId,
+              versionId: row.versionId,
               versionDeliveryId: row.version?.deliveryId,
               build: row.build,
             },
-            assets,
+            context,
           );
           if (!issues.length || (query && !row.companyName.toLocaleLowerCase("ja").includes(query))) continue;
           const candidate: PublicationWorkItem = {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { auditEvents, type Db, deliveryBuilds, imageAssetFiles, imageAssets, users } from "@siteoffer/db";
 import { createTestDb } from "@siteoffer/db/testing";
+import { imagePolicySchema } from "@siteoffer/schemas";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { fixedClock } from "./common/clock.ts";
@@ -12,9 +13,10 @@ import {
   sendToCustomerReview,
   transitionDelivery,
 } from "./delivery/delivery.ts";
-import { seedDeliveryBase } from "./delivery/test-helpers.ts";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "./delivery/test-helpers.ts";
 import {
   attachImageAssetFile,
+  CUSTOMER_CONSENT_CONFIRMER,
   type DeliveryImageAsset,
   deliveryImageAssetsValid,
   getImageAssetFile,
@@ -109,26 +111,26 @@ it("ファイル保存と許諾リセット・監査を一括確定する", asyn
   expect(await db.select().from(imageAssetFiles)).toEqual([]);
   expect((await db.select().from(imageAssets))[0]!.allowProduction).toBe(true);
 });
-it("未取込・未確認・デモのみ・配置しない素材を納品へ渡さない", async () => {
-  for (const kind of ["missing", "unknown", "demo", "reference"]) {
+it("未取込・配置しない素材は納品へ渡さず、運営の許諾がなくてもファイルと配置がある素材は使う", async () => {
+  for (const kind of ["missing", "reference", "unknown"]) {
     const s = await fixture();
     if (kind !== "missing") await attachImageAssetFile(db, clock, s.ops, s.input);
-    if (kind === "demo")
-      await db
-        .update(imageAssets)
-        .set({
-          rightsStatus: "use_approved",
-          allowSalesDemo: true,
-          confirmedBy: s.ops.userId,
-          confirmedAt: clock.now(),
-        })
-        .where(eq(imageAssets.id, s.a.id));
-    if (kind === "reference") {
-      await allow(s);
+    if (kind === "reference")
       await db.update(imageAssets).set({ placement: "reference" }).where(eq(imageAssets.id, s.a.id));
-    }
     const d = await start(s);
-    expect(await loadDeliveryImageAssets(db, d.currentBuildId!, d.id)).toEqual([]);
+    const files = await loadDeliveryImageAssets(db, d.currentBuildId!, d.id);
+    if (kind !== "unknown") expect(files).toEqual([]);
+    else {
+      // 取込直後は運営の許諾が未確認（unknown）でも、権利は納品承認時の顧客同意で確定する
+      expect((await db.select().from(imageAssets).where(eq(imageAssets.id, s.a.id)))[0]!.rightsStatus).toBe("unknown");
+      expect(files).toHaveLength(1);
+      expect(files[0]!.policy).toMatchObject({
+        rightsStatus: "customer_claimed",
+        allowedUses: ["production"],
+        confirmedBy: CUSTOMER_CONSENT_CONFIRMER,
+      });
+      expect(imagePolicySchema.safeParse(files[0]!.policy).success).toBe(true);
+    }
   }
 });
 it("制作開始時の画像と配置を固定し、後から追加・配置変更した素材は混ぜない", async () => {
@@ -143,39 +145,48 @@ it("制作開始時の画像と配置を固定し、後から追加・配置変�
   await db.update(deliveryBuilds).set({ imageAssetSnapshot: null }).where(eq(deliveryBuilds.id, d.currentBuildId!));
   expect(await loadDeliveryImageAssets(db, d.currentBuildId!, d.id)).toEqual([]);
 });
-it("許諾の取消を制作完了・共有・顧客承認・公開記録に反映する", async () => {
+it("運営の許諾の変更では止めず、ファイルの変更を制作完了・共有・顧客承認・公開記録に反映する", async () => {
   const s = await fixture();
   await attachImageAssetFile(db, clock, s.ops, s.input);
-  await allow(s);
   const d = await start(s);
-  const revoke = () => db.update(imageAssets).set({ allowProduction: false }).where(eq(imageAssets.id, s.a.id));
-  await revoke();
+  const [file] = await db.select().from(imageAssetFiles).where(eq(imageAssetFiles.assetId, s.a.id));
+  const tamper = () =>
+    db
+      .update(imageAssetFiles)
+      .set({ sha256: "0".repeat(64) })
+      .where(eq(imageAssetFiles.assetId, s.a.id));
+  const restore = () =>
+    db.update(imageAssetFiles).set({ sha256: file!.sha256 }).where(eq(imageAssetFiles.assetId, s.a.id));
+  await tamper();
   expect(await addDeliveryVersion(db, clock, s.ops, d.id, { artifactDir: "/fixture" })).toMatchObject({
     ok: false,
     error: "image_rights_changed",
   });
-  await allow(s);
+  await restore();
+  // 運営の許諾（本番使用可）を外しても、版の追加・共有は止めない
+  await db.update(imageAssets).set({ allowProduction: false }).where(eq(imageAssets.id, s.a.id));
   const v = must(await addDeliveryVersion(db, clock, s.ops, d.id, { artifactDir: "/fixture" }));
   must(await transitionDelivery(db, clock, s.ops, d.id, "ops_review"));
-  await revoke();
+  await tamper();
   expect(await sendToCustomerReview(db, clock, s.ops, d.id, { versionId: v.id })).toMatchObject({
     ok: false,
     error: "image_rights_changed",
   });
-  await allow(s);
+  await restore();
   const review = must(await sendToCustomerReview(db, clock, s.ops, d.id, { versionId: v.id }));
-  await revoke();
+  await tamper();
   expect((await verifyShareLink(db, clock, review.issued.token)).ok).toBe(false);
-  expect((await decideAsCustomer(db, clock, review.issued.token, { versionId: v.id, decision: "approved" })).ok).toBe(
-    false,
-  );
-  await allow(s);
-  must(await decideAsCustomer(db, clock, review.issued.token, { versionId: v.id, decision: "approved" }));
-  await revoke();
+  const approve = { versionId: v.id, decision: "approved" as const, imageRightsConsent: CUSTOMER_IMAGE_CONSENT };
+  expect((await decideAsCustomer(db, clock, review.issued.token, approve)).ok).toBe(false);
+  await restore();
+  must(await decideAsCustomer(db, clock, review.issued.token, approve));
+  await tamper();
   expect(await recordPublication(db, clock, s.ops, d.id, { environment: "production" })).toMatchObject({
     ok: false,
     error: "image_rights_changed",
   });
+  await restore();
+  must(await recordPublication(db, clock, s.ops, d.id, { environment: "production" }));
 });
 it("他社の画像・破損したファイル・不正な素材記録を採用しない", async () => {
   const s = await fixture(),

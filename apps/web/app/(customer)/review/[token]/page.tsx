@@ -5,7 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CUSTOMER_COMMENT_MAX } from "@/lib/customer/core";
+import { CUSTOMER_COMMENT_MAX, IMAGE_RIGHTS_CONSENT_TEXT, IMAGE_RIGHTS_CONSENT_VERSION } from "@/lib/customer/core";
 import { formatJst, INVALID_LINK_MESSAGE, loadCustomerReview } from "@/lib/customer/review";
 import { getDb } from "@/lib/db";
 import { cn } from "@/lib/utils";
@@ -140,6 +140,7 @@ function Decision({
           versionId={view.versionId}
           versionNumber={view.versionNumber}
           commentMax={CUSTOMER_COMMENT_MAX}
+          imageRightsConsent={{ text: IMAGE_RIGHTS_CONSENT_TEXT, version: IMAGE_RIGHTS_CONSENT_VERSION }}
         />
       );
     case "approved":

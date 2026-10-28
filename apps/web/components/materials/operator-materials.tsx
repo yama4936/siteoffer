@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
 import { reviewCustomerImageAction } from "@/app/image-submission-actions";
 import { Button } from "@/components/ui/button";
-import { controlClass, Input } from "@/components/ui/input";
+import { controlClass } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { readImageSubmission, readOpsImages } from "@/lib/client/material-reads";
 import { fmtDate } from "@/lib/ops/format";
@@ -102,7 +102,7 @@ export function OperatorMaterials({
         r.replayed
           ? `受付済みの結果を確認しました。現在の状態：${materialStatus[r.item.status]}`
           : input.decision === "accepted"
-            ? "画像と利用許可を確認しました。画像素材台帳で配置先を指定できます。"
+            ? "画像を受理しました。画像素材台帳で配置先を指定できます。"
             : "説明の追加を依頼しました。顧客の素材一覧に確認内容が表示されます。",
       );
       if (r.item.status === "accepted") setSavedCompany(input.companyId);
@@ -159,7 +159,7 @@ export function OperatorMaterials({
     setFormVersion((version) => version + 1);
     setDirty(true);
     setComparison(null);
-    setMessage("確認メモを引き継ぎました。まだ保存していません。確認結果・用途・確認チェックを選び直してください。");
+    setMessage("確認メモを引き継ぎました。まだ保存していません。確認結果を選び直してください。");
   }
   function finishComparison() {
     if (!comparison || !window.confirm("未保存の確認メモを破棄して最新状況を表示しますか？")) return;
@@ -250,7 +250,7 @@ export function OperatorMaterials({
               <p className="text-sm font-medium">{rightsLabels[item.rightsBasis]}</p>
               <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">{item.rightsNote}</p>
               <p className="mt-3 text-sm">
-                顧客が許可した用途：
+                顧客が申告した用途：
                 {[item.requestedDemo && "営業デモ", item.requestedProduction && "本番サイト"]
                   .filter(Boolean)
                   .join("・")}
@@ -278,7 +278,7 @@ export function OperatorMaterials({
                 setDirty(false);
               }}
             >
-              {selected === item.assetId ? "確認の入力を閉じる" : "画像・利用許可を確認する"}
+              {selected === item.assetId ? "確認の入力を閉じる" : "受理・説明の依頼を入力する"}
             </Button>
           )}
           {selected === item.assetId && item.status === "pending" && (
@@ -299,9 +299,6 @@ export function OperatorMaterials({
                   requestId: crypto.randomUUID(),
                   decision: String(fd.get("decision")) as "accepted" | "needs_changes",
                   note: String(fd.get("note") ?? ""),
-                  allowDemo: fd.get("allowDemo") === "on",
-                  allowProduction: fd.get("allowProduction") === "on",
-                  confirmed: fd.get("confirmed") === "on",
                 });
               }}
             >
@@ -314,33 +311,10 @@ export function OperatorMaterials({
                     <option value="" disabled>
                       選択してください
                     </option>
-                    <option value="accepted">画像と利用許可を確認した</option>
+                    <option value="accepted">受理する（顧客が申告した用途で使う）</option>
                     <option value="needs_changes">説明の追加・修正を依頼する</option>
                   </NativeSelect>
                 </div>
-                <fieldset className="space-y-2">
-                  <legend className="mb-2 text-sm font-medium">確認済みの用途（採用する場合）</legend>
-                  <label htmlFor={`demo-${item.assetId}`} className="flex gap-2 text-sm">
-                    <Input
-                      id={`demo-${item.assetId}`}
-                      type="checkbox"
-                      name="allowDemo"
-                      disabled={!item.requestedDemo}
-                      defaultChecked={resumed?.assetId === item.assetId ? false : item.requestedDemo}
-                    />
-                    営業デモ {!item.requestedDemo && "（顧客の許可なし）"}
-                  </label>
-                  <label htmlFor={`production-${item.assetId}`} className="flex gap-2 text-sm">
-                    <Input
-                      id={`production-${item.assetId}`}
-                      type="checkbox"
-                      name="allowProduction"
-                      disabled={!item.requestedProduction}
-                      defaultChecked={resumed?.assetId === item.assetId ? false : item.requestedProduction}
-                    />
-                    本番サイト {!item.requestedProduction && "（顧客の許可なし）"}
-                  </label>
-                </fieldset>
                 <div className="space-y-2">
                   <label htmlFor={`note-${item.assetId}`} className="text-sm font-medium">
                     顧客に伝える確認内容
@@ -353,13 +327,9 @@ export function OperatorMaterials({
                     minLength={5}
                     maxLength={2000}
                     className={`${controlClass} min-h-24`}
-                    placeholder="確認した許可の内容、または追加で必要な説明を記入"
+                    placeholder="受理の連絡、または追加で必要な説明を記入"
                   />
                 </div>
-                <label htmlFor={`confirm-${item.assetId}`} className="flex items-start gap-2 text-sm leading-6">
-                  <Input id={`confirm-${item.assetId}`} name="confirmed" type="checkbox" required className="mt-1" />
-                  実際の画像と申告内容を確認しました。採用する場合は、その用途で利用できることを確認しました。
-                </label>
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit">確認結果を保存</Button>
                   <Button type="button" data-material-compare variant="outline" onClick={() => void compare(item)}>

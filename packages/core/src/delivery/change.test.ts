@@ -16,7 +16,7 @@ import {
   sendToCustomerReview,
   transitionDelivery,
 } from "./delivery.ts";
-import { seedDeliveryBase } from "./test-helpers.ts";
+import { CUSTOMER_IMAGE_CONSENT, seedDeliveryBase } from "./test-helpers.ts";
 
 let db: Db, close: () => Promise<void>;
 const clock = fixedClock("2026-10-17T00:00:00Z");
@@ -35,7 +35,13 @@ async function setup(status: "ready" | "published" | "delivered" = "ready") {
   const v = must(await addDeliveryVersion(db, clock, b.ops, d.id, { artifactDir: "/fixture/approved" }));
   must(await transitionDelivery(db, clock, b.ops, d.id, "ops_review"));
   const sent = must(await sendToCustomerReview(db, clock, b.ops, d.id, { versionId: v.id }));
-  must(await decideAsCustomer(db, clock, sent.issued.token, { versionId: v.id, decision: "approved" }));
+  must(
+    await decideAsCustomer(db, clock, sent.issued.token, {
+      versionId: v.id,
+      decision: "approved",
+      imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+    }),
+  );
   if (status !== "ready")
     must(await recordPublication(db, clock, b.ops, d.id, { environment: "fixture", url: "https://example.test" }));
   if (status === "delivered") must(await transitionDelivery(db, clock, b.ops, d.id, "delivered"));
@@ -89,7 +95,13 @@ it.each(["ready", "published", "delivered"] as const)(
     const v2 = must(await addDeliveryVersion(db, clock, s.ops, s.d.id, { artifactDir: "/fixture/changed" }));
     must(await transitionDelivery(db, clock, s.ops, s.d.id, "ops_review"));
     const next = must(await sendToCustomerReview(db, clock, s.ops, s.d.id, { versionId: v2.id }));
-    must(await decideAsCustomer(db, clock, next.issued.token, { versionId: v2.id, decision: "approved" }));
+    must(
+      await decideAsCustomer(db, clock, next.issued.token, {
+        versionId: v2.id,
+        decision: "approved",
+        imageRightsConsent: CUSTOMER_IMAGE_CONSENT,
+      }),
+    );
     const done = must(await getDeliveryDetail(db, s.ops, s.d.id));
     expect(done.changes[0]).toMatchObject({ id: saved.id, approvedVersionId: v2.id, approvedAt: clock.now() });
     expect(done.approvals).toHaveLength(2);
