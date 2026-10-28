@@ -733,3 +733,56 @@
   color: #586b90;
   overflow-wrap: anywhere;
 }
+/* 企業詳細：顧客の管理画面のアカウント（表示だけ・T23の(d)） */
+.sales-customer-accounts {
+  display: grid;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid #e3e8f2;
+}
+.sales-customer-accounts h3 {
+  font-weight: 650;
+}
+.sales-customer-accounts ul {
+  display: grid;
+  gap: 8px;
+}
+.sales-customer-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 12px;
+  border: 1px solid #e3e8f2;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.sales-customer-account.stopped {
+  color: #70809c;
+}
+.sales-customer-role {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #edf2ff;
+  color: #3157de;
+  font-size: 12px;
+  font-weight: 650;
+}
+.sales-customer-state {
+  font-size: 12px;
+  color: #586b90;
+}
+.sales-customer-roles {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.sales-customer-roles div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.sales-customer-roles dt {
+  font-weight: 650;
+}

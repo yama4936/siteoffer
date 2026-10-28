@@ -1,8 +1,10 @@
+import { ContentError, loadSalesContentAccess } from "@siteoffer/core";
 import { ArrowRight, ExternalLink as ExternalLinkIcon } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CompanyQueue } from "@/components/sales/company-directory-parts";
 import { CompanyWorkspace } from "@/components/sales/company-workspace";
+import { CustomerAccounts, type CustomerAccountsData } from "@/components/sales/customer-accounts";
 import { ClaimButton } from "@/components/sales/forms";
 import { ProposalSharePanel } from "@/components/sales/share-panel";
 import {
@@ -23,6 +25,19 @@ import { requireUser } from "@/lib/session";
 import { claimAction, issueShareAction, revokeShareAction } from "../../../actions";
 
 export const metadata = { title: "提案・サイト比較 | SiteOffer" };
+/** 顧客アカウントの表示（T23の(d)）。見られない企業（ContentError）は欄ごと出さず、想定外の失敗でも画面全体は壊さない */
+async function loadCustomerAccounts(
+  ...args: Parameters<typeof loadSalesContentAccess>
+): Promise<CustomerAccountsData | null> {
+  try {
+    const r = await loadSalesContentAccess(...args);
+    return { status: "ok", access: r.access };
+  } catch (e) {
+    if (e instanceof ContentError) return null;
+    console.error("顧客アカウントの読み込みに失敗しました", e);
+    return { status: "error" };
+  }
+}
 export default async function CompanyDetailPage({
   params,
   searchParams,
@@ -39,9 +54,10 @@ export default async function CompanyDetailPage({
   if (!r.ok) notFound();
   const d = r.value;
   const c = d.company;
-  const [imp, queue] = await Promise.all([
+  const [imp, queue, customerAccounts] = await Promise.all([
     getImprovementSource(db, user.actor, companyId),
     listSellableCompanies(db, user.actor, query),
+    loadCustomerAccounts(db, user.actor, companyId),
   ]);
   if (!queue.ok) notFound();
   const available = await getImprovementAvailability(imp.ok ? imp.value.artifactDir : null);
@@ -163,6 +179,7 @@ export default async function CompanyDetailPage({
                 : "不明"}
             </dd>
           </DescriptionList>
+          {customerAccounts && <CustomerAccounts data={customerAccounts} now={Date.now()} />}
         </>
       }
       audit={
