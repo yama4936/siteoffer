@@ -1,9 +1,11 @@
-import { BriefcaseBusiness, Building2, CircleHelp, MessageCircle, ShieldCheck, Wallet } from "lucide-react";
+import { BriefcaseBusiness, Building2, CircleHelp, LogOut, MessageCircle, ShieldCheck, Wallet } from "lucide-react";
 import type { ReactNode } from "react";
+import { logoutAction } from "@/app/(auth)/actions";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { OpsFrame } from "@/components/ops/frame";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
+import { Button } from "@/components/ui/button";
 
 const NAV = [
   { href: "/sales/companies", label: "企業・案件", icon: Building2 },
@@ -55,6 +57,11 @@ export function SalesShell({
               <strong>{userName}</strong>
               <small>営業パートナー</small>
             </div>
+            <form action={logoutAction}>
+              <Button type="submit" variant="ghost" size="icon" aria-label="ログアウト">
+                <LogOut />
+              </Button>
+            </form>
           </div>
         </>
       }
