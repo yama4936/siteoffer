@@ -6,7 +6,6 @@ import {
   Images,
   KeyRound,
   LayoutDashboard,
-  LogOut,
   MessageCircle,
   Newspaper,
   PackageCheck,
@@ -17,14 +16,13 @@ import {
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { logoutAction } from "@/app/(auth)/actions";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { PendingMaterialBadge } from "@/components/materials/pending-badge";
 import { OpsFrame } from "@/components/ops/frame";
+import { AccountMenu } from "@/components/shell/account-menu";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 
 /** 運営画面の共通部品（Tailwind ＋ shadcn/ui） */
 
@@ -44,7 +42,6 @@ export const NAV_ITEMS = [
   { href: "/ops/history", label: "操作履歴を探す", icon: History },
   { href: "/ops/backups", label: "バックアップ", icon: DatabaseBackup },
   { href: "/ops/account-recovery", label: "ログイン復旧", icon: KeyRound },
-  { href: "/account/security", label: "安全設定", icon: ShieldCheck },
 ] as const;
 
 const NAV_GROUPS = [
@@ -53,7 +50,7 @@ const NAV_GROUPS = [
   { label: "制作・運用", hrefs: ["/ops/materials", "/ops/delivery", "/ops/publication-checks", "/ops/content"] },
   {
     label: "管理",
-    hrefs: ["/ops/settings", "/ops/history", "/ops/backups", "/ops/account-recovery", "/account/security"],
+    hrefs: ["/ops/settings", "/ops/history", "/ops/backups", "/ops/account-recovery"],
   },
 ];
 
@@ -112,18 +109,7 @@ export function OpsShell({
               </section>
             ))}
           </nav>
-          <div className="ops-account">
-            <span className="ops-avatar">{userName.slice(0, 1)}</span>
-            <div>
-              <strong>{userName}</strong>
-              <small>運営担当</small>
-            </div>
-            <form action={logoutAction}>
-              <Button type="submit" variant="ghost" size="icon" aria-label="ログアウト">
-                <LogOut />
-              </Button>
-            </form>
-          </div>
+          <AccountMenu userName={userName} roleLabel="運営担当" />
         </>
       }
     >

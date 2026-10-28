@@ -1,18 +1,16 @@
-import { BriefcaseBusiness, Building2, CircleHelp, LogOut, MessageCircle, ShieldCheck, Wallet } from "lucide-react";
+import { BriefcaseBusiness, Building2, CircleHelp, MessageCircle, Wallet } from "lucide-react";
 import type { ReactNode } from "react";
-import { logoutAction } from "@/app/(auth)/actions";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { OpsFrame } from "@/components/ops/frame";
+import { AccountMenu } from "@/components/shell/account-menu";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
-import { Button } from "@/components/ui/button";
 
 const NAV = [
   { href: "/sales/companies", label: "企業・案件", icon: Building2 },
   { href: "/sales/assignments", label: "担当案件", icon: BriefcaseBusiness },
   { href: "/sales/consultations", label: "運営への相談", icon: MessageCircle },
   { href: "/sales/earnings", label: "実績・報酬", icon: Wallet },
-  { href: "/account/security", label: "安全設定", icon: ShieldCheck },
 ];
 
 export function SalesShell({
@@ -51,18 +49,7 @@ export function SalesShell({
               <small>案件を選んで内容を確認しましょう。</small>
             </p>
           </div>
-          <div className="ops-account">
-            <span className="ops-avatar">{userName.slice(0, 1)}</span>
-            <div>
-              <strong>{userName}</strong>
-              <small>営業パートナー</small>
-            </div>
-            <form action={logoutAction}>
-              <Button type="submit" variant="ghost" size="icon" aria-label="ログアウト">
-                <LogOut />
-              </Button>
-            </form>
-          </div>
+          <AccountMenu userName={userName} roleLabel="営業パートナー" />
         </>
       }
     >
