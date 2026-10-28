@@ -15,12 +15,12 @@ site-rebuild の手順2〜6で使う。**そのまま貼らない。** 対象サ
 
 ## 1. 材料の読み方
 
-collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの内部リンク一覧は保存されていない**（internal_links は保存時に除かれる）。色はスクリーンショット、メニューはスクリーンショットとページの role / title から読む。
+collected.json は collect.py の出力（`collector` で版を確認する）。**生のHTML・CSSは保存されていない**。0.2 以降はトップの内部リンクを `site.navigation_links_top`（リンク先と文字）に残す。0.1 の出力にはトップの内部リンク一覧もない。色はスクリーンショット、メニューはスクリーンショットとページの role / title から読む。
 
 | 知りたいこと | 見る場所 |
 | --- | --- |
 | ページの種類 | `pages[].role`（top / company / service / works / contact / price / recruit など）、`url`、`title` |
-| 見出し・本文 | `pages[].headings`（h1〜h3、最大60件）、`text_excerpt`（先頭3000字）。`text_length` で本文量の目安 |
+| 見出し・本文 | `pages[].headings`（h1〜h3、最大60件）、`text_excerpt`（`conditions.text_excerpt_chars` の字数。0.1は3000字、0.2の既定は20000字）。`text_length` で本文量の目安 |
 | メニュー | `screenshot-desktop.png` のヘッダー。読み取れなければ role の順（トップ → サービス → 実績 → 料金 → 会社概要 → 採用 → 問い合わせ） |
 | 電話・メール | `tel_links`、`mailto_links`、`phone_numbers_in_text`（FAX番号が混ざることがある。text_excerpt の「TEL」「FAX」表記で区別する） |
 | 問い合わせ・予約 | `cta_links`、`forms`（action・field_names・field_count）、`iframes` |
@@ -30,7 +30,7 @@ collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの�
 | 強み | evaluation の items のうちレベル3、evaluation.md の「強み」 |
 | 施策 | `proposal.json` の `actions[]` と `issues[]` |
 
-`text_excerpt` は3000字で切れている。切れた先の内容を補わない。必要な情報が途中で切れていたら、その内容をHTMLに出さず rebuild.json の確認事項にする。
+`text_excerpt` は上限の字数で切れている（`text_truncated` で判別。0.1 の出力は3000字）。切れた先の内容を補わない。必要な情報が途中で切れていたら、その内容をHTMLに出さず rebuild.json の確認事項にする。
 
 ## 2. 掲載内容の前提
 

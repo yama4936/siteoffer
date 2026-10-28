@@ -193,7 +193,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 ### 必須条件
 
 - `source_profile` は空でない固有語、語調、情報の優先順位、出典を持つ。
-- `source_coverage.status` は `complete | incomplete`。`complete` のとき `missing_sources` は空、`incomplete` のときHTML生成を止める。
+- `source_coverage.status` は `complete | incomplete`。`complete` のとき `missing_sources` は空、`incomplete` のときHTML生成を止め、content-plan.json ではなく `$OUT/rebuild-blocked.json`（site-completeness.md）に記録する。完成した content-plan.json は常に `complete`。
 - `decision_coverage` は `identity | offer | fit | specifics | proof | trust | action` を重複なく持つ。`answered` は既存の `selected_content[].id` を `answered_by` に持ち、`not_applicable` は案件固有の理由を持つ。`missing` があれば完成扱いにしない。
 - `page_plan` は作成する全HTMLと一致し、各ページに目的、答える問い、1件以上のcontent ID、独立させる理由を持つ。
 - `media_plan` は利用可能・除外・不足する重要素材を分ける。生成画像を実績の証拠にしない。
@@ -205,7 +205,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 - `freshness.status` は `current | timeless | unclear`。`unclear` の項目は `selected_content` に入れず `excluded_content` へ移す。
 - `excluded_content[].reason` は `unverified | stale_or_unclear | rights | irrelevant | duplicate | conflicting` のいずれか。
 - `review` の5項目は、実際にHTMLと元サイト由来の材料を照合した後だけ `true` にする。1つでも確認できなければサイトを完成扱いにしない。
-- `readiness.status` は `ready_for_customer_review | incomplete`。主要サービスの説明、企業識別、主要行動に必要な文章を元サイトから作れない場合は `incomplete` とし、`blocking_gaps` に不足を記録してHTML生成・DB取り込みを止める。
+- `readiness.status` は `ready_for_customer_review | incomplete`。主要サービスの説明、企業識別、主要行動に必要な文章を元サイトから作れない場合は `incomplete` とし、HTML生成・DB取り込みを止め、不足を `$OUT/rebuild-blocked.json` の `blocking_gaps`（`stage: content_readiness`）に記録する。
 - `ready_for_customer_review` は顧客へ見せられる文章品質を表す。本番公開可能を意味しない。顧客確認、権利、問い合わせ機能等の残件は `production_blockers` に記録する。
 
 `content-plan.json` は営業用サイトには配信せず、運営レビューと生成記録に使う。

@@ -31,14 +31,23 @@ OUT=reports/sites/$DOMAIN/$DATE
 python3 <skill>/scripts/collect.py <URL> --out $OUT --screenshot --psi
 ```
 
-- `collected.json` に、トップと重要ページ（会社概要・サービス・実績・問い合わせ・料金・採用）の観測事実が入る。
+- `collected.json` に、トップと重要ページ（会社概要・サービス・実績・問い合わせ・料金・採用）、トップのメニュー順の他ページ、取得したページの配下のページ（実績の区分など）の観測事実が入る。上限は `config/site-evaluation.json` の `collection.max_pages`（15）、本文は `text_excerpt_chars`（20000字）まで。切れたページは `text_truncated: true`。
+- 改善後サイトの制作（site-rebuild）は collected.json の本文だけを材料にする。主メニューのページが上限で取れなかった場合は、手順2の追記で補う。
 - `fatal` が出たら、`status: "unevaluable"` の evaluation.json を作り、理由を書いて終える（robots.txt の拒否、非公開アドレス、取得失敗など）。
 - `--psi` は外部API（PageSpeed Insights）を使う。APIキーなしでは HTTP 429 で失敗しやすいため、環境変数 `PSI_API_KEY` を設定しておく。失敗しても続行し、E1 は代替の根拠（参考評価）か評価不能にする。
 - スクリーンショットが撮れたら Read で画像を見て、D2・G3・A1（ファーストビューの見え方）の根拠に使う。
 
 ### 2. 読み込み
 
-`references/rubric.md` を読み、各項目の基準を確認する。collected.json だけで判断できないとき（文章の分かりやすさ、事例の具体性など）は `text_excerpt` と見出しを読み、必要なら WebFetch で該当ページを追加確認する。追加確認したURLは observations に残す。
+`references/rubric.md` を読み、各項目の基準を確認する。collected.json だけで判断できないとき（文章の分かりやすさ、事例の具体性など）は `text_excerpt` と見出しを読む。足りなければ、該当ページを collected.json へ本文ごと追記してから確認する。
+
+```bash
+python3 <skill>/scripts/collect.py <URL> --out $OUT --add-url <ページURL> [--add-url ...] --reason "<評価項目・理由>"
+```
+
+- 評価の根拠にしたページは、必ず collected.json に入っている状態にする。WebFetch で読んだだけのページは本文が残らず、site-rebuild で使えない。
+- JavaScript で描画されるなど collect.py で本文が取れないときだけ WebFetch で確認し、observations に「本文は collected.json に未保存」と書く。
+- 追加確認したURLは observations に残す。
 
 ### 3. 目的の推定
 

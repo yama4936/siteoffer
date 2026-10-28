@@ -11,9 +11,44 @@ site-rebuild の手順2〜6で使う。ページ数や文字数を増やすこ�
 - `cta_links`、画像のリンク先、フレーム・iframe、クエリ文字列で内容を切り替える旧式サイト
 - evaluation / proposal が言及するサービス、実績、会社情報、採用、保証、問い合わせ等
 
-ナビゲーションや評価根拠に存在する主要ページが未取得、本文が空、フレーム内だけ未取得、画像リンク先の事例が未取得なら、薄いデモを作って補わない。`content-plan.json.source_coverage` を `incomplete` とし、追加収集が必要なURLまたはメニュー名を `missing_sources` に記録してHTML生成を止める。
+ナビゲーションや評価根拠に存在する主要ページが未取得、本文が空、フレーム内だけ未取得、画像リンク先の事例が未取得なら、薄いデモを作って補わない。HTML生成を止め、追加収集が必要なURLまたはメニュー名を `$OUT/rebuild-blocked.json`（下記）の `missing_sources` に記録する。
+
+URLが分かる未取得ページは、止める前に site-evaluation の collect.py `--add-url` で collected.json へ追記して補ってよい（元サイトの公開ページを、同じ取得条件で1回取るだけ）。追記で揃えば止めずに続ける。追記してもJavaScript描画などで本文が取れないものだけを止める理由にする。
 
 取得済みページに本文がなくても、スクリーンショット上のメニュー名だけを根拠に説明文を創作しない。メニュー名は「不足している情報の手掛かり」であり、完成原稿の根拠ではない。
+
+## 止めたときの記録（rebuild-blocked.json）
+
+取得網羅性や完成原稿の材料が足りずに止めるときは、`$OUT/site/` を作らない（作りかけがあれば削除する）。HTMLのない `site/` や、選定途中の content-plan.json を残さない。代わりに `$OUT/rebuild-blocked.json` を書き、検査する。
+
+```json
+{
+  "schema_version": "0.1",
+  "status": "blocked",
+  "stage": "source_coverage",
+  "checked_at": "2026-10-28T13:00:00+09:00",
+  "collected_ref": {"collector": "site-evaluation/scripts/collect.py 0.2", "pages": 6},
+  "missing_sources": [
+    {"label": "施工の流れ", "url": "https://example.co.jp/flow", "found_in": "スクリーンショットの主メニュー", "reason": "未取得", "needed_for": ["specifics"]}
+  ],
+  "blocking_gaps": [
+    {"question": "proof", "reason": "実績の区分ページと事例詳細が未取得で、実績を判断できない"}
+  ],
+  "next_actions": [
+    {"action": "collect_add_url", "urls": ["https://example.co.jp/flow"], "command": "python3 .agents/skills/site-evaluation/scripts/collect.py <URL> --out $OUT --add-url https://example.co.jp/flow --reason \"site-rebuild 取得網羅性\""}
+  ]
+}
+```
+
+- `stage` は `source_coverage`（主要ページ・本文の未取得）か `content_readiness`（取得済みだが完成原稿の材料がない）。
+- `missing_sources` は1件以上。`label`・`found_in`・`reason` を必須とし、URLが分からないメニューは `url: null`。`needed_for` は2章の判断項目ID。
+- `blocking_gaps[].question` は2章の判断項目ID（identity / offer / fit / specifics / proof / trust / action）。
+- `next_actions[].action` は `collect_add_url`（collect.py の追記で補えるもの）か `customer_confirmation`（顧客に聞くしかないもの）。`collect_add_url` は `urls` を持つ。
+- 追記収集のあとで再実行するときは、`rebuild-blocked.json` を残したまま手順2からやり直し、完成したら削除する。
+
+```bash
+python3 <skill>/scripts/check.py --blocked $OUT/rebuild-blocked.json > $OUT/blocked-check.json; echo "exit=$?"
+```
 
 ## 2. 訪問者の判断を完結させる
 

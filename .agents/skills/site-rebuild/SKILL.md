@@ -59,15 +59,15 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 - `evaluation.json` の `sales_notes.product_fit`・`existing_vendor`、`site_context.primary_conversion_guess`、items の observations
 - `collected.json` の各ページの `forms`（action・入力項目）、`iframes`、`cta_links`、`headings`、`text_excerpt`、`scripts`
 
-注意：現行の collect.py（0.1）は生のHTMLとCSSを保存しない。「HTML」で判断できるのは上の抽出済みの値だけ。分からない点は推測で対象外にせず、reasons に「判定材料不足」と書く。
+注意：collect.py（0.2）は生のHTMLとCSSを保存しない。「HTML」で判断できるのは上の抽出済みの値だけ。分からない点は推測で対象外にせず、reasons に「判定材料不足」と書く。
 
 | 判定 | 例 |
 | --- | --- |
 | 対象外（作らない） | オンライン予約・空き状況の表示が自社サイト内で動いている／決済・カート・EC／会員登録・ログイン・マイページ／物件・商品・求人などのDB検索が主な内容／既存システム連携（在庫・見積もり計算など）が主な導線 |
 | 対象（作る） | 外部の予約サービス・フォームサービス・EC・SNSへの**リンクだけ**（リンクとして残す）／自社サーバーの問い合わせフォーム（tel:・mailto:・元の外部フォームURLへのリンクに置き換える）／お知らせ・ブログ（取得できた範囲を静的に載せる、または外す）／Google マップ等の埋め込み（地図へのリンクに置き換える） |
-| 対象だが運営判断を添える | `product_fit` が「範囲外」でも、理由が規模（多ページ・CMS）だけのとき。取得できたページだけで改善デモを作り、reasons に「初期商品の範囲外（運営判断）。デモは取得済みページのみ」と書いてユーザーに伝える |
+| 対象だが運営判断を添える | `product_fit` が「範囲外」でも、理由が規模（多ページ・CMS）だけのとき。reasons に「初期商品の範囲外（運営判断）」と書いてユーザーに伝える。取得網羅性（`references/site-completeness.md`）は通常どおり必要で、取得済みページだけで薄いデモを作らない |
 
-`$OUT/rebuild-scope.json` に結果を書く。
+`$OUT/rebuild-scope.json` に結果を書く。過去の日付の rebuild-scope.json をコピーした場合も流用せず、現在の規則で判定し直して上書きする（`judged_at` を更新する）。
 
 ```json
 {
@@ -89,7 +89,7 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 
 - **配色・雰囲気**：スクリーンショット（Read で画像を見る）のヘッダー・ボタン・見出し・背景の色。主色・補助色・強調色・背景色・文字色を決める。読み取った色は近似値なので `approximate: true`。
 - **ナビゲーション構成**：デスクトップのスクリーンショットのメニュー表記と、collected.json のページの `role`・`title`・`headings`。
-- **各ページの見出しと本文**：`headings` と `text_excerpt`（先頭3000字まで）。
+- **各ページの見出しと本文**：`headings` と `text_excerpt`（`conditions.text_excerpt_chars` の字数まで。0.2の既定は20000字。切れたページは `text_truncated: true`）。
 - **元サイトの文章特性**：繰り返される固有語、サービスの呼称、対象顧客、約束している範囲、敬体・常体、簡潔・専門的・親しみ等の語調。本文が取得上限で切れている場合は、その先を推測しない。
 - **連絡先**：`tel_links`・`mailto_links`・`phone_numbers_in_text`・`cta_links`・`forms` の action、evaluation の observations。
 - **企業情報**：`evaluation.json` の `company`（名称・所在地とその出典）。
@@ -113,14 +113,14 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 - `source_profile` に元サイトの固有語、語調、情報の優先順位と根拠を記録する。各 `selected_content` には `source_fidelity` を持たせ、どの語と意味を保持し、何を編集したかを説明する。
 - 元サイトに見出しやメニュー名しかなく、サービス本文を確認できない場合は、名称を一覧として使うだけにする。「〜に関する案内です」「お客様に寄り添います」などの説明を補わない。
 - 完成後に、HTMLだけを顧客へ見せても草稿・生成途中・制作会社の説明に見えないかを全文で確認する。`review.presentation_ready` と `review.source_fidelity_reviewed` は、この照合後だけ true にする。
-- `source_coverage` で、ナビゲーション・評価根拠・取得ページの一致を確認する。未取得の主要ページや空本文があれば `incomplete` として止める。
+- `source_coverage` で、ナビゲーション・評価根拠・取得ページの一致を確認する。未取得の主要ページは collect.py `--add-url` で追記して補い、それでも取れない主要ページや空本文があれば止める。止めるときは content-plan.json と `site/` を残さず、`references/site-completeness.md` の `$OUT/rebuild-blocked.json` を書いて `check.py --blocked` で検査する。
 - `decision_coverage` で、企業識別、依頼内容、対象、具体条件、実績・根拠、会社の信頼情報、次の行動を確認する。必要な問いが未回答のまま完成扱いにしない。
 - `page_plan` で各ページの目的・答える問い・使用するcontent ID・独立ページにする理由を決める。トップへ情報を詰め込むことも、薄いページを水増しすることも避ける。
 - `media_plan` で、事例等に使える許諾済み画像と、不足する重要画像を分ける。生成画像を実績写真の代わりにしない。
 - `update_plan` で、固定項目・記事・画像をSiteOffer共通の顧客管理画面へつなぐ構成と接続状態を記録する。静的HTMLだけなら「編集可能」と報告しない。
 
 `content-plan.json` が完成するまでHTMLを書かない。公開本文、title、description、CTA、構造化データは `selected_content` の範囲だけで作る。
-元サイトの材料不足で主要サービスの説明を完成できない場合は `readiness.status: incomplete` としてHTML生成・DB取り込みを止め、必要な追加取得または顧客確認を報告する。`ready_for_customer_review` は文章品質の判定であり、本番公開・権利許諾・顧客承認済みを意味しない。
+元サイトの材料不足で主要サービスの説明を完成できない場合は HTML生成・DB取り込みを止め、`rebuild-blocked.json`（`stage: content_readiness`）に必要な追加取得または顧客確認を記録して報告する。`ready_for_customer_review` は文章品質の判定であり、本番公開・権利許諾・顧客承認済みを意味しない。
 
 ### 4. デザイン方針と画像を決める
 

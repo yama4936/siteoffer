@@ -6,6 +6,13 @@
 使い方:
   python3 collect.py https://example.co.jp --out reports/sites/example.co.jp/2026-10-14 \
       [--config config/site-evaluation.json] [--screenshot] [--psi]
+
+  # 評価・制作で追加確認したページを、既存の collected.json へ本文ごと追記する
+  python3 collect.py https://example.co.jp --out reports/sites/example.co.jp/2026-10-14 \
+      --add-url https://example.co.jp/flow/ [--add-url ...] --reason "B3の根拠"
+
+ページの選び方: 種類ごとの重要ページ（PAGE_HINTS）→ トップのメニュー順の内部リンク
+→ 取得済みページの配下（URLのパスが続くもの）の順に、max_pages まで取得する。
 """
 import argparse
 import datetime as dt
@@ -262,7 +269,7 @@ class PageParser(HTMLParser):
             self.text.append(s)
 
 
-def analyze_page(url, status, body, meta):
+def analyze_page(url, status, body, meta, excerpt_chars=3000):
     page = {"url": url, "final_url": meta.get("final_url"), "status": status,
             "elapsed_ms": meta.get("elapsed_ms"), "error": meta.get("error"),
             "bytes": len(body), "last_modified": meta.get("headers", {}).get("last-modified")}
@@ -313,24 +320,61 @@ def analyze_page(url, status, body, meta):
         "uses_table_layout_hint": html.lower().count("<table") >= 5,
         "flash_or_frames": bool(re.search(r"<frameset|\.swf", html, re.I)),
         "text_length": len(text),
-        "text_excerpt": text[:3000],
+        "text_excerpt": text[:excerpt_chars],
+        "text_truncated": len(text) > excerpt_chars,
     })
     return page, p
 
 
+FILE_RE = re.compile(r"\.(pdf|jpe?g|png|gif|webp|svg|zip|docx?|xlsx?|pptx?|mp4|mp3)$", re.I)
+
+
+def page_key(u):
+    """同じページの重複を避けるための正規化（フラグメント・末尾スラッシュ・index.* を無視）。"""
+    sp = urllib.parse.urlsplit(u.split("#")[0])
+    path = re.sub(r"/(index|default)\.(html?|php|aspx?)$", "/", sp.path or "/", flags=re.I)
+    return (sp.hostname or "", path.rstrip("/") or "/", sp.query)
+
+
+def candidate_links(page):
+    for l in page.get("internal_links", []):
+        u = l["href"].split("#")[0]
+        if u and not FILE_RE.search(urllib.parse.urlsplit(u).path):
+            yield u, l
+
+
 def pick_pages(top_page, max_pages):
-    """トップから重要ページ候補を種類ごとに1件ずつ選ぶ。"""
-    picked, seen = {}, {top_page.get("final_url")}
+    """トップから取得するページを選ぶ。種類ごとの重要ページを先に、残りはメニュー順。"""
+    picked, seen = [], {page_key(top_page.get("final_url") or top_page.get("url") or "")}
     for kind, words in PAGE_HINTS.items():
-        for l in top_page.get("internal_links", []):
-            u = l["href"].split("#")[0]
+        for u, l in candidate_links(top_page):
             hay = (l["text"] + " " + urllib.parse.unquote(u)).lower()
-            if u not in seen and any(w.lower() in hay for w in words) \
-                    and not re.search(r"\.(pdf|jpe?g|png|gif|zip|docx?|xlsx?)$", u, re.I):
-                picked[kind] = u
-                seen.add(u)
+            if page_key(u) not in seen and any(w.lower() in hay for w in words):
+                picked.append((kind, u))
+                seen.add(page_key(u))
                 break
-    return list(picked.items())[: max_pages - 1]
+    for u, _ in candidate_links(top_page):
+        if page_key(u) not in seen:
+            picked.append(("nav", u))
+            seen.add(page_key(u))
+    return picked[: max_pages - 1]
+
+
+def pick_children(pages, seen, limit):
+    """取得済みページの配下（パスが続く）の内部リンクを選ぶ。実績の区分・事例詳細など。"""
+    out = []
+    for pg, links in pages:
+        base = urllib.parse.urlsplit(pg.get("final_url") or pg["url"]).path.rstrip("/")
+        if not base:
+            continue
+        for u, _ in links:
+            if len(out) >= limit:
+                return out
+            path = urllib.parse.urlsplit(u).path
+            if path.startswith(base + "/") and page_key(u) not in seen:
+                out.append(("child", u))
+                seen.add(page_key(u))
+    return out
 
 
 # ---------- 任意: スクリーンショット・PSI ----------
@@ -392,6 +436,9 @@ def main():
     ap.add_argument("--config", default="config/site-evaluation.json")
     ap.add_argument("--screenshot", action="store_true")
     ap.add_argument("--psi", action="store_true")
+    ap.add_argument("--add-url", action="append", default=[],
+                    help="既存の collected.json へ追記するページ（同じサイトのみ、複数可）")
+    ap.add_argument("--reason", default="", help="--add-url の理由（評価項目や不足した情報）")
     a = ap.parse_args()
 
     cfg = {}
@@ -402,13 +449,18 @@ def main():
     fetcher = Fetcher(cfg.get("user_agent", "SiteOfferAudit/0.1"),
                       cfg.get("timeout_seconds", 15), cfg.get("delay_seconds", 1.0))
     result = {"target_url": a.url, "collected_at": dt.datetime.now(JST).isoformat(timespec="seconds"),
-              "collector": "site-evaluation/scripts/collect.py 0.1",
+              "collector": "site-evaluation/scripts/collect.py 0.2",
               "conditions": {"user_agent": fetcher.ua, "max_pages": cfg.get("max_pages", 6),
+                             "text_excerpt_chars": cfg.get("text_excerpt_chars", 3000),
                              "static_html_only": True}, "pages": [], "site": {}}
+    excerpt = result["conditions"]["text_excerpt_chars"]
 
     def save():
         with open(os.path.join(a.out, "collected.json"), "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
+
+    if a.add_url:
+        return add_pages(a, fetcher, excerpt)
 
     try:
         assert_public_host(a.url)
@@ -425,7 +477,7 @@ def main():
         return 3
 
     status, body, meta = fetcher.raw(a.url)
-    top, _ = analyze_page(a.url, status, body, meta)
+    top, _ = analyze_page(a.url, status, body, meta, excerpt)
     top["role"] = "top"
     result["pages"].append(top)
     if status != 200:
@@ -448,15 +500,28 @@ def main():
         s, _, m = fetcher.raw("http://" + fp.netloc + "/", method="HEAD")
         result["site"]["http_redirects_to_https"] = (m.get("final_url") or "").startswith("https://")
 
-    for kind, u in pick_pages(top, result["conditions"]["max_pages"]):
+    max_pages = result["conditions"]["max_pages"]
+    picked = pick_pages(top, max_pages)
+    seen = {page_key(final)} | {page_key(u) for _, u in picked}
+    fetched = []
+
+    def fetch(kind, u):
         if not fetcher.allowed(u):
             result["pages"].append({"url": u, "role": kind, "skipped": "robots.txt"})
-            continue
+            return
         s, b, m = fetcher.raw(u)
-        pg, _ = analyze_page(u, s, b, m)
+        pg, _ = analyze_page(u, s, b, m, excerpt)
         pg["role"] = kind
+        fetched.append((pg, list(candidate_links(pg))))
         pg.pop("internal_links", None)
         result["pages"].append(pg)
+
+    for kind, u in picked:
+        fetch(kind, u)
+    for kind, u in pick_children(fetched, seen, max_pages - len(result["pages"])):
+        fetch(kind, u)
+    result["site"]["navigation_links_top"] = [
+        {"href": u, "text": l["text"][:80]} for u, l in candidate_links(top)][:60]
     top_links = top.pop("internal_links", [])
     result["site"]["internal_link_count_top"] = len(top_links)
 
@@ -504,6 +569,51 @@ def main():
     print(json.dumps({"saved": os.path.join(a.out, "collected.json"),
                       "pages": [(p.get("role"), p.get("status")) for p in result["pages"]]},
                      ensure_ascii=False))
+    return 0
+
+
+def add_pages(a, fetcher, excerpt):
+    """既存の collected.json に、指定ページを本文ごと追記する。トップや他のページは取り直さない。"""
+    path = os.path.join(a.out, "collected.json")
+    if not os.path.isfile(path):
+        print(json.dumps({"fatal": f"collected.json がない：{path}"}, ensure_ascii=False))
+        return 2
+    with open(path, encoding="utf-8") as f:
+        result = json.load(f)
+    site_url = (result.get("site") or {}).get("final_url") or result.get("target_url") or a.url
+    host = urllib.parse.urlsplit(site_url).hostname
+    known = {page_key(p.get("final_url") or p.get("url") or "") for p in result.get("pages", [])}
+    known |= {page_key(p.get("url") or "") for p in result.get("pages", [])}
+    added = []
+    for u in a.add_url:
+        if urllib.parse.urlsplit(u).hostname != host:
+            added.append({"url": u, "skipped": "other_host"})
+            continue
+        if page_key(u) in known:
+            added.append({"url": u, "skipped": "already_collected"})
+            continue
+        try:
+            if not fetcher.allowed(u):
+                result["pages"].append({"url": u, "role": "additional", "skipped": "robots.txt"})
+                added.append({"url": u, "skipped": "robots.txt"})
+                continue
+            s, b, m = fetcher.raw(u)
+        except UnsafeTarget as e:
+            added.append({"url": u, "skipped": f"unsafe_target: {e}"})
+            continue
+        pg, _ = analyze_page(u, s, b, m, excerpt)
+        pg.pop("internal_links", None)
+        pg.update({"role": "additional", "added_at": dt.datetime.now(JST).isoformat(timespec="seconds"),
+                   "added_reason": a.reason})
+        result["pages"].append(pg)
+        known.add(page_key(u))
+        added.append({"url": u, "status": s})
+    result.setdefault("additional_collections", []).append({
+        "at": dt.datetime.now(JST).isoformat(timespec="seconds"),
+        "collector": "site-evaluation/scripts/collect.py 0.2", "reason": a.reason, "results": added})
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    print(json.dumps({"saved": path, "added": added}, ensure_ascii=False))
     return 0
 
 

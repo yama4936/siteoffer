@@ -20,7 +20,8 @@
     "G_accessibility": 10
   },
   "collection": {
-    "max_pages": 6,
+    "max_pages": 15,
+    "text_excerpt_chars": 20000,
     "timeout_seconds": 15,
     "delay_seconds": 1.0,
     "user_agent": "SiteOfferAudit/0.1 (+site evaluation; contact: operator)"

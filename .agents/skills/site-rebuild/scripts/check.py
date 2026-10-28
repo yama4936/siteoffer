@@ -16,6 +16,7 @@
 
 使い方:
   python3 check.py reports/sites/<domain>/<date>/site
+  python3 check.py --blocked reports/sites/<domain>/<date>/rebuild-blocked.json   # 停止記録の検査
 
 出力: 標準出力に JSON。errors があれば終了コード1、引数の誤りは2。
 Python3 標準ライブラリのみを使う。
@@ -901,7 +902,77 @@ class Checker:
         }
 
 
+DECISION_IDS = ("identity", "offer", "fit", "specifics", "proof", "trust", "action")
+
+
+def check_blocked(path):
+    """取得網羅性・完成原稿の材料不足で止めたときの rebuild-blocked.json を検査する。"""
+    errors = []
+
+    def err(msg):
+        errors.append({"file": "rebuild-blocked.json", "line": None, "code": "blocked", "message": msg})
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as e:
+        return {"fatal": f"rebuild-blocked.json を読めない：{e}"}, 2
+    if not isinstance(data, dict):
+        data = {}
+        err("JSONオブジェクトにする")
+    if data.get("status") != "blocked":
+        err("status は blocked")
+    if data.get("stage") not in ("source_coverage", "content_readiness"):
+        err("stage は source_coverage か content_readiness")
+    if not isinstance(data.get("checked_at"), str) or not data["checked_at"].strip():
+        err("checked_at がない")
+    missing = data.get("missing_sources")
+    if not isinstance(missing, list) or not missing:
+        err("missing_sources は1件以上の配列にする")
+        missing = []
+    for i, m in enumerate(missing):
+        if not isinstance(m, dict):
+            err(f"missing_sources[{i}] はオブジェクトにする")
+            continue
+        for key in ("label", "found_in", "reason"):
+            if not isinstance(m.get(key), str) or not m[key].strip():
+                err(f"missing_sources[{i}].{key} がない")
+        if m.get("url") is not None and not (isinstance(m["url"], str) and re.match(r"https?://", m["url"])):
+            err(f"missing_sources[{i}].url は http(s) のURLか null")
+        for q in m.get("needed_for") or []:
+            if q not in DECISION_IDS:
+                err(f"missing_sources[{i}].needed_for に不明な判断項目：{q}")
+    gaps = data.get("blocking_gaps")
+    if not isinstance(gaps, list):
+        err("blocking_gaps は配列にする")
+        gaps = []
+    for i, g in enumerate(gaps):
+        if not isinstance(g, dict) or g.get("question") not in DECISION_IDS or not str(g.get("reason") or "").strip():
+            err(f"blocking_gaps[{i}] は判断項目IDの question と reason を持つ")
+    actions = data.get("next_actions")
+    if not isinstance(actions, list) or not actions:
+        err("next_actions は1件以上の配列にする")
+        actions = []
+    for i, a in enumerate(actions):
+        kind = a.get("action") if isinstance(a, dict) else None
+        if kind not in ("collect_add_url", "customer_confirmation"):
+            err(f"next_actions[{i}].action は collect_add_url か customer_confirmation")
+        elif kind == "collect_add_url" and not (isinstance(a.get("urls"), list) and a["urls"]):
+            err(f"next_actions[{i}] の collect_add_url には urls が必要")
+    site = os.path.join(os.path.dirname(os.path.abspath(path)), "site")
+    if os.path.isdir(site):
+        err("停止時は site/ を残さない（作りかけの HTML・content-plan.json を削除する）")
+    result = {"blocked": path, "ok": not errors,
+              "summary": {"errors": len(errors), "missing_sources": len(missing), "blocking_gaps": len(gaps)},
+              "errors": errors}
+    return result, (0 if not errors else 1)
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--blocked":
+        result, code = check_blocked(sys.argv[2])
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return code
     if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
         print(__doc__, file=sys.stderr)
         return 2

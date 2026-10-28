@@ -212,5 +212,44 @@ class ContentPlanCheckTest(unittest.TestCase):
             self.assertTrue(any("email_notification" in message for message in messages))
 
 
+class BlockedRecordCheckTest(unittest.TestCase):
+    RECORD = {
+        "schema_version": "0.1", "status": "blocked", "stage": "source_coverage",
+        "checked_at": "2026-10-28T13:00:00+09:00",
+        "missing_sources": [{"label": "施工の流れ", "url": "https://example.co.jp/flow",
+                             "found_in": "主メニュー", "reason": "未取得", "needed_for": ["specifics"]}],
+        "blocking_gaps": [{"question": "proof", "reason": "実績の詳細が未取得"}],
+        "next_actions": [{"action": "collect_add_url", "urls": ["https://example.co.jp/flow"]}],
+    }
+
+    def run_blocked(self, record, make_site=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            path = root / "rebuild-blocked.json"
+            path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+            if make_site:
+                (root / "site").mkdir()
+            done = subprocess.run(["python3", str(SCRIPT), "--blocked", str(path)],
+                                  capture_output=True, text=True, check=False)
+            return done.returncode, json.loads(done.stdout)
+
+    def test_valid_record_passes(self):
+        code, result = self.run_blocked(self.RECORD)
+        self.assertEqual(code, 0, result)
+
+    def test_leftover_site_and_bad_fields_fail(self):
+        record = dict(self.RECORD, stage="other", next_actions=[{"action": "collect_add_url"}],
+                      blocking_gaps=[{"question": "price", "reason": "x"}])
+        code, result = self.run_blocked(record, make_site=True)
+        self.assertEqual(code, 1)
+        messages = " ".join(e["message"] for e in result["errors"])
+        for word in ("stage", "urls", "blocking_gaps", "site/"):
+            self.assertIn(word, messages)
+
+    def test_missing_sources_required(self):
+        code, _ = self.run_blocked(dict(self.RECORD, missing_sources=[]))
+        self.assertEqual(code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
