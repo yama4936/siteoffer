@@ -12,7 +12,7 @@
   - form 要素（サーバー処理を前提にしていないか）
   - 非公式の改善案である旨の表示
   - 営業用HTMLへの内部確認注記の露出（1件でもエラー）
-  - content-plan.json / design-brief.json / quality-review.json / rebuild.json
+  - content-plan.json / admin-schema.json / design-brief.json / quality-review.json / rebuild.json
 
 使い方:
   python3 check.py reports/sites/<domain>/<date>/site
@@ -73,6 +73,8 @@ class Page(HTMLParser):
         self.forms = []       # (line, attrs)
         self.inline = []      # (line, text) script/style の中身・style 属性
         self.text = []
+        self.field_bindings = set()
+        self.image_bindings = set()
         self._script = None
         self._style = None
 
@@ -81,6 +83,10 @@ class Page(HTMLParser):
         line = self.getpos()[0]
         if "id" in a:
             self.ids.add(a["id"])
+        if a.get("data-siteoffer-field", "").strip():
+            self.field_bindings.add(a["data-siteoffer-field"].strip())
+        if a.get("data-siteoffer-image", "").strip():
+            self.image_bindings.add(a["data-siteoffer-image"].strip())
         if tag == "a" and "name" in a:
             self.ids.add(a["name"])
         if tag == "html":
@@ -355,7 +361,7 @@ class Checker:
             self.err(f, None, "rebuild_json", f"JSON として読めない：{e}")
             return None
         for key in ("pages", "actions_applied", "inherited", "needs_confirmation",
-                    "content_plan_ref", "content_selection"):
+                    "content_plan_ref", "content_selection", "admin_schema_ref", "admin_integration"):
             if key not in rb:
                 self.warn(f, None, "rebuild_json", f"{key} がない")
         for pg in rb.get("pages", []) or []:
@@ -449,6 +455,125 @@ class Checker:
                 if not isinstance(fidelity.get("editorial_changes"), str) or not fidelity["editorial_changes"].strip():
                     self.err("content-plan.json", None, "content_plan", f"{label}.source_fidelity.editorial_changes がない")
 
+        source_coverage = plan.get("source_coverage")
+        if not isinstance(source_coverage, dict):
+            self.err("content-plan.json", None, "content_plan", "source_coverage がない")
+        else:
+            coverage_status = source_coverage.get("status")
+            if coverage_status not in ("complete", "incomplete"):
+                self.err("content-plan.json", None, "content_plan", "source_coverage.status が不正")
+            for key in ("observed_navigation", "collected_sources", "missing_sources"):
+                if not isinstance(source_coverage.get(key), list):
+                    self.err("content-plan.json", None, "content_plan", f"source_coverage.{key} は配列にする")
+            if not isinstance(source_coverage.get("basis"), str) or not source_coverage["basis"].strip():
+                self.err("content-plan.json", None, "content_plan", "source_coverage.basis がない")
+            if coverage_status == "incomplete":
+                self.err("content-plan.json", None, "content_plan", "元サイトの主要情報が未取得のため完成扱いにできない")
+            if coverage_status == "complete" and source_coverage.get("missing_sources"):
+                self.err("content-plan.json", None, "content_plan", "source_coverage.complete の missing_sources は空にする")
+
+        decision_coverage = plan.get("decision_coverage")
+        expected_decisions = {"identity", "offer", "fit", "specifics", "proof", "trust", "action"}
+        decision_ids = set()
+        decision_statuses = {}
+        if not isinstance(decision_coverage, list):
+            self.err("content-plan.json", None, "content_plan", "decision_coverage は配列にする")
+        else:
+            for index, item in enumerate(decision_coverage):
+                label = f"decision_coverage[{index}]"
+                if not isinstance(item, dict):
+                    self.err("content-plan.json", None, "content_plan", f"{label} はオブジェクトでない")
+                    continue
+                decision_id = item.get("id")
+                if decision_id not in expected_decisions or decision_id in decision_ids:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.id が不正または重複：{decision_id}")
+                else:
+                    decision_ids.add(decision_id)
+                status = item.get("status")
+                if decision_id in expected_decisions:
+                    decision_statuses[decision_id] = status
+                answered_by = item.get("answered_by")
+                if status not in ("answered", "not_applicable", "missing"):
+                    self.err("content-plan.json", None, "content_plan", f"{label}.status が不正")
+                if not isinstance(answered_by, list):
+                    self.err("content-plan.json", None, "content_plan", f"{label}.answered_by は配列にする")
+                    answered_by = []
+                unknown = [content_id for content_id in answered_by if content_id not in seen]
+                if unknown:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.answered_by に未定義IDがある：{unknown}")
+                if status == "answered" and not answered_by:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.answered には answered_by が必要")
+                if status == "not_applicable" and (not isinstance(item.get("reason"), str) or not item["reason"].strip()):
+                    self.err("content-plan.json", None, "content_plan", f"{label}.not_applicable には理由が必要")
+                if status == "missing":
+                    self.err("content-plan.json", None, "content_plan", f"{label} が未回答のため完成扱いにできない")
+            missing_decisions = expected_decisions - decision_ids
+            if missing_decisions:
+                self.err("content-plan.json", None, "content_plan", f"decision_coverage に不足がある：{sorted(missing_decisions)}")
+            for decision_id in ("identity", "offer", "trust", "action"):
+                if decision_statuses.get(decision_id) != "answered":
+                    self.err("content-plan.json", None, "content_plan", f"decision_coverage.{decision_id} は answered が必要")
+
+        page_plan = plan.get("page_plan")
+        planned_pages = set()
+        if not isinstance(page_plan, list) or not page_plan:
+            self.err("content-plan.json", None, "content_plan", "page_plan は1件以上必要")
+        else:
+            for index, item in enumerate(page_plan):
+                label = f"page_plan[{index}]"
+                if not isinstance(item, dict):
+                    self.err("content-plan.json", None, "content_plan", f"{label} はオブジェクトでない")
+                    continue
+                page = item.get("file")
+                if not page or page not in self.pages or page in planned_pages:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.file が不正・重複・実在HTMLと不一致：{page}")
+                else:
+                    planned_pages.add(page)
+                for key in ("purpose", "reason_separate"):
+                    if not isinstance(item.get(key), str) or not item[key].strip():
+                        self.err("content-plan.json", None, "content_plan", f"{label}.{key} がない")
+                questions = item.get("audience_questions")
+                if not isinstance(questions, list) or not questions or any(q not in expected_decisions for q in questions):
+                    self.err("content-plan.json", None, "content_plan", f"{label}.audience_questions が不正")
+                content_ids = item.get("content_ids")
+                if not isinstance(content_ids, list) or not content_ids:
+                    self.err("content-plan.json", None, "content_plan", f"{label}.content_ids がない")
+                elif any(content_id not in seen for content_id in content_ids):
+                    self.err("content-plan.json", None, "content_plan", f"{label}.content_ids に未定義IDがある")
+            unplanned_pages = set(self.pages) - planned_pages
+            if unplanned_pages:
+                self.err("content-plan.json", None, "content_plan", f"page_plan にないHTMLがある：{sorted(unplanned_pages)}")
+
+        media_plan = plan.get("media_plan")
+        if not isinstance(media_plan, dict):
+            self.err("content-plan.json", None, "content_plan", "media_plan がない")
+        else:
+            for key in ("usable_assets", "excluded_assets", "missing_essential_assets"):
+                if not isinstance(media_plan.get(key), list):
+                    self.err("content-plan.json", None, "content_plan", f"media_plan.{key} は配列にする")
+            if not isinstance(media_plan.get("notes"), str) or not media_plan["notes"].strip():
+                self.err("content-plan.json", None, "content_plan", "media_plan.notes がない")
+
+        update_plan = plan.get("update_plan")
+        if not isinstance(update_plan, dict):
+            self.err("content-plan.json", None, "content_plan", "update_plan がない")
+        else:
+            mode = update_plan.get("mode")
+            connection_status = update_plan.get("connection_status")
+            if mode not in ("article", "fixed_fields_only"):
+                self.err("content-plan.json", None, "content_plan", "update_plan.mode が不正")
+            if connection_status not in ("planned", "connected_verified"):
+                self.err("content-plan.json", None, "content_plan", "update_plan.connection_status が不正")
+            for key in ("content_types", "placements"):
+                if not isinstance(update_plan.get(key), list):
+                    self.err("content-plan.json", None, "content_plan", f"update_plan.{key} は配列にする")
+            if not isinstance(update_plan.get("migration_required"), bool):
+                self.err("content-plan.json", None, "content_plan", "update_plan.migration_required は真偽値にする")
+            if not isinstance(update_plan.get("reason"), str) or not update_plan["reason"].strip():
+                self.err("content-plan.json", None, "content_plan", "update_plan.reason がない")
+            if mode == "article" and (not update_plan.get("content_types") or not update_plan.get("placements")):
+                self.err("content-plan.json", None, "content_plan", "article には記事種別と表示先が必要")
+
         excluded = plan.get("excluded_content")
         if not isinstance(excluded, list):
             self.err("content-plan.json", None, "content_plan", "excluded_content は配列にする")
@@ -498,6 +623,139 @@ class Checker:
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             self.err(name, None, check, f"JSON として読めない：{e}")
             return None
+
+    def check_admin_schema(self, content_plan):
+        schema = self.read_json("admin-schema.json", check="admin_schema")
+        if not isinstance(schema, dict):
+            return None
+        if schema.get("schema_version") != "0.1":
+            self.err("admin-schema.json", None, "admin_schema", "schema_version は 0.1")
+        if schema.get("integration_status") not in ("planned", "connected_verified"):
+            self.err("admin-schema.json", None, "admin_schema", "integration_status が不正")
+        if not isinstance(schema.get("company_ref"), str) or not schema["company_ref"].strip():
+            self.err("admin-schema.json", None, "admin_schema", "company_ref がない")
+
+        selected_ids = set()
+        if isinstance(content_plan, dict):
+            selected_ids = {
+                item.get("id") for item in content_plan.get("selected_content", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
+        allowed_types = {"short_text", "long_text", "rich_text", "phone", "email", "url",
+                         "hours", "money", "list", "table"}
+        declared_fields, declared_images = set(), set()
+        all_ids = set()
+        fields = schema.get("editable_fields")
+        if not isinstance(fields, list) or not fields:
+            self.err("admin-schema.json", None, "admin_schema", "editable_fields は1件以上必要")
+            fields = []
+        for index, item in enumerate(fields):
+            label = f"editable_fields[{index}]"
+            if not isinstance(item, dict):
+                self.err("admin-schema.json", None, "admin_schema", f"{label} はオブジェクトでない")
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id.strip() or item_id in all_ids:
+                self.err("admin-schema.json", None, "admin_schema", f"{label}.id がない、または重複")
+            else:
+                all_ids.add(item_id)
+                declared_fields.add(item_id)
+            if not item.get("label") or item.get("type") not in allowed_types:
+                self.err("admin-schema.json", None, "admin_schema", f"{label} に label と既知の type が必要")
+            refs = item.get("source_content_ids")
+            if not isinstance(refs, list) or not refs or any(ref not in selected_ids for ref in refs):
+                self.err("admin-schema.json", None, "admin_schema", f"{label}.source_content_ids が不正")
+            bindings = item.get("bindings")
+            if not isinstance(bindings, list) or not bindings or any(
+                    not isinstance(binding, dict) or binding.get("page") not in self.pages
+                    for binding in bindings):
+                self.err("admin-schema.json", None, "admin_schema", f"{label}.bindings が実在HTMLと一致しない")
+            if not isinstance(item.get("required"), bool) or not isinstance(item.get("constraints"), dict):
+                self.err("admin-schema.json", None, "admin_schema", f"{label} に required / constraints が必要")
+
+        images = schema.get("editable_images")
+        if not isinstance(images, list):
+            self.err("admin-schema.json", None, "admin_schema", "editable_images は配列にする")
+            images = []
+        for index, item in enumerate(images):
+            label = f"editable_images[{index}]"
+            if not isinstance(item, dict):
+                self.err("admin-schema.json", None, "admin_schema", f"{label} はオブジェクトでない")
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id.strip() or item_id in all_ids:
+                self.err("admin-schema.json", None, "admin_schema", f"{label}.id がない、または重複")
+            else:
+                all_ids.add(item_id)
+                declared_images.add(item_id)
+            refs = item.get("source_content_ids")
+            if not isinstance(refs, list) or not refs or any(ref not in selected_ids for ref in refs):
+                self.err("admin-schema.json", None, "admin_schema", f"{label}.source_content_ids が不正")
+            bindings = item.get("bindings")
+            if not isinstance(bindings, list) or not bindings or any(
+                    not isinstance(binding, dict) or binding.get("page") not in self.pages
+                    for binding in bindings):
+                self.err("admin-schema.json", None, "admin_schema", f"{label}.bindings が実在HTMLと一致しない")
+            if not isinstance(item.get("alt_required"), bool) or not isinstance(item.get("allowed_uses"), list):
+                self.err("admin-schema.json", None, "admin_schema", f"{label} に alt_required / allowed_uses が必要")
+
+        actual_fields = set().union(*(page.field_bindings for page in self.pages.values()))
+        actual_images = set().union(*(page.image_bindings for page in self.pages.values()))
+        if actual_fields != declared_fields:
+            self.err("admin-schema.json", None, "admin_schema",
+                     f"固定項目のHTML bindingと定義が一致しない：HTML={sorted(actual_fields)} schema={sorted(declared_fields)}")
+        if actual_images != declared_images:
+            self.err("admin-schema.json", None, "admin_schema",
+                     f"画像のHTML bindingと定義が一致しない：HTML={sorted(actual_images)} schema={sorted(declared_images)}")
+
+        articles = schema.get("articles")
+        if not isinstance(articles, dict) or not isinstance(articles.get("enabled"), bool):
+            self.err("admin-schema.json", None, "admin_schema", "articles.enabled が必要")
+        elif articles["enabled"]:
+            if not isinstance(articles.get("types"), list) or not articles["types"]:
+                self.err("admin-schema.json", None, "admin_schema", "有効なarticlesにはtypesが必要")
+            placements = articles.get("list_placements")
+            if not isinstance(placements, list) or not placements or any(
+                    not isinstance(place, dict) or place.get("page") not in self.pages for place in placements):
+                self.err("admin-schema.json", None, "admin_schema", "有効なarticlesには実在ページのlist_placementsが必要")
+
+        form = schema.get("inquiry_form")
+        if not isinstance(form, dict) or form.get("enabled") is not True:
+            self.err("admin-schema.json", None, "admin_schema", "全プラン標準のinquiry_form.enabled は true")
+        else:
+            if not form.get("form_id") or form.get("display_page") not in self.pages:
+                self.err("admin-schema.json", None, "admin_schema", "inquiry_form のIDまたは表示ページが不正")
+            form_fields = form.get("fields")
+            if not isinstance(form_fields, list) or not form_fields:
+                self.err("admin-schema.json", None, "admin_schema", "inquiry_form.fields がない")
+                form_fields = []
+            allowed_form_types = {"text", "email", "tel", "textarea", "select", "checkbox", "consent"}
+            form_ids = set()
+            for index, field in enumerate(form_fields):
+                label = f"inquiry_form.fields[{index}]"
+                if not isinstance(field, dict):
+                    self.err("admin-schema.json", None, "admin_schema", f"{label} はオブジェクトでない")
+                    continue
+                field_id = field.get("id")
+                if not isinstance(field_id, str) or not field_id or field_id in form_ids:
+                    self.err("admin-schema.json", None, "admin_schema", f"{label}.id がない、または重複")
+                else:
+                    form_ids.add(field_id)
+                if not field.get("label") or field.get("type") not in allowed_form_types:
+                    self.err("admin-schema.json", None, "admin_schema", f"{label} に label と既知の type が必要")
+                if not isinstance(field.get("required"), bool):
+                    self.err("admin-schema.json", None, "admin_schema", f"{label}.required は真偽値にする")
+            consent = [field for field in form_fields if isinstance(field, dict) and field.get("type") == "consent"]
+            if not consent or not any(field.get("required") is True for field in consent):
+                self.err("admin-schema.json", None, "admin_schema", "必須の個人情報同意欄がない")
+            for key, expected in (("store_in_siteoffer", True), ("customer_inbox", True),
+                                  ("email_notification", True), ("status_management", False),
+                                  ("privacy_notice_required", True)):
+                if form.get(key) is not expected:
+                    self.err("admin-schema.json", None, "admin_schema", f"inquiry_form.{key} は {expected}")
+            if not isinstance(form.get("spam_controls"), list) or not form["spam_controls"]:
+                self.err("admin-schema.json", None, "admin_schema", "inquiry_form.spam_controls がない")
+        return schema
 
     def check_quality_artifacts(self):
         brief = self.read_json("design-brief.json")
@@ -590,6 +848,7 @@ class Checker:
             self.err(item["file"], item["line"], "internal_annotation",
                      f"営業用HTMLに内部確認注記を表示しない：{item['text']}")
         content_plan = self.check_content_plan()
+        admin_schema = self.check_admin_schema(content_plan)
         self.check_quality_artifacts()
         rebuild = self.check_rebuild_json()
         if isinstance(content_plan, dict) and isinstance(rebuild, dict):
@@ -603,6 +862,27 @@ class Checker:
                     self.err("rebuild.json", None, "content_plan", "content_selection.excluded_count が content-plan.json と一致しない")
                 if selection.get("visible_claims_traced") is not True:
                     self.err("rebuild.json", None, "content_plan", "content_selection.visible_claims_traced は照合後に true にする")
+        if isinstance(admin_schema, dict) and isinstance(rebuild, dict):
+            integration = rebuild.get("admin_integration")
+            if not isinstance(integration, dict):
+                self.err("rebuild.json", None, "admin_schema", "admin_integration がない")
+            else:
+                expected_admin = {
+                    "status": admin_schema.get("integration_status"),
+                    "editable_fields": len(admin_schema.get("editable_fields") or []),
+                    "editable_images": len(admin_schema.get("editable_images") or []),
+                    "article_types": len((admin_schema.get("articles") or {}).get("types") or []),
+                    "inquiry_form": (admin_schema.get("inquiry_form") or {}).get("enabled") is True,
+                }
+                for key, expected in expected_admin.items():
+                    if integration.get(key) != expected:
+                        self.err("rebuild.json", None, "admin_schema",
+                                 f"admin_integration.{key} が admin-schema.json の要約と一致しない")
+        if isinstance(admin_schema, dict) and isinstance(content_plan, dict):
+            update_mode = (content_plan.get("update_plan") or {}).get("mode")
+            articles_enabled = (admin_schema.get("articles") or {}).get("enabled") is True
+            if (update_mode == "article") != articles_enabled:
+                self.err("admin-schema.json", None, "admin_schema", "content-plan.json の update_plan と articles.enabled が一致しない")
 
         by_text = {}
         for t in self.tbc:

@@ -4,14 +4,15 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 
 ## 選定基準
 
-情報量を増やすことではなく、訪問者が判断するために必要な問いへ、確認済みの企業固有情報で答えることを優先する。
+情報量を増やすこと自体ではなく、訪問者が判断するために必要な問いへ、確認済みの企業固有情報で十分に答えることを優先する。短いトップコピーだけで「答えた」とせず、元サイトに有用な詳細がある場合は詳細ページへ保持する。
 
 1. 何の会社で、何を提供しているか
 2. 誰・どの地域・どの課題が対象か
 3. 依頼先として判断できる具体的な根拠があるか
-4. 次に取れる行動と連絡手段は何か
+4. 依頼内容・条件・実績を具体的に判断できるか
+5. どの会社が責任を持ち、次に何をすればよいか
 
-企業ごとに答えられる問いは異なる。確認できない問いを一般論や定番コピーで埋めない。サービス、実績、会社概要、流れ、FAQ、お知らせを必須セクションにしない。
+企業ごとに答えられる問いは異なる。確認できない問いを一般論や定番コピーで埋めない。サービス、実績、会社概要、流れ、FAQ、お知らせを名前だけの必須セクションにしない。一方、確認済みの詳細があるのに「簡潔な1ページ」にするため削除もしない。情報完結性とページ分割は [site-completeness.md](site-completeness.md) に従う。
 
 最初に元サイトの `source_profile` を作る。繰り返されるサービス名、企業固有の呼称、対象、地域、条件、文章の調子、元サイトが先に伝えている内容を記録し、完成文の語彙と優先順位に反映する。
 
@@ -53,7 +54,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 
 ```json
 {
-  "schema_version": "0.1",
+  "schema_version": "0.2",
   "company": {
     "name": "株式会社例",
     "source_ref": "evaluation.json company.name"
@@ -68,7 +69,58 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
     {"question": "何を頼めるか", "answered_by": ["service-inheritance"]},
     {"question": "どう連絡するか", "answered_by": ["primary-phone"]}
   ],
+  "source_coverage": {
+    "status": "complete",
+    "observed_navigation": ["トップ", "業務内容", "会社概要", "お問い合わせ"],
+    "collected_sources": ["pages[role=top]", "pages[role=service]", "pages[role=company]", "pages[role=contact]"],
+    "missing_sources": [],
+    "basis": "スクリーンショットの主メニューと取得ページを照合"
+  },
+  "decision_coverage": [
+    {"id": "identity", "status": "answered", "answered_by": ["company-name"], "reason": "正式名称と所在地を確認"},
+    {"id": "offer", "status": "answered", "answered_by": ["service-inheritance"], "reason": "主要業務の説明を確認"},
+    {"id": "fit", "status": "not_applicable", "answered_by": [], "reason": "対象条件を限定する記載がなく、このデモで断定しない"},
+    {"id": "specifics", "status": "answered", "answered_by": ["service-inheritance"], "reason": "依頼内容を確認"},
+    {"id": "proof", "status": "not_applicable", "answered_by": [], "reason": "確認済みの事例・資格がないため、事実を作らない"},
+    {"id": "trust", "status": "answered", "answered_by": ["company-name"], "reason": "会社の正式名称を確認"},
+    {"id": "action", "status": "answered", "answered_by": ["primary-phone"], "reason": "電話窓口を確認"}
+  ],
+  "page_plan": [
+    {"file": "index.html", "purpose": "会社と主要業務を理解し詳細へ進む", "audience_questions": ["identity", "offer", "action"], "content_ids": ["company-name", "service-inheritance", "primary-phone"], "reason_separate": "サイト全体の入口"},
+    {"file": "services.html", "purpose": "取扱業務を具体的に判断する", "audience_questions": ["offer", "specifics"], "content_ids": ["service-inheritance"], "reason_separate": "確認済みの詳細説明がトップの要約を超えるため"}
+  ],
+  "media_plan": {
+    "usable_assets": [],
+    "excluded_assets": ["許諾未確認の元サイト画像"],
+    "missing_essential_assets": [],
+    "notes": "事実を示す画像を使わず、文字情報で判断できる構成"
+  },
+  "update_plan": {
+    "mode": "fixed_fields_only",
+    "connection_status": "planned",
+    "content_types": [],
+    "placements": [],
+    "migration_required": false,
+    "reason": "継続記事はなく、確認済みの会社情報だけを固定項目として更新する"
+  },
   "selected_content": [
+    {
+      "id": "company-name",
+      "kind": "identity",
+      "purpose": "会社を識別できるようにする",
+      "copy": {"heading": "株式会社例"},
+      "placement": [{"page": "index.html", "section": "ヘッダー"}],
+      "source_refs": [{"artifact": "evaluation.json", "path": "company.name", "fact": "株式会社例"}],
+      "selection_reason": "確認済みの正式名称",
+      "source_fidelity": {
+        "mode": "verbatim_fact",
+        "preserved_terms": ["株式会社例"],
+        "meaning_preserved": true,
+        "editorial_changes": "なし"
+      },
+      "freshness": {"status": "timeless", "basis": "評価時点の正式名称"},
+      "status": "ready"
+    },
     {
       "id": "service-inheritance",
       "kind": "service",
@@ -77,7 +129,10 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
         "heading": "相続登記のご相談",
         "body": "相続登記に関する相談を受け付けています。"
       },
-      "placement": [{"page": "index.html", "section": "ファーストビュー"}],
+      "placement": [
+        {"page": "index.html", "section": "ファーストビュー"},
+        {"page": "services.html", "section": "業務内容"}
+      ],
       "source_refs": [
         {"artifact": "collected.json", "path": "pages[role=service].headings", "url": "https://example.jp/service/", "fact": "相続登記"}
       ],
@@ -138,6 +193,11 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 ### 必須条件
 
 - `source_profile` は空でない固有語、語調、情報の優先順位、出典を持つ。
+- `source_coverage.status` は `complete | incomplete`。`complete` のとき `missing_sources` は空、`incomplete` のときHTML生成を止める。
+- `decision_coverage` は `identity | offer | fit | specifics | proof | trust | action` を重複なく持つ。`answered` は既存の `selected_content[].id` を `answered_by` に持ち、`not_applicable` は案件固有の理由を持つ。`missing` があれば完成扱いにしない。
+- `page_plan` は作成する全HTMLと一致し、各ページに目的、答える問い、1件以上のcontent ID、独立させる理由を持つ。
+- `media_plan` は利用可能・除外・不足する重要素材を分ける。生成画像を実績の証拠にしない。
+- `update_plan.mode` は `article | fixed_fields_only`、`connection_status` は `planned | connected_verified`。`article` は記事種別と表示先を持つ。固定項目・画像・受付フォームの詳細は [admin-schema.md](admin-schema.md) に従って `admin-schema.json` へ出力し、静的デモと定義だけなら `planned` とする。
 - `selected_content` は1件以上。各項目の `id` は重複させず、`purpose`、空でない `copy`、1件以上の `placement` と `source_refs`、`selection_reason`、`source_fidelity`、`freshness.status`、`status: ready` を持つ。
 - `source_fidelity.mode` は `verbatim_fact | faithful_rewrite | structural_label`。保持した語を `preserved_terms` に記録し、意味を照合したときだけ `meaning_preserved: true` にする。`editorial_changes` には省略・統合・言い換えの内容を書く。
 - `placement[].page` は実在するHTMLファイルと一致させる。

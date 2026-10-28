@@ -12,6 +12,8 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 
 掲載内容も固定テンプレートから決めない。企業ごとに、訪問者の判断に必要か、確認済みの根拠があるか、現在も有効と判断できるかを見て選ぶ。HTMLに出すのは、そのまま営業デモとして読める完成文だけとし、仮文言・汎用コピー・空欄を埋めるためのセクションは置かない。
 
+シングルページを既定形にしない。ページ数ではなく、顧客が「何を頼めるか、対象か、具体的な内容、実績・信頼、会社情報、連絡方法」をサイト内だけで判断できる情報完結性を基準にする。独立した詳細があるサービス、実績・事例、会社情報、年度別表、採用、更新記事は、トップへ短く押し込まず別ページにする。材料が多い企業では4〜6ページ以上になり得る一方、ページ数を満たすための薄い分割はしない。
+
 文章は元サイトの企業固有の情報・用語・語調を起点にする。社名だけ差し替えられる汎用文を新しく作るのではなく、元サイトが実際に伝えている内容を、意味を変えずに読みやすい完成原稿へ編集する。取得材料が薄く完成原稿を作れない場合は、薄い説明で埋めず制作を未完了にする。
 
 ## 前提として守ること
@@ -83,7 +85,7 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 
 ### 2. 材料を読む
 
-`references/rebuild-guide.md`、`references/content-selection.md`、`references/design-quality.md`、`references/image-policy.md` を読み、次を集める。読んだ値は rebuild.json の `inherited` に出典付きで残す。
+`references/rebuild-guide.md`、`references/content-selection.md`、`references/site-completeness.md`、`references/admin-schema.md`、`references/design-quality.md`、`references/image-policy.md` を読み、次を集める。読んだ値は rebuild.json の `inherited` に出典付きで残す。
 
 - **配色・雰囲気**：スクリーンショット（Read で画像を見る）のヘッダー・ボタン・見出し・背景の色。主色・補助色・強調色・背景色・文字色を決める。読み取った色は近似値なので `approximate: true`。
 - **ナビゲーション構成**：デスクトップのスクリーンショットのメニュー表記と、collected.json のページの `role`・`title`・`headings`。
@@ -95,9 +97,11 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 - **施策**：`proposal.json` の `actions`（id・target・change.spec・copy_examples・scope・needs_confirmation）と `issues`。
 - **残す良い点**：evaluation の強み（レベル3の項目、evaluation.md の「強み」）。提案で否定しない部分はデモでも残す。
 
+スクリーンショットの主メニュー、評価・提案が言及する項目、`collected.json.pages` を照合する。主要メニューのリンク先、フレーム内本文、事例詳細などが未取得なら、この段階で材料不足として止める。取得できた数ページだけを元サイトの全情報とみなし、薄いサイトを作らない。
+
 ### 3. 企業ごとの掲載情報を確定する
 
-`references/content-selection.md` に従い、HTMLより先に `$OUT/site/content-plan.json` を作る。
+`references/content-selection.md` と `references/site-completeness.md` に従い、HTMLより先に `$OUT/site/content-plan.json` を作る。
 
 - 訪問者が「何の会社か」「自分が対象か」「何を頼めるか」「信頼できるか」「どう連絡するか」を判断するために必要な情報を、対象企業の材料から選ぶ。項目が確認できない場合は定番文で補わず、その問いに答えるセクション自体を省くか、確認済みの別情報で構成する。
 - 掲載する各項目を `selected_content` に記録し、完成文、用途、表示ページ・セクション、出典、採用理由、鮮度判断を持たせる。`status` は `ready` だけを許可する。
@@ -109,6 +113,11 @@ description: site-evaluation の評価結果と site-proposal の改善提案書
 - `source_profile` に元サイトの固有語、語調、情報の優先順位と根拠を記録する。各 `selected_content` には `source_fidelity` を持たせ、どの語と意味を保持し、何を編集したかを説明する。
 - 元サイトに見出しやメニュー名しかなく、サービス本文を確認できない場合は、名称を一覧として使うだけにする。「〜に関する案内です」「お客様に寄り添います」などの説明を補わない。
 - 完成後に、HTMLだけを顧客へ見せても草稿・生成途中・制作会社の説明に見えないかを全文で確認する。`review.presentation_ready` と `review.source_fidelity_reviewed` は、この照合後だけ true にする。
+- `source_coverage` で、ナビゲーション・評価根拠・取得ページの一致を確認する。未取得の主要ページや空本文があれば `incomplete` として止める。
+- `decision_coverage` で、企業識別、依頼内容、対象、具体条件、実績・根拠、会社の信頼情報、次の行動を確認する。必要な問いが未回答のまま完成扱いにしない。
+- `page_plan` で各ページの目的・答える問い・使用するcontent ID・独立ページにする理由を決める。トップへ情報を詰め込むことも、薄いページを水増しすることも避ける。
+- `media_plan` で、事例等に使える許諾済み画像と、不足する重要画像を分ける。生成画像を実績写真の代わりにしない。
+- `update_plan` で、固定項目・記事・画像をSiteOffer共通の顧客管理画面へつなぐ構成と接続状態を記録する。静的HTMLだけなら「編集可能」と報告しない。
 
 `content-plan.json` が完成するまでHTMLを書かない。公開本文、title、description、CTA、構造化データは `selected_content` の範囲だけで作る。
 元サイトの材料不足で主要サービスの説明を完成できない場合は `readiness.status: incomplete` としてHTML生成・DB取り込みを止め、必要な追加取得または顧客確認を報告する。`ready_for_customer_review` は文章品質の判定であり、本番公開・権利許諾・顧客承認済みを意味しない。
@@ -133,12 +142,14 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 
 ### 5. ページ構成を決める
 
-`references/rebuild-guide.md` の「ページ構成の決め方」に従う。
+`references/rebuild-guide.md` の「ページ構成の決め方」と `references/site-completeness.md` に従う。
 
 - 元サイトの構成を基本にし、提案書の施策で必要なものだけ足す・統合する（例：「ご依頼の流れ」セクションの追加、内容の薄いページをトップのセクションに統合）。
 - 業種ごとの定番構成を先に当てはめない。`content-plan.json` の選定項目が自然な判断順になる最小のページ・セクション構成にする。
 - collected.json に取得されていないページは作らない。ナビゲーションに必要なら rebuild.json の `pages_not_rebuilt` に書く。
 - 提案書の `scope` が `out_of_scope` の施策は反映せず、`actions_not_applied` に理由を書く。
+- サービス、実績・事例、会社情報、年度別の表、採用、更新記事に独立した情報がある場合は、トップの短いセクションへ圧縮せず詳細ページを作る。シングルページは情報完結性を満たせる場合だけ選ぶ。
+- 年度別・区分別のデータは意味のある表として保持し、`caption`、行列見出し、年ごとの区分、スマホの読み方を設計する。見た目のために列や年度を削らない。
 
 ### 6. 作る
 
@@ -155,8 +166,13 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - **元サイト由来の文章**：見出し・本文・title・description・CTAは、元サイトの用語と確認済みの意味から作る。メニュー名しか確認できない項目に説明文を足さない。
 - **業務情報だけ**：改善前後の比較、情報設計、レスポンシブ、読み上げ、余白、見出し、配色、抽象表現など制作上の説明を訪問者向け本文に表示しない。必要な非公式デモ表示を唯一の例外とする。
 - **表現**：design-brief.json の視覚方針をCSS変数とレイアウトへ一貫して反映する。何でもカード化せず、情報の関係に合う表現を選ぶ。
+- **情報量**：元サイトにある確認済みのサービス詳細、実績、年度別情報、会社情報を、見た目を簡潔にするためだけに捨てない。トップは要点と詳細ページへの入口、詳細ページは判断に必要な具体情報を担う。
+- **実績画像**：`sales_demo` 利用が確認できた実画像だけを事例の証拠として使う。生成画像を特定案件の写真に見せない。重要画像が不足する場合は完成扱いにしないか、画像なしでも判断できる根拠を示す。
+- **顧客管理**：`update_plan.mode: article` の場合は記事一覧・詳細への導線を設計し、すべてのサイトで固定項目・画像・受付フォームを `admin-schema.json` に定義する。実際のSiteOffer管理画面へ接続・検証していなければ、デモ画面や報告で編集・受付が動くと断定しない。
 
 ### 7. rebuild.json を書く
+
+その前に `references/admin-schema.md` に従って `$OUT/site/admin-schema.json` を作る。確認済みの完成文を固定項目へ、許諾確認を要する画像枠を差し替え画像へ、継続更新情報を記事へ対応付け、全プラン標準の受付フォーム定義を含める。営業デモではフォームを実送信させず、顧客ログイン・保存・一覧・メール通知・再ビルドを接続検証するまで `integration_status: planned` とする。
 
 `$OUT/site/rebuild.json` に、作ったものの記録を書く。形式は `references/rebuild-guide.md` の「rebuild.json」。
 
@@ -166,6 +182,7 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - `images`：画像ごとの出所、権利状態、利用範囲、確認者・確認日時、営業用HTMLでの扱い（`references/image-policy.md`）。
 - `needs_confirmation`：HTMLには出さない確認事項の一覧（対象、関連ページ、企業に何を確認するか）。
 - `content_plan_ref`：`content-plan.json`。`content_selection` に掲載件数、除外件数、全表示主張の追跡確認結果を要約する。
+- `admin_schema_ref`：`admin-schema.json`。`admin_integration` に固定項目数、画像枠数、記事種別、受付フォーム、接続状態を要約する。
 
 書き終えたら `python3 -m json.tool $OUT/site/rebuild.json > /dev/null` で検証する。
 
@@ -179,7 +196,7 @@ python3 <skill>/scripts/check.py $OUT/site > $OUT/site-check.json; echo "exit=$?
 
 - `errors` が1件でもあれば終了コード1。直して再実行し、0になるまで繰り返す。
 - `warnings` は内容を見て、直すか、直さない理由を rebuild.json の `check.notes` に書く。
-- ローカルで開き、PC 1440px前後とスマホ390px前後のスクリーンショットを撮る。`references/design-quality.md` の100点基準で `$OUT/site/quality-review.json` を作る。80点未満または致命項目ありなら最大3回まで修正・再撮影する。
+- ローカルで開き、PC 1440px前後とスマホ390px前後のスクリーンショットを撮る。トップだけでなく、サービス・実績・会社情報・表・記事など作成した各ページ種別を移動して確認する。`references/design-quality.md` の100点基準で `$OUT/site/quality-review.json` を作る。80点未満または致命項目ありなら最大3回まで修正・再撮影する。
 - ブラウザを利用できなければ `quality-review.json` を `status: not_run` にし、「表示は未確認」と報告する。コード検査の成功をデザイン品質の合格とは呼ばない。
 
 `site-check.json` の結果の要約と quality-review.json の総合点・状態を rebuild.json の `check` に書き写す。
@@ -207,6 +224,8 @@ pnpm demo:import-proposals -- --audit-id <site_audits.id>
 - 企業ごとに選んだ掲載情報の件数・主な選定理由、載せなかった情報の件数・主な理由
 - 元サイトから保持した固有語と語調、文章の引き渡し準備状態（`ready_for_customer_review` / `incomplete`）
 - HTMLから分離した確認事項の件数と主なもの
+- 情報完結性の判定、シングル／複数ページを選んだ理由、未取得ページの有無
+- 年度別表・実績・画像をどう保持したか、顧客管理画面の固定項目・記事・画像・受付フォームの定義件数と接続状態（planned / connected_verified）
 - check.py の結果、品質点、PC・スマホの表示確認をしたか
 - 保存場所（`$OUT/site/`）
 - アプリへ取り込んだ場合は提案版番号と状態（`in_review` / 承認済み）。取り込めなかった場合は理由

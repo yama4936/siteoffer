@@ -34,7 +34,7 @@ collected.json は collect.py 0.1 の出力。**生のHTML・CSS・トップの�
 
 ## 2. 掲載内容の前提
 
-HTMLの構成と文章は `content-plan.json` の `selected_content` から作る。取得できた情報を網羅するのではなく、対象企業の訪問者が判断するために必要で、出典と鮮度を確認できた内容だけを選ぶ。詳しい選定基準と形式は [content-selection.md](content-selection.md) に従う。
+HTMLの構成と文章は `content-plan.json` の `selected_content` から作る。取得できた情報を無差別に網羅するのではなく、対象企業の訪問者が判断するために必要で、出典と鮮度を確認できた内容を十分に選ぶ。詳しい選定基準と形式は [content-selection.md](content-selection.md)、材料の網羅性・ページ分割・表・実績画像・更新可能性は [site-completeness.md](site-completeness.md) に従う。
 
 文章は `source_profile` の固有語・語調・情報の優先順位を引き継ぐ。名称や見出ししか取得できていない項目は名称だけを使い、説明文を生成しない。主要内容の材料が不足する場合は `readiness.status: incomplete` としてサイトを完成扱いにしない。
 
@@ -77,8 +77,10 @@ a,b=sorted([L(sys.argv[1]),L(sys.argv[2])]); print(round((b+0.05)/(a+0.05),2))
 
 ## 4. ページ構成の決め方
 
-1. collected.json で取得できたページを並べる（role ごと）。
-2. 各ページを次のどれかに振り分ける。
+1. スクリーンショットの主メニュー、評価・提案の言及、collected.json の取得ページを照合する。主要ページやフレーム内本文が欠けていれば追加収集へ戻し、ページ構成を決めない。
+2. `content-plan.json.decision_coverage` を完成させ、訪問者の問いに答える情報単位を並べる。
+3. collected.json で取得できたページを並べる（role ごと）。
+4. 各ページを次のどれかに振り分ける。
 
 | 扱い | 条件 | 例 |
 | --- | --- | --- |
@@ -87,11 +89,11 @@ a,b=sorted([L(sys.argv[1]),L(sys.argv[2])]); print(round((b+0.05)/(a+0.05),2))
 | 新しく足す | 提案書の施策が求め、確認済みの材料だけで内容を構成できる | 「ご依頼の流れ」「よくある質問」。未確認の回答を並べるだけなら作らない |
 | 作らない | 取得していない、サーバー処理が必要、内容がない | ログイン、検索結果、未取得のブログ記事 |
 
-3. 提案書が1ページサイトを前提にしている施策（`scope_note` に「1ページサイト」等）なら、index.html にセクションをまとめ、ページ内リンク（`#service` 等）でメニューを作る。
-4. 問い合わせ先が確認できたら、`contact.html` を作るか、トップの「お問い合わせ」セクションにする。いずれも中身は電話・メール・外部フォームへのリンクと受付時間（確認できたものだけ）。
-5. ファイル名は英小文字の役割名にする：`index.html`、`about.html`（会社概要）、`services.html`、`works.html`、`price.html`、`flow.html`、`faq.html`、`recruit.html`、`contact.html`。元URLとの対応は rebuild.json の `pages[].source_urls`。
+5. 提案書が1ページサイトを前提にしていても、確認済みの詳細を失う場合は複数ページを選び、`actions_not_applied` または構成判断に理由を書く。1ページにまとめるのは情報完結性を保てる場合だけ。
+6. 問い合わせ先が確認できたら、`contact.html` を作るか、トップの「お問い合わせ」セクションにする。いずれも中身は電話・メール・外部フォームへのリンクと受付時間（確認できたものだけ）。
+7. ファイル名は英小文字の役割名にする：`index.html`、`about.html`（会社概要）、`services.html`、`works.html`、`price.html`、`flow.html`、`faq.html`、`news.html`、`recruit.html`、`contact.html`。元URLとの対応は rebuild.json の `pages[].source_urls`。
 
-ページを増やしすぎない。デモは比較・説明に使うもので、目安は1〜6ページ。
+ページ数に固定の上下限を置かない。代表的な小規模企業サイトは4〜6ページになり得るが、必要情報が1ページで完結する場合も、6ページを超える場合もある。薄いページを水増しせず、異なる判断目的と十分な詳細があるときだけ分ける。
 
 ## 5. 作り方の規則
 
@@ -105,6 +107,7 @@ $OUT/site/
   assets/main.js        … 必要なときだけ
   design-brief.json
   quality-review.json
+  admin-schema.json
   rebuild.json
 ```
 
@@ -186,7 +189,7 @@ $OUT/site/
 ### D. スマホ対応
 
 - 1カラムのレスポンシブ（D1）。ブレークポイントは 768px を基本。
-- 表はスマホで横スクロール（`overflow-x: auto` の枠）か、行ごとのカード表示（D1）。
+- 表はスマホで横スクロール（`overflow-x: auto` の枠）か、行ごとのカード表示（D1）。年度別・区分別など行列の対応自体が情報なら、カードへ崩さず `caption`、`th scope` を持つ表として保つ。長い表は年度や意味のある区分で分け、元データを削らない。
 - 拡大を禁止しない。浮動バッジ・固定要素が本文やボタンに重ならない（D2）。
 
 ### E. 表示速度・技術品質
