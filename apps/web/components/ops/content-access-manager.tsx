@@ -2,6 +2,7 @@
 import type { ContentAccessInput, loadContentAccess } from "@siteoffer/core";
 import { useRef, useState } from "react";
 import {
+  changeContentAccessRoleAction,
   inviteContentEditorAction,
   refreshContentAccessAction,
   revokeContentEditorAction,
@@ -9,11 +10,18 @@ import {
 import { fmtDate, fmtDateOnly } from "@/lib/ops/format";
 
 type Model = Awaited<ReturnType<typeof loadContentAccess>>;
+type Role = Model["access"][number]["role"];
+const ROLE_LABEL: Record<Role, string> = { admin: "管理者", editor: "編集者" };
+const ROLE_HELP: Record<Role, string> = {
+  admin: "記事の編集と、自社の担当者の招待・解除ができます",
+  editor: "記事の編集だけができます",
+};
 export function ContentAccessManager({ initial }: { initial: Model }) {
   const [model, setModel] = useState(initial),
     [email, setEmail] = useState(""),
     [contract, setContract] = useState(initial.contracts[0]?.id ?? ""),
-    [confirmed, setConfirmed] = useState(false);
+    [confirmed, setConfirmed] = useState(false),
+    [role, setRole] = useState<Role>("admin");
   const [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false),
     [error, setError] = useState(""),
@@ -37,6 +45,7 @@ export function ContentAccessManager({ initial }: { initial: Model }) {
         companyId: initial.company.id,
         contractId: contract,
         email: email.trim().toLowerCase(),
+        role,
         expectedRevision: model.access.find((a) => a.email === email.trim().toLowerCase())?.revision ?? 0,
         requestId: crypto.randomUUID(),
         confirmed,
@@ -61,6 +70,44 @@ export function ContentAccessManager({ initial }: { initial: Model }) {
     } catch {
       setUnknown(true);
       setError("発行結果を確認できません。同じ受付番号で結果を確認してください。");
+    } finally {
+      running.current = false;
+      setBusy(false);
+    }
+  }
+  async function changeRole(row: Model["access"][number], next: Role) {
+    if (
+      running.current ||
+      next === row.role ||
+      !window.confirm(
+        `${row.email} の役割を「${ROLE_LABEL[row.role]}」から「${ROLE_LABEL[next]}」に変えますか？ ${ROLE_LABEL[next]}は${ROLE_HELP[next]}。`,
+      )
+    )
+      return;
+    running.current = true;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setLink("");
+    try {
+      const r = await changeContentAccessRoleAction({
+        companyId: initial.company.id,
+        accessId: row.id,
+        revision: row.revision,
+        role: next,
+      });
+      if (r.status === "error") {
+        setError(r.message);
+        await refresh();
+      } else {
+        setModel((m) => ({
+          ...m,
+          access: m.access.map((a) => (a.id === row.id ? { ...r.access, accountStatus: a.accountStatus } : a)),
+        }));
+        setMessage(`役割を「${ROLE_LABEL[next]}」に変えました。`);
+      }
+    } catch {
+      setError("変更結果を確認できません。一覧を更新して状態を確認してください。");
     } finally {
       running.current = false;
       setBusy(false);
@@ -187,6 +234,29 @@ export function ContentAccessManager({ initial }: { initial: Model }) {
                 ))}
               </select>
             </label>
+            <fieldset className="space-y-2 text-sm">
+              <legend>役割</legend>
+              {(["admin", "editor"] as const).map((r) => (
+                <label key={r} className="flex items-start gap-2">
+                  <input
+                    type="radio"
+                    name="customerRole"
+                    value={r}
+                    checked={role === r}
+                    onChange={() => {
+                      setRole(r);
+                      setConfirmed(false);
+                    }}
+                  />
+                  <span>
+                    {ROLE_LABEL[r]}：{ROLE_HELP[r]}
+                  </span>
+                </label>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                最初の1人は管理者にしてください。編集者は、その会社の管理者が自分で招待することもできます。
+              </p>
+            </fieldset>
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" required checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
               記事更新の契約範囲と招待先本人を確認しました
@@ -208,6 +278,9 @@ export function ContentAccessManager({ initial }: { initial: Model }) {
         {model.access.map((row) => (
           <li key={row.id} className="rounded border p-3 space-y-2">
             <p className="break-all text-sm font-semibold">{row.email}</p>
+            <p className="text-xs">
+              役割：{ROLE_LABEL[row.role]}（{ROLE_HELP[row.role]}）
+            </p>
             <p className="text-xs text-muted-foreground">
               {row.status === "active"
                 ? row.accountStatus === "suspended"
@@ -228,6 +301,7 @@ export function ContentAccessManager({ initial }: { initial: Model }) {
                   onClick={() => {
                     setEmail(row.email);
                     setContract(row.contractId);
+                    setRole(row.role);
                     setConfirmed(false);
                     setLink("");
                     setMessage(
@@ -236,6 +310,16 @@ export function ContentAccessManager({ initial }: { initial: Model }) {
                   }}
                 >
                   この方に再発行
+                </button>
+              )}
+              {row.status !== "revoked" && (
+                <button
+                  type="button"
+                  disabled={busy || unknown}
+                  className="text-sm underline"
+                  onClick={() => void changeRole(row, row.role === "admin" ? "editor" : "admin")}
+                >
+                  {row.role === "admin" ? "編集者に変える" : "管理者に変える"}
                 </button>
               )}
               {row.status !== "revoked" && (

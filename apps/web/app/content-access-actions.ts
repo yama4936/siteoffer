@@ -3,6 +3,7 @@ import {
   acceptContentInvitation,
   type ContentAccessInput,
   ContentError,
+  changeContentAccessRole,
   inviteContentEditor,
   loadContentAccess,
   revokeContentEditor,
@@ -30,6 +31,22 @@ export async function revokeContentEditorAction(input: { companyId: string; acce
   } catch (e) {
     if (e instanceof ContentError) return { status: "error" as const, message: e.message };
     throw new Error("利用停止の結果を確認できませんでした");
+  }
+}
+export async function changeContentAccessRoleAction(input: {
+  companyId: string;
+  accessId: string;
+  revision: number;
+  role: "admin" | "editor";
+}) {
+  try {
+    const access = await changeContentAccessRole(getDb(), systemClock, await getCurrentActor(), input);
+    revalidatePath("/ops/content");
+    revalidatePath("/customer/content");
+    return { status: "ok" as const, access };
+  } catch (e) {
+    if (e instanceof ContentError) return { status: "error" as const, message: e.message };
+    throw new Error("役割の変更結果を確認できませんでした");
   }
 }
 export async function refreshContentAccessAction(companyId: string) {
