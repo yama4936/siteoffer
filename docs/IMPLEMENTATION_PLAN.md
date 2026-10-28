@@ -98,6 +98,8 @@
 波3（並列2本＋統合）  T12 Docker一式（用意のみ） / T13 通しテスト / 統合・報告
    ↓
 Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・compose起動の確認
+   ↓
+波4（2026-10-28追加） T16 スキル実行基盤 / T17 スマホ検査の統合・再生成 / T18 共通顧客管理画面
 
 波0と並行            T15 閾値用の評価データ収集（アプリと独立。実在サイトの評価、結果はreports/）
 ```
@@ -120,6 +122,9 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
 | T13 | 通しテストと報告用データ | 3 | 波2 | 不要 | 24.7 |
 | T14 | 納品・顧客確認 | 2 | T1・T3・T10 | 不要 | 15・18章、AC-18 |
 | T15 | 閾値用の評価データ収集 | 0と並行 | なし | 不要 | 9章、config/site-evaluation.json |
+| T16 | スキル実行基盤（ワーカーからのskill実行） | 4 | T4・T5・T7・T9・T11・T12 | 用意のみ（実行は要） | 8〜11・16・18・19章、24.3・24.4・24.6 |
+| T17 | スマホ検査の統合と既存デモの再生成 | 4 | なし（check.pyにある別作業の未コミット変更の反映後） | 不要 | 11章、判断238・239、F-42 |
+| T18 | 共通顧客管理画面の実装 | 4 | T1・T3・T6・T10・T14 | 不要 | 3章（F-33・F-36〜F-43）、5.3、15・16章、AC-17・18・21 |
 
 並列数：波1は7本、波2は5本、T15は4本。波1は T1〜T4 を先に出し、T5〜T7 を続けて出すなど、同時に動かす数は統合担当が調整する。
 
@@ -288,6 +293,40 @@ Docker環境・ユーザー作業が要る段階  実Codex・実国税庁API・c
   - 提案書は作らない（閾値が未決のため）。企業への連絡・フォーム送信はしない。PageSpeed Insights はAPIキーがなければ失敗してよい。
   - 統合担当が `reports/threshold-data/summary.md`・`summary.json` に、総合点・カテゴリ別点・カバー率・致命項目・評価不能の件数をまとめる。
 - 注意：このデータの採点は開発アシスタント（subagent）が行う。アプリではCodexが採点するため、点数の付き方がずれる可能性がある。Docker環境で一部をCodexに採点させて比べるまで、この差は未検証として報告する。
+
+### T16 スキル実行基盤（ワーカーからのskill実行）
+
+- 担当：`apps/worker/src/skills/`、`apps/worker/src/{boss,queues,config,runtime,intake,deps,heartbeat}.ts`、`apps/worker/test/skills.test.ts`、`apps/web/app/(ops)/ops/skills/`、`apps/web/app/(ops)/ops/actions.ts`、`packages/db/src/schema/skill-run.ts`、`packages/db/drizzle/0043_skill_runs.sql`、`docker/skill-sandbox/`
+- 目的：`.agents/skills` の4スキル（company-discovery・site-evaluation・site-proposal・site-rebuild）をワーカーから実行し、結果をアプリへ取り込む。
+- 内容：
+  - きっかけは運営画面からの手動起動、定期実行（skill_schedules）、前のスキルからの連鎖（探索→評価→提案→サイト作成）。webは skill_runs に行を作るだけで、ワーカーの受付処理がキューへ送る。
+  - 実行ごとに一時作業ディレクトリを作り、使い捨てコンテナ内でCodex SDKを動かす。最終応答の形式を確認してから、探索は収集ジョブ、評価はAudit、提案・サイト作成は運営確認待ちの版として取り込む。
+  - 現状：作業ツリーに別作業の未コミット実装がある（テスト13件あり）。判断・作業記録がdocs/DECISIONS.mdにまだ無いので、取り込み時に記録する。制限時間・件数上限はアシスタントの初期値で未確定。
+- 受け入れ条件：同じ対象・同じ定期実行の回を二重に登録・実行しない。同じ成果物の取り込み直しで版が増えない。失敗は自動再試行せず記録し、再実行は1回だけ。時間切れの実行中を失敗に戻す。アプリの秘密値をコンテナ・プロンプトに渡さず、Codex認証は読み取り専用マウント、network=hostを拒否。作業ディレクトリ外へのパス・リンク、上限超えの出力を取り込まない。
+- 未確認（要対応）：コンテナのネットワーク出口の許可リストとコメントの整合、prompt.ts での秘密値の除外。
+- Docker・実Codexでの実行は用意のみ。報告には「未起動・未検証」と書く。
+
+### T17 スマホ検査の統合と既存デモの再生成
+
+- 担当：`.agents/skills/site-rebuild/scripts/{check.py,check_mobile_quality.py,test_check.py,test_check_mobile_quality.py}`、同 `SKILL.md`（検査の節）、同 `references/design-quality.md`（個別実行の手順）。再生成物は `reports/sites/`（Gitに入れない）
+- 目的：スマホ品質検査（判断239・F-42）を `check.py` に一本化して実行漏れをなくし、既存デモを新フロー（判断238の事実確認、判断239のスマホ品質）で作り直す。
+- 内容：
+  - `check.py` に page_reviews の検査（全HTMLの390×844先頭画面と全長の証跡、スマホ12/15以上）を取り込む。`check_mobile_quality.py` は廃止するか `check.py` を呼ぶ薄いラッパーにし、テストを統合する。
+  - 既存デモ（reports/sites/*/*/site の26件）は、fact_verification も page_reviews も無い旧形式。生成前・生成後の事実確認と page_reviews 付きの quality-review で再生成する。
+- 着手条件：`check.py` にある別作業（作業GX・判断238）の未コミット変更がコミットされてから始める。混入させない。
+- 受け入れ条件：`check.py` を1回実行すれば page_reviews の不備で失敗する。既存テストと統合テストがすべて通る。再生成したデモは fact_verification の未解決0件、page_reviews が全HTMLと一致し、スマホ12/15以上で合格する。
+- 注意：Web情報の再確認が必要ならsite-rebuild内で推測・再取得せず収集工程へ戻す。外部公開・企業への送付はしない。
+
+### T18 共通顧客管理画面の実装
+
+- 担当（既存を拡張）：`apps/web/app/(customer-account)/customer/`、`packages/core/src/content-*.ts`・`content-access.ts`、`packages/db/src/schema/content*.ts`
+- 担当（新設、アシスタント案）：`packages/core/src/customer-admin/`、`packages/schemas/src/admin-schema/`、`packages/db/src/schema/inquiries.ts`、受付APIのルート
+- 目的：契約後の顧客がログインし、全顧客共通の1つのUIで、自社サイトの項目・記事・画像を編集し、受付フォームに届いた内容を確認できるようにする。企業ごとの差は `admin-schema.json`（定義は `.agents/skills/site-rebuild/references/admin-schema.md`）から読む。
+- ユーザー確定（F-33・F-36〜F-40・F-43、判断241）：UI・画面構成・操作体系は全顧客で共通。企業ごとに変えるのは編集項目・画像枠・記事種別・受付フォームの定義とデータだけ。編集は決まった項目・記事・画像の差し替えまでで、レイアウトは固定。受付は保存・一覧・メール通知まで。全プラン標準で、外部CMS・SaaSは使わない。
+- 要件書の推奨：記事更新時はその企業のサイトだけを再ビルドする（Codexで生成しない）。通知はSES想定、スパム対策は隠し項目と回数制限。
+- 未決：業種ごとの項目の型、画像の容量制限、受付内容の保管期間・削除、本番の顧客認証方式、価格への織り込み方。
+- 受け入れ条件（アシスタント案）：顧客は自社の項目・記事・画像・受付内容だけを読み書きでき、別企業は拒否（判定はサーバー側）。顧客は営業・運営の画面に入れず、営業は顧客データに触れない。`admin-schema.json` が不正、またはHTMLの `data-siteoffer-*` と定義が合わなければ取り込みを拒否。受付の送信が保存・一覧表示・通知記録され、回数制限が効く。接続を検証するまで `integration_status` は planned のままにする。
+- 要件との食い違い：T14カードの「常設ログインは作らない」がF-36の顧客ログインと矛盾する。着手前にT14カードを直す。顧客用のACが無いので追加を検討する。
 
 ## 5. subagentへの指示テンプレート
 
