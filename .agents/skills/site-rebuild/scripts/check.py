@@ -9,6 +9,7 @@
   - lang / viewport / title / meta description の欠落、noindex・拡大禁止の有無
   - img の alt、role="img" の aria-label の欠落
   - h1 が1つか、見出し階層の飛び
+  - 複数ページの固有title・description、トップからの到達性、トップへの戻り道
   - form 要素（サーバー処理を前提にしていないか）
   - 非公式の改善案である旨の表示
   - 営業用HTMLへの内部確認注記の露出（1件でもエラー）
@@ -178,6 +179,7 @@ class Checker:
         self.root = os.path.realpath(root)
         self.errors, self.warnings, self.tbc = [], [], []
         self.pages = {}
+        self.page_edges = {}
         self.anchor_checks = []   # (src_rel, line, target_rel, frag)
 
     def err(self, f, line, check, msg):
@@ -349,6 +351,58 @@ class Checker:
         for m in re.finditer(r"""(?:fetch|XMLHttpRequest|import)\s*\(\s*['"](https?:)?//""", text):
             self.err(f, text.count("\n", 0, m.start()) + 1, "external_resource", "JS から外部へ通信・読み込みしている")
 
+    def check_site_navigation(self):
+        """ページ固有メタデータと、通常リンクによるサイト内到達性を検査する。"""
+        titles = {}
+        descriptions = {}
+        edges = {name: set() for name in self.pages}
+        for name, page in self.pages.items():
+            title = " ".join((page.title or "").split()).casefold()
+            description = " ".join((page.meta.get("description") or "").split()).casefold()
+            if title:
+                titles.setdefault(title, []).append(name)
+            if description:
+                descriptions.setdefault(description, []).append(name)
+            src_file = os.path.join(self.root, name)
+            for kind, _tag, _attr, url, _line in page.refs:
+                if kind != "nav" or classify(url) not in ("relative", "fragment"):
+                    continue
+                target, _frag, problem = self.resolve(src_file, url)
+                if problem or target is None:
+                    continue
+                target_name = self.rel(target)
+                if target_name in self.pages:
+                    edges[name].add(target_name)
+        self.page_edges = edges
+
+        if len(self.pages) <= 1:
+            return
+        for label, values in (("title", titles), ("description", descriptions)):
+            for files in values.values():
+                if len(files) > 1:
+                    self.err(
+                        files[1], None, "unique_metadata",
+                        f"複数ページで同じ{label}を使っている：{sorted(files)}。ページ固有の内容にする",
+                    )
+
+        reachable = set()
+        pending = ["index.html"] if "index.html" in self.pages else []
+        while pending:
+            current = pending.pop()
+            if current in reachable:
+                continue
+            reachable.add(current)
+            pending.extend(edges.get(current, set()) - reachable)
+        missing = sorted(set(self.pages) - reachable)
+        if missing:
+            self.err(
+                "index.html", None, "navigation",
+                f"トップから通常のリンクで到達できないHTMLがある：{missing}",
+            )
+        for name in sorted(set(self.pages) - {"index.html"}):
+            if "index.html" not in edges.get(name, set()):
+                self.err(name, None, "navigation", "詳細ページから index.html へ戻る通常リンクがない")
+
     def check_rebuild_json(self):
         path = os.path.join(self.root, "rebuild.json")
         f = "rebuild.json"
@@ -517,6 +571,43 @@ class Checker:
 
         page_plan = plan.get("page_plan")
         planned_pages = set()
+        architecture = plan.get("site_architecture")
+        if not isinstance(architecture, dict):
+            self.err("content-plan.json", None, "content_plan", "site_architecture がない")
+        else:
+            mode = architecture.get("mode")
+            expected_mode = "single_page" if len(self.pages) == 1 else "multi_page"
+            if mode not in ("single_page", "multi_page"):
+                self.err("content-plan.json", None, "content_plan", "site_architecture.mode が不正")
+            elif mode != expected_mode:
+                self.err(
+                    "content-plan.json", None, "content_plan",
+                    f"site_architecture.mode={mode} とHTML数が一致しない（期待：{expected_mode}）",
+                )
+            if not isinstance(architecture.get("reason"), str) or not architecture["reason"].strip():
+                self.err("content-plan.json", None, "content_plan", "site_architecture.reason がない")
+            primary = architecture.get("primary_navigation")
+            if not isinstance(primary, list) or not primary:
+                self.err("content-plan.json", None, "content_plan", "site_architecture.primary_navigation がない")
+                primary = []
+            elif len(primary) != len(set(primary)) or "index.html" not in primary or any(
+                    not isinstance(name, str) or name not in self.pages for name in primary):
+                self.err(
+                    "content-plan.json", None, "content_plan",
+                    "site_architecture.primary_navigation は重複なく、index.html と実在HTMLだけを持つ",
+                )
+            for source in self.pages:
+                missing_links = [target for target in primary if target != source and target not in self.page_edges.get(source, set())]
+                if missing_links:
+                    self.err(
+                        source, None, "navigation",
+                        f"主要ナビゲーションのリンクがページ間で不足している：{missing_links}",
+                    )
+            if architecture.get("mobile_content_equivalence_reviewed") is not True:
+                self.err(
+                    "content-plan.json", None, "content_plan",
+                    "site_architecture.mobile_content_equivalence_reviewed は実画面確認後に true にする",
+                )
         if not isinstance(page_plan, list) or not page_plan:
             self.err("content-plan.json", None, "content_plan", "page_plan は1件以上必要")
         else:
@@ -841,6 +932,7 @@ class Checker:
             self.check_css(p)
         for p in js:
             self.check_js(p)
+        self.check_site_navigation()
         for f, line, target, frag in self.anchor_checks:
             page = self.pages.get(target)
             if page is not None and urllib.parse.unquote(frag) not in page.ids:

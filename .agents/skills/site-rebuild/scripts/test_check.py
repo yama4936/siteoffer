@@ -51,6 +51,11 @@ class ContentPlanCheckTest(unittest.TestCase):
                 {"id": "trust", "status": "answered", "answered_by": ["company-name"], "reason": "会社名を確認"},
                 {"id": "action", "status": "answered", "answered_by": ["company-name"], "reason": "テスト用の主要行動"},
             ],
+            "site_architecture": {
+                "mode": "single_page", "reason": "テスト用の情報が1ページで完結する",
+                "primary_navigation": ["index.html"],
+                "mobile_content_equivalence_reviewed": True,
+            },
             "page_plan": [{
                 "file": "index.html", "purpose": "会社を識別する",
                 "audience_questions": ["identity", "trust"], "content_ids": ["company-name"],
@@ -196,6 +201,84 @@ class ContentPlanCheckTest(unittest.TestCase):
             messages = [item["message"] for item in result["errors"]]
             self.assertTrue(any("主要情報が未取得" in message for message in messages))
             self.assertTrue(any("未回答" in message for message in messages))
+
+    def test_site_architecture_requires_matching_mode_and_mobile_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["site_architecture"]["mode"] = "multi_page"
+            plan["site_architecture"]["mobile_content_equivalence_reviewed"] = False
+            self.write_json(root / "content-plan.json", plan)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            messages = " ".join(item["message"] for item in result["errors"])
+            self.assertIn("HTML数", messages)
+            self.assertIn("mobile_content_equivalence_reviewed", messages)
+
+    def test_multipage_requires_unique_metadata_and_link_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            duplicate = (root / "index.html").read_text(encoding="utf-8").replace(
+                "data-siteoffer-field=\"company.name\"", ""
+            )
+            (root / "services.html").write_text(duplicate, encoding="utf-8")
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["site_architecture"] = {
+                "mode": "multi_page", "reason": "サービスを独立して説明する",
+                "primary_navigation": ["index.html", "services.html"],
+                "mobile_content_equivalence_reviewed": True,
+            }
+            plan["page_plan"].append({
+                "file": "services.html", "purpose": "サービスを説明する",
+                "audience_questions": ["offer"], "content_ids": ["company-name"],
+                "reason_separate": "独立した説明がある",
+            })
+            self.write_json(root / "content-plan.json", plan)
+            rebuild = json.loads((root / "rebuild.json").read_text(encoding="utf-8"))
+            rebuild["pages"].append({"file": "services.html"})
+            self.write_json(root / "rebuild.json", rebuild)
+            code, result = self.run_check(root)
+            self.assertEqual(1, code)
+            checks = {item["check"] for item in result["errors"]}
+            self.assertIn("unique_metadata", checks)
+            self.assertIn("navigation", checks)
+
+    def test_valid_multipage_navigation_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_site(root)
+            index = (root / "index.html").read_text(encoding="utf-8").replace(
+                "</body>", '<a href="services.html">業務内容</a></body>',
+            )
+            (root / "index.html").write_text(index, encoding="utf-8")
+            (root / "services.html").write_text(
+                "<!doctype html><html lang=\"ja\"><head>"
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                "<meta name=\"description\" content=\"確認済みの業務内容\">"
+                "<meta name=\"robots\" content=\"noindex\"><title>業務内容</title></head>"
+                "<body><p>非公式の改善案（デモ）</p><h1>業務内容</h1>"
+                "<a href=\"index.html\">トップ</a></body></html>",
+                encoding="utf-8",
+            )
+            plan = json.loads((root / "content-plan.json").read_text(encoding="utf-8"))
+            plan["site_architecture"] = {
+                "mode": "multi_page", "reason": "サービスを独立して説明する",
+                "primary_navigation": ["index.html", "services.html"],
+                "mobile_content_equivalence_reviewed": True,
+            }
+            plan["page_plan"].append({
+                "file": "services.html", "purpose": "サービスを説明する",
+                "audience_questions": ["offer"], "content_ids": ["company-name"],
+                "reason_separate": "独立した説明がある",
+            })
+            self.write_json(root / "content-plan.json", plan)
+            rebuild = json.loads((root / "rebuild.json").read_text(encoding="utf-8"))
+            rebuild["pages"].append({"file": "services.html"})
+            self.write_json(root / "rebuild.json", rebuild)
+            code, result = self.run_check(root)
+            self.assertEqual(0, code, result)
 
     def test_admin_schema_binding_and_inquiry_contract_fail_when_inconsistent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -85,6 +85,12 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
     {"id": "trust", "status": "answered", "answered_by": ["company-name"], "reason": "会社の正式名称を確認"},
     {"id": "action", "status": "answered", "answered_by": ["primary-phone"], "reason": "電話窓口を確認"}
   ],
+  "site_architecture": {
+    "mode": "multi_page",
+    "reason": "取扱業務にトップの要約を超える確認済みの詳細説明がある",
+    "primary_navigation": ["index.html", "services.html"],
+    "mobile_content_equivalence_reviewed": true
+  },
   "page_plan": [
     {"file": "index.html", "purpose": "会社と主要業務を理解し詳細へ進む", "audience_questions": ["identity", "offer", "action"], "content_ids": ["company-name", "service-inheritance", "primary-phone"], "reason_separate": "サイト全体の入口"},
     {"file": "services.html", "purpose": "取扱業務を具体的に判断する", "audience_questions": ["offer", "specifics"], "content_ids": ["service-inheritance"], "reason_separate": "確認済みの詳細説明がトップの要約を超えるため"}
@@ -195,6 +201,7 @@ site-rebuild の手順3で使う。HTMLを作る前に、取得できた情報�
 - `source_profile` は空でない固有語、語調、情報の優先順位、出典を持つ。
 - `source_coverage.status` は `complete | incomplete`。`complete` のとき `missing_sources` は空、`incomplete` のときHTML生成を止め、content-plan.json ではなく `$OUT/rebuild-blocked.json`（site-completeness.md）に記録する。完成した content-plan.json は常に `complete`。
 - `decision_coverage` は `identity | offer | fit | specifics | proof | trust | action` を重複なく持つ。`answered` は既存の `selected_content[].id` を `answered_by` に持ち、`not_applicable` は案件固有の理由を持つ。`missing` があれば完成扱いにしない。
+- `site_architecture.mode` は `single_page | multi_page` で実在HTML数と一致させる。案件固有の `reason`、トップを含む実在HTMLの `primary_navigation`、実画面確認後の `mobile_content_equivalence_reviewed: true` を持つ。詳細は [web-standards.md](web-standards.md)。
 - `page_plan` は作成する全HTMLと一致し、各ページに目的、答える問い、1件以上のcontent ID、独立させる理由を持つ。
 - `media_plan` は利用可能・除外・不足する重要素材を分ける。生成画像を実績の証拠にしない。
 - `update_plan.mode` は `article | fixed_fields_only`、`connection_status` は `planned | connected_verified`。`article` は記事種別と表示先を持つ。固定項目・画像・受付フォームの詳細は [admin-schema.md](admin-schema.md) に従って `admin-schema.json` へ出力し、静的デモと定義だけなら `planned` とする。

@@ -85,7 +85,9 @@ python3 <skill>/scripts/check.py --blocked $OUT/rebuild-blocked.json > $OUT/bloc
 
 トップページは全情報の要約置き場ではなく、会社・主要サービス・根拠・主要行動を理解し、各詳細へ進む入口にする。詳細ページにはトップの繰り返しではなく、そのページで判断するための具体情報を置く。
 
-`content-plan.json.page_plan` の各ページに `purpose`、`audience_questions`、`content_ids`、`reason_separate` を記録する。独立させる理由が説明できないページは統合する。
+`content-plan.json.site_architecture` に `mode`、案件固有の `reason`、`primary_navigation`、`mobile_content_equivalence_reviewed` を記録する。各ページは `page_plan` に `purpose`、`audience_questions`、`content_ids`、`reason_separate` を記録する。独立させる理由が説明できないページは統合する。具体的な構成・モバイル・リンクの基準は [web-standards.md](web-standards.md) に従う。
+
+複数ページではトップから全HTMLへ通常のリンクで到達でき、各詳細ページからトップへ戻れるようにする。主要ナビゲーションはページ間、PC／スマホ間で同じ語・順序・行き先を保つ。各ページのtitle・description・h1・本文はそのページ固有にし、トップの要約を複製しただけのページは統合する。
 
 ## 4. 実績・事例と画像
 
@@ -132,6 +134,7 @@ python3 <skill>/scripts/check.py --blocked $OUT/rebuild-blocked.json > $OUT/bloc
 
 - `source_coverage.status` が `complete`
 - 必須の判断項目に `missing` がない
+- `site_architecture.mode` とHTML数が一致し、構成理由・主要ナビゲーション・スマホ情報同等性を確認済み
 - `page_plan` の全ページが実在し、各ページに独立した目的と完成文がある
 - 表、実績、画像の重要情報を見た目の都合で欠落させていない
 - 更新機能の有無と接続状態を正しく記録している

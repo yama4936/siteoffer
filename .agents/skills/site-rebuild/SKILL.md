@@ -142,13 +142,15 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 
 ### 5. ページ構成を決める
 
-`references/rebuild-guide.md` の「ページ構成の決め方」と `references/site-completeness.md` に従う。
+`references/rebuild-guide.md` の「ページ構成の決め方」、`references/site-completeness.md`、`references/web-standards.md` に従う。`web-standards.md` は公式資料から採用した構成・モバイル・検索・アクセシビリティの判断基準で、単一／複数ページの選択と実画面レビューに使う。
 
 - 元サイトの構成を基本にし、提案書の施策で必要なものだけ足す・統合する（例：「ご依頼の流れ」セクションの追加、内容の薄いページをトップのセクションに統合）。
 - 業種ごとの定番構成を先に当てはめない。`content-plan.json` の選定項目が自然な判断順になる最小のページ・セクション構成にする。
 - collected.json に取得されていないページは作らない。ナビゲーションに必要なら rebuild.json の `pages_not_rebuilt` に書く。
 - 提案書の `scope` が `out_of_scope` の施策は反映せず、`actions_not_applied` に理由を書く。
 - サービス、実績・事例、会社情報、年度別の表、採用、更新記事に独立した情報がある場合は、トップの短いセクションへ圧縮せず詳細ページを作る。シングルページは情報完結性を満たせる場合だけ選ぶ。
+- `content-plan.json.site_architecture` に `single_page | multi_page`、案件固有の理由、主要ナビゲーション、スマホとの情報同等性の確認を記録する。ページ数とモードを一致させる。
+- トップから全HTMLへ通常のリンクで到達でき、各詳細ページからトップへ戻れるようにする。各ページのtitleとdescriptionは固有にし、トップの要約を複製した薄いページを作らない。
 - 年度別・区分別のデータは意味のある表として保持し、`caption`、行列見出し、年ごとの区分、スマホの読み方を設計する。見た目のために列や年度を削らない。
 
 ### 6. 作る
@@ -158,8 +160,9 @@ HTMLを書く前に `references/design-quality.md` に従って `$OUT/site/desig
 - **静的のみ**：HTML と CSS。JS は必要最小限（なくても使えること）。サーバー処理・フォーム送信は作らない。フォームは `tel:`・`mailto:`・元の外部フォームURLへのリンクに置き換える。
 - **自己完結**：外部CDN・外部フォント・外部画像・地図埋め込み・計測タグを使わない。フォントはシステムフォント。外部へは `<a>` のリンクだけ。
 - **相対パス**：`assets/style.css`、`about.html` のように書く。先頭が `/` の絶対パスは禁止。サブパス（例：`/sales/companies/<uuid>/site/`）の下や file:// で開いても壊れないようにする。ディレクトリ形式（`about/`）でなくファイル名でリンクする。
-- **各ページの必須要素**：`<html lang="ja">`、viewport、`<title>`、meta description、`<meta name="robots" content="noindex, nofollow">`（非公式デモを検索に出さないため。納品サイトでは外す）、h1 は1つ、見出し階層を飛ばさない、画像に代替テキスト、本文コントラスト 4.5:1 以上、キーボードのフォーカス表示。
+- **各ページの必須要素**：`<html lang="ja">`、viewport、ページ固有の`<title>`とmeta description、`<meta name="robots" content="noindex, nofollow">`（非公式デモを検索に出さないため。納品サイトでは外す）、h1 は1つ、見出し階層を飛ばさない、画像に代替テキスト、本文コントラスト 4.5:1 以上、キーボードのフォーカス表示。
 - **導線**：ヘッダーに連絡ボタン、スマホは画面下部に固定の電話（確認できた番号があるとき）・問い合わせボタン。各サービス説明の後にも問い合わせへの導線。
+- **ナビゲーション**：標準の`<a href>`で作り、PCとスマホで項目の語・順序・行き先を保つ。現在地を示し、固定ヘッダー・下部CTAがページ内リンクの到着位置やTabフォーカスを隠さない。
 - **非公式の明記**：全ページの上部に細い帯、フッターに「SiteOfferによる非公式の改善案（デモ）です。正式なサイトではありません」。本文より強く見せない。
 - **事実**：collected / evaluation で確認できたものだけ。未確認項目はHTMLから省き、rebuild.json の `needs_confirmation` だけに記録する。
 - **完成文だけ**：`content-plan.json.selected_content` の `status: ready` だけを使う。「準備中」「サンプル」「仮」「詳細は後日」などの穴埋めや、出典のない汎用的な売り文句を表示しない。
