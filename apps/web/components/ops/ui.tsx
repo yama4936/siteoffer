@@ -6,7 +6,6 @@ import {
   Images,
   KeyRound,
   LayoutDashboard,
-  LogOut,
   MessageCircle,
   Newspaper,
   PackageCheck,
@@ -17,14 +16,12 @@ import {
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { logoutAction } from "@/app/(auth)/actions";
 import { ConsultationUnreadBadge } from "@/components/consultation-read";
 import { PendingMaterialBadge } from "@/components/materials/pending-badge";
 import { OpsFrame } from "@/components/ops/frame";
 import { Brand } from "@/components/shell/brand";
 import { NavLink } from "@/components/shell/nav-link";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 
 /** 運営画面の共通部品（Tailwind ＋ shadcn/ui） */
 
@@ -118,11 +115,6 @@ export function OpsShell({
               <strong>{userName}</strong>
               <small>運営担当</small>
             </div>
-            <form action={logoutAction}>
-              <Button type="submit" variant="ghost" size="icon" aria-label="ログアウト">
-                <LogOut />
-              </Button>
-            </form>
           </div>
         </>
       }

@@ -93,7 +93,7 @@ export function OpsFrame({
             <span className="ops-avatar">{userName.slice(0, 1)}</span>
             <span>{userName}</span>
           </div>
-          {/* 狭い画面ではサイドバーのアカウント欄を隠すため、どの幅でもここからログアウトできるようにする */}
+          {/* ログアウトはここだけに置く（サイドバーには出さない） */}
           <form action={logoutAction} className="ops-top-logout">
             <button type="submit" aria-label="ログアウト" title="ログアウト">
               <LogOut size={18} />
