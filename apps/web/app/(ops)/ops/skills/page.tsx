@@ -13,12 +13,7 @@ import { NativeSelect } from "@/components/ui/select";
 import { getDb } from "@/lib/db";
 import { fmtDate, JOB_STATUS_LABEL, shortId } from "@/lib/ops/format";
 import { requireUser } from "@/lib/session";
-import {
-  cancelSkillRunAction,
-  requestSkillRunAction,
-  retrySkillRunAction,
-  saveSkillScheduleAction,
-} from "../actions";
+import { cancelSkillRunAction, requestSkillRunAction, retrySkillRunAction, saveSkillScheduleAction } from "../actions";
 
 const HERE = "/ops/skills";
 const OUTCOME_LABEL: Record<string, string> = {
@@ -58,12 +53,14 @@ function RunCard({ run }: { run: Run }) {
         ) : null}
         <span className="text-muted-foreground text-xs">
           {TRIGGER_LABEL[run.trigger] ?? run.trigger}・{shortId(run.id)}・登録 {fmtDate(run.createdAt)}
-          {run.finishedAt ? `・終了 ${fmtDate(run.finishedAt)}` : run.startedAt ? `・開始 ${fmtDate(run.startedAt)}` : ""}
+          {run.finishedAt
+            ? `・終了 ${fmtDate(run.finishedAt)}`
+            : run.startedAt
+              ? `・開始 ${fmtDate(run.startedAt)}`
+              : ""}
         </span>
       </div>
-      {result.outcome ? (
-        <p className="mt-2 text-sm">結果：{OUTCOME_LABEL[result.outcome] ?? result.outcome}</p>
-      ) : null}
+      {result.outcome ? <p className="mt-2 text-sm">結果：{OUTCOME_LABEL[result.outcome] ?? result.outcome}</p> : null}
       {result.summary ? (
         <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground text-sm">{result.summary}</p>
       ) : null}
@@ -93,10 +90,7 @@ function RunCard({ run }: { run: Run }) {
           : null}
       </p>
       {run.status === "queued" || run.status === "failed" || run.status === "cancelled" ? (
-        <form
-          action={run.status === "queued" ? cancelSkillRunAction : retrySkillRunAction}
-          className="mt-3"
-        >
+        <form action={run.status === "queued" ? cancelSkillRunAction : retrySkillRunAction} className="mt-3">
           <ReturnTo path={HERE} />
           <input type="hidden" name="runId" value={run.id} />
           <Button type="submit" variant="outline" size="sm">
@@ -368,7 +362,11 @@ export default async function SkillsPage({
                       </Label>
                       <Label className="grid gap-1.5">
                         都道府県（任意）
-                        <Input name="prefecture" defaultValue={String(s.params.prefecture ?? "")} className="font-normal" />
+                        <Input
+                          name="prefecture"
+                          defaultValue={String(s.params.prefecture ?? "")}
+                          className="font-normal"
+                        />
                       </Label>
                       <Label className="grid gap-1.5">
                         市区町村（任意）

@@ -14,13 +14,14 @@ import { readWorkerPreparation } from "./preparation.ts";
 export async function startWorkerHeartbeat(deps: WorkerDeps, mode: string, intakeIntervalMs = 5000) {
   const id = randomUUID();
   const kind = deps.generation.generator.kind;
+  const skillKind = deps.skills?.executor.kind;
   const capabilities: WorkerCapabilities = {
     version: 1,
     discoveryOnly: !!deps.discoveryOnly,
     imageConfigured: !deps.discoveryOnly && !!process.env.OPENAI_API_KEY?.trim(),
     generator: kind === "mock" || kind === "codex" ? kind : "unknown",
     intakeIntervalMs,
-    skillRunner: deps.skills ? "codex" : "none",
+    skillRunner: skillKind === "codex" || skillKind === "fixture" ? skillKind : "none",
     ...(!deps.discoveryOnly && typeof deps.generation.generator.recoverStop === "function"
       ? { generationStopRecovery: 1 as const }
       : {}),

@@ -2,7 +2,7 @@
 import { assessWorkerIntake, type Clock } from "@siteoffer/core";
 import { type Db, SKILL_NAMES, type SkillName, skillRuns, skillSchedules, workerRuntimes } from "@siteoffer/db";
 import { desc, gte } from "drizzle-orm";
-import { SCHEDULE_INTERVAL_HOURS, SKILL_LABEL, SKILL_TARGET, scheduleParamSchemas } from "./definitions.ts";
+import { scheduleParamSchemas } from "./definitions.ts";
 import { companyNames, listEvaluationCandidates, listProposalCandidates, listRebuildCandidates } from "./targets.ts";
 
 export { SCHEDULE_INTERVAL_HOURS, SKILL_LABEL, SKILL_TARGET } from "./definitions.ts";
@@ -20,14 +20,18 @@ export async function skillAvailability(db: Db, clock: Clock) {
     .from(workerRuntimes)
     .where(gte(workerRuntimes.heartbeatAt, new Date(clock.now().getTime() - 45_000)));
   const live = rows.filter((row) => assessWorkerIntake(row, clock.now()).live);
-  const ready = live.some((w) => w.capabilities?.skillRunner === "codex");
+  const codexReady = live.some((w) => w.capabilities?.skillRunner === "codex");
+  const fixtureReady = live.some((w) => w.capabilities?.skillRunner === "fixture");
+  const ready = codexReady || fixtureReady;
   return {
     ready,
-    reason: ready
+    reason: codexReady
       ? "稼働中のワーカーが受け付けます（実行は隔離コンテナのCodex SDK）"
-      : !live.length
-        ? "ワーカーの稼働を確認できません。登録した実行は、スキル実行を設定したワーカーが起動すると処理されます"
-        : "稼働中のワーカーにスキル実行が設定されていません（SITEOFFER_SKILL_RUNNER=codex）。登録した実行は、設定したワーカーが起動するまで受付待ちのまま残ります",
+      : fixtureReady
+        ? "稼働中のワーカーが固定の試験成果物で処理します（Codex・外部APIは実行しません）"
+        : !live.length
+          ? "ワーカーの稼働を確認できません。登録した実行は、スキル実行を設定したワーカーが起動すると処理されます"
+          : "稼働中のワーカーにスキル実行が設定されていません（SITEOFFER_SKILL_RUNNER=codex）。登録した実行は、設定したワーカーが起動するまで受付待ちのまま残ります",
   };
 }
 

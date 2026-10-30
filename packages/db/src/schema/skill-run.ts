@@ -60,9 +60,7 @@ export const skillRuns = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
-    uniqueIndex("skill_runs_one_open_target")
-      .on(t.targetKey)
-      .where(sql`${t.status} in ('queued', 'running')`),
+    uniqueIndex("skill_runs_one_open_target").on(t.targetKey).where(sql`${t.status} in ('queued', 'running')`),
     index("skill_runs_status_created").on(t.status, t.createdAt),
   ],
 );

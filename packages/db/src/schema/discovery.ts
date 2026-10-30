@@ -68,7 +68,7 @@ export interface WorkerCapabilities {
   /** Absent on older workers. Search connectivity is not proved by configuration. */
   siteSearch?: { provider: "fixture" | "none" | "tavily" | "unknown"; maxPerRun: number };
   /** スキル実行の設定（運営画面・定期実行から起動）。古いワーカーにはない */
-  skillRunner?: "codex" | "none";
+  skillRunner?: "codex" | "fixture" | "none";
   /** Public preparation snapshot; absent on older workers. Never includes paths or credentials. */
   preparation?: {
     auditCollector: "python" | "fixture" | "unknown";
